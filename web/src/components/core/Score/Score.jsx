@@ -1,51 +1,35 @@
 import React from 'react';
-
-
 import Timer from './timer/Timer';
 
-const Score = (props) =>{
+const Score = ({ logoLeft, logoRight, roundState, alliesScore, axisScore, timeleft, timeleftAt }) => {
+    const showLeftLogo  = logoLeft  && logoLeft  !== 'default.png';
+    const showRightLogo = logoRight && logoRight !== 'default.png';
 
-    const {logoLeft, logoRight, roundInfo } = props;
-
-    return(
+    return (
         <div className="score">
-                            
-            <div className="streak-left">
-                --
-            </div>
-            <div className="streak-right">
-                --
+            {showLeftLogo && (
+                <div className="logo-area">
+                    <img src={`assets/teams/${logoLeft}`} alt="" />
+                </div>
+            )}
+
+            <div className="team-score allies-score">{alliesScore}</div>
+
+            <div className="timer-area">
+                <Timer
+                    timeleft={timeleft}
+                    timeleftAt={timeleftAt}
+                    frozen={roundState.round_freeze || roundState.round_end}
+                />
             </div>
 
-            <div className="logo-left-area">
-                <img src={`assets/teams/${logoLeft}`} alt=""/>
-            </div>
+            <div className="team-score axis-score">{axisScore}</div>
 
-            
-            <div className="left-score">
-                <p>{props.team1score}</p>
-            </div>
-
-            <div className="middle">
-                <p>
-                    {roundInfo.round_end && <Timer seconds={0}></Timer>}
-                    {roundInfo.round_freeze && <Timer seconds={roundInfo.freeze_time}></Timer>}
-                    {roundInfo.round_start && <Timer seconds={roundInfo.round_time}></Timer>}
-                </p>     
-            </div>
-
-            <div className="right-score">
-                <p>{props.team2score}</p>
-            </div>
-
-            <div className="logo-right-area">
-                <img src={`assets/teams/${logoRight}`} alt=""/>
-            </div>
-                
-
-            <div className="info">
-                test
-            </div>
+            {showRightLogo && (
+                <div className="logo-area">
+                    <img src={`assets/teams/${logoRight}`} alt="" />
+                </div>
+            )}
         </div>
     );
 }

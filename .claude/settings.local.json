@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose run --rm --entrypoint=\"\" -v \"d:/Git/DoD-hud-observer:/src\" hlds sh -c ':*)",
+      "Bash(docker compose down)",
+      "Bash(docker compose up)",
+      "Bash(docker compose ps)",
+      "Bash(npm install)",
+      "Bash(npm run backend)",
+      "Bash(docker compose restart)",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(docker compose up -d)",
+      "WebFetch(domain:github.com)",
+      "Bash(node --version)",
+      "Bash(npm --version)",
+      "Bash(npx --version)",
+      "Bash(npm run e2e)",
+      "Bash(ls -la /d/Git/DoD-hud-observer/e2e/snapshots/*.png)",
+      "Bash(npx react-scripts build)",
+      "Bash(npx ts-node --project backend/tsconfig.json backend/src/mocker/mocker.ts)",
+      "Bash(netstat -ano)",
+      "WebFetch(domain:sturmbot.org)",
+      "WebSearch",
+      "WebFetch(domain:www.dodplugins.net)",
+      "WebFetch(domain:steamcommunity.com)",
+      "WebFetch(domain:dayofdefeat.fandom.com)",
+      "WebFetch(domain:sourceforge.net)",
+      "Bash(docker compose up -d hltv)",
+      "Bash(npx react-scripts build --no-color)"
+    ]
+  }
+}

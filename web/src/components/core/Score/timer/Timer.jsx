@@ -1,47 +1,41 @@
 import React from 'react';
 
-
-// Prepend `0` for one digit numbers. For that the number has to be
-// converted to string, as numbers don't have length method
 const padTime = time => {
     return String(time).length === 1 ? `0${time}` : `${time}`;
-  };
-  
-const format = time => {
-// Convert seconds into minutes and take the whole part
-const minutes = Math.floor(time / 60);
-
-// Get the seconds left after converting minutes
-const seconds = time % 60;
-
-//Return combined values as string in format mm:ss
-return `${minutes}:${padTime(seconds)}`;
 };
 
+const format = time => {
+    if (time < 0) time = 0;
+    const minutes = Math.floor(time / 60);
+    const seconds = time % 60;
+    return `${minutes}:${padTime(seconds)}`;
+};
 
-const Timer = ({seconds, mode}) =>{
+const Timer = ({ timeleft, timeleftAt, frozen }) => {
 
-    const [counter, setCounter] = React.useState(seconds);
+    const [display, setDisplay] = React.useState(timeleft ?? 0);
+
     React.useEffect(() => {
-      let timer;
-      if (counter > 0) {
-        timer = setTimeout(() => setCounter(c => c - 1), 960);
-      }
-  
-      return () => {
-        if (timer) {
-          clearTimeout(timer);
-        }
-      };
-    }, [counter]);
-  
+        if (timeleft == null || timeleftAt == null) return;
+
+        const update = () => {
+            const elapsed = Math.floor((Date.now() - timeleftAt) / 1000);
+            setDisplay(Math.max(0, timeleft - elapsed));
+        };
+
+        update();
+
+        if (frozen) return;
+
+        const id = setInterval(update, 1000);
+        return () => clearInterval(id);
+    }, [timeleft, timeleftAt, frozen]);
+
     return (
-        <React.Fragment>
-            {counter === 0 ? <div style={{color: 'red'}}>0:0</div> : <div>{counter <= 10 ? <div style={{color: 'red'}}>{format(counter)}</div> : <div>{format(counter)}</div>}</div>}
-        </React.Fragment>
+        <span>
+            {format(display)}
+        </span>
     );
-
 }
-
 
 export default Timer;

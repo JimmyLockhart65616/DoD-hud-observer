@@ -1,1623 +1,730 @@
-:root {
-  --main-bg-color: brown;
-}
-
-#root{ 
-  background: url(https://imgur.com/Smj4nT6.png) no-repeat center center fixed; 
-  -webkit-background-size: cover;
-  -moz-background-size: cover;
-  -o-background-size: cover;
-  background-size: cover;
-}
-
-
-#root{
+/* ─── Root ──────────────────────────────────────────────────────── */
+#root {
   background-color: transparent;
-  -webkit-touch-callout: none; /* iOS Safari */
-  -webkit-user-select: none; /* Safari */
-   -khtml-user-select: none; /* Konqueror HTML */
-     -moz-user-select: none; /* Old versions of Firefox */
-      -ms-user-select: none; /* Internet Explorer/Edge */
-          user-select: none; /* Non-prefixed version, currently
-                                supported by Chrome, Edge, Opera and Firefox */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-
+/* ─── Main Layout (flex column) ─────────────────────────────────── */
 .grid-container {
-  padding: 12px;
-  display: grid;
-  grid-template-columns: 1.1fr 0.6fr 1.2fr 0.6fr 1.1fr;
-  grid-template-rows: 0.3fr 1.2fr 1.3fr 1.8fr 0.4fr 0.3fr;
+  position: relative;
   width: 100vw;
   height: 100vh;
-  gap: 10px 20px;
-  grid-template-areas:
-    "box-left team-left score team-right box-right"
-    "box-left . . . box-right"
-    ". . crosshair . ."
-    "team-box-left . . . team-box-right"
-    "team-box-left player-info player-info player-info team-box-right"
-    "team-box-left . . . team-box-right";
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(to bottom, #282c50 72px, transparent 72px);
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   TOP BAR
+   ═══════════════════════════════════════════════════════════════════ */
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 72px;
+  padding: 0 16px;
+  z-index: 1;
+}
 
+.team-name {
+  font-weight: 800;
+  font-size: 26px;
+  text-shadow: 1px 1px 4px rgba(0, 0, 0, 0.7);
+  padding: 0 12px;
+  min-width: 100px;
+}
 
+.team-name-allies {
+  color: #8FA847;
+  text-align: right;
+}
 
+.team-name-axis {
+  color: #C43030;
+  text-align: left;
+}
 
+/* ═══════════════════════════════════════════════════════════════════
+   SCORE BAR
+   ═══════════════════════════════════════════════════════════════════ */
+.score {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  opacity: 0.9;
+  background-color: #303661;
+  color: white;
+  border-radius: 4px;
+  overflow: hidden;
+}
 
-/*
-  CROSSHAIR AREA START
-*/
+.score .logo-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+}
 
-.crosshair{
-  grid-area: crosshair;
-  margin: auto;
+.score .logo-area img {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+}
+
+.score .team-score {
+  font-size: 28px;
+  padding: 0 14px;
+  min-width: 40px;
+  text-align: center;
+}
+
+.score .timer-area {
+  font-size: 22px;
+  padding: 6px 16px;
+  background-color: rgba(0, 0, 0, 0.3);
+  border-radius: 3px;
+  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   MIDDLE AREA (transparent game view)
+   ═══════════════════════════════════════════════════════════════════ */
+.hud-middle {
+  flex: 1;
+}
+
+/* ─── Crosshair ─────────────────────────────────────────────────── */
+.crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   font-size: 70px;
   color: blue;
   font-weight: 300;
   opacity: 0.2;
   z-index: 9;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   FLAGS (top-left absolute)
+   ═══════════════════════════════════════════════════════════════════ */
+.flags-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 72px;
+  display: flex;
   align-items: center;
-  justify-self: center
+  padding-left: 16px;
+  z-index: 2;
 }
 
-/*
-  CROSSHAIR AREA END
-*/
+.flags-container {
+  display: flex;
+  flex-direction: row;
+  gap: 3px;
+}
 
-
-
-
-/*
-  SCORE AREA START
-*/
-
-.score { 
-  display: grid;
-  grid-area: score;
-  grid-template-areas:
-  "logo-left-area streak-left middle streak-right logo-right-area"
-  "logo-left-area left-score middle right-score logo-right-area"
-  "info-area info-area info-area info-area info-area"
-  ;
-  grid-template-columns: 1fr 0.8fr 1.4fr 0.8fr 1fr;
-  grid-template-rows: 0.3fr 0.4fr 0.2fr;
-  font-weight: 800;
-  height: 100%;
-  opacity: .90;
-  background-color: #303661;
-  color: white;
+.flag-item {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-items: center;
+  gap: 3px;
+  padding: 6px 12px;
+  border-radius: 3px;
+  font-size: 13px;
+  font-weight: 800;
+  color: white;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  background-color: rgba(35, 38, 65, 0.95);
+  border: 2px solid rgba(70, 75, 120, 0.5);
+  min-width: 80px;
+  position: relative;
 }
 
-.score .left-score{
-  grid-area: left-score;
+.flag-item.flag-allies {
+  background-color: rgba(65, 85, 30, 0.95);
+  border-color: rgba(110, 140, 50, 0.5);
 }
 
-.score .left-score p{
-  font-size: 30px;
+.flag-item.flag-axis {
+  background-color: rgba(130, 28, 28, 0.95);
+  border-color: rgba(170, 45, 45, 0.5);
 }
 
-.score .right-score{
-  grid-area: right-score;
-  text-align: right;
+.flag-item.flag-neutral {
+  background-color: rgba(35, 38, 65, 0.95);
+  border-color: rgba(70, 75, 120, 0.5);
 }
 
-.score .right-score p{
-  font-size: 30px;
+.flag-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.score .middle{
-  grid-area: middle;
-  text-align: center;
-  font-size: 25px;
+.flag-name {
+}
+
+.flag-status {
+  font-size: 10px;
   font-weight: 800;
 }
 
-.score .time p{
-  font-size: 30px;
+.flag-capping {
+  animation: flag-pulse 1s ease-in-out infinite;
 }
 
-.score .info{
-  grid-area: info-area;
+.flag-capping-allies {
+  color: #d4e8a0;
 }
 
-.score .streak-left{
-  grid-area: streak-left;
+.flag-capping-axis {
+  color: #E8B0A8;
 }
 
-.score .streak-right{
-  grid-area: streak-right;
+.flag-status-contested {
+  color: #FFD700;
+  animation: flag-contested-pulse 0.6s ease-in-out infinite;
 }
 
-.score .logo-left-area{
-  grid-area: logo-left-area;
+.flag-item.flag-contested {
+  border-color: rgba(255, 215, 0, 0.6);
+  animation: flag-contested-border 0.6s ease-in-out infinite;
 }
 
-.score .logo-left-area img{
-  opacity: 1;
-  width: 45px;
-  height: 45px;
+@keyframes flag-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
-.score .logo-right-area{
-  grid-area: logo-right-area;
+@keyframes flag-contested-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
-.score .logo-right-area img{
-  opacity: 1;
-  width: 45px;
-  height: 45px;
+@keyframes flag-contested-border {
+  0%, 100% { border-color: rgba(255, 215, 0, 0.6); }
+  50% { border-color: rgba(255, 100, 50, 0.6); }
 }
 
-/*
-  SCORE AREA END
-*/
-
-
-/*
-  TEAM NAME AREA START
-*/
-
-.team-left { 
-  grid-area: team-left; 
-}
-
-.team-left p {
-  color: white;
-  font-weight: 800;
-  font-size: 30px;
-  padding-top: 10%;
-  text-align: right;
-  width: 100%;
-  height: 100%;
-}
-
-.team-right { 
-  grid-area: team-right; 
-}
-
-.team-right p {
-  color: white;
-  font-weight: 800;
-  font-size: 30px;
-  padding-top: 10%;
-  width: 100%;
-  height: 100%;
-  text-align: left;
-}
-
-
-/*
-  TEAM NAME AREA STOP
-*/
-
-.box-left {
-  display: grid;
-  grid-area: box-left;
-  grid-template-rows: 10% 90%;
-  row-gap: 10px;
-  grid-template-areas:
-    "mode-and-maps"
-    "radar";
-
-}
-
-.box-left .mode-and-maps{
-  
-  grid-area: mode-and-maps;
-  opacity: .90;
-  background-color: #303661;
-  font-weight: 600;
-  color: white;
-  padding-left: 5px;
-}
-
-.box-left .mode-and-maps .maps-playing{
-  display: inline-block;
-  padding-left: 15px;
-  color: #777;
+/* ── Flag captors ────────────────────────────────────────────── */
+.flag-captors {
+  font-size: 9px;
   font-weight: 700;
+  opacity: 0.8;
 }
 
-.box-left .mode-and-maps .active{
-  color: white;
+.flag-captors-allies {
+  color: #d4e8a0;
 }
 
-.box-left .radar{
-  grid-area: radar;
-  border: 1px solid blue;
+.flag-captors-axis {
+  color: #E8B0A8;
 }
 
+/* ── Zone player names ───────────────────────────────────────── */
+.flag-zone-players {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  justify-content: center;
+}
 
+.flag-zone-name {
+  font-size: 8px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.flag-zone-name.allies-zone {
+  color: #d4e8a0;
+  background-color: rgba(65, 85, 30, 0.5);
+}
+
+.flag-zone-name.axis-zone {
+  color: #E8B0A8;
+  background-color: rgba(130, 28, 28, 0.5);
+}
+
+/* ── Cap progress bar ────────────────────────────────────────── */
+.flag-progress-bar {
+  width: 100%;
+  height: 3px;
+  background-color: rgba(0, 0, 0, 0.4);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.flag-progress-fill {
+  height: 100%;
+  transition: width 0.4s linear;
+  border-radius: 2px;
+}
+
+.flag-progress-allies {
+  background-color: #8FA847;
+}
+
+.flag-progress-axis {
+  background-color: #C43030;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   KILL FEED (top-right absolute)
+   ═══════════════════════════════════════════════════════════════════ */
 .box-right {
-    grid-area: box-right;
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 2;
 }
 
-.box-right .wrapper{
-  display: block;
-  margin-top: 40px;
+.box-right .wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
 }
 
-
-.box-right .kill{
-  display: inline;
-  background-color: #303661;
-  float: right;
-  opacity: 0.9;
-  margin-top: 5px;
-  clear: both;
+.box-right .kill {
+  display: inline-flex;
+  align-items: center;
+  background-color: rgba(48, 54, 97, 0.9);
+  padding: 4px 8px;
+  border-radius: 3px;
 }
 
-.box-right span{
-  padding: 10px;
+.box-right .kill.teamkill {
+  border: 1px solid rgba(196, 48, 48, 0.5);
 }
 
-.box-right .tt-style{
-  color: hsl(0, 82%, 57%);
+.box-right .allies-style {
+  color: #8FA847;
   font-weight: 800;
-  font-size: 16px;
-  opacity: 1;
+  font-size: 14px;
+  padding: 0 4px;
 }
 
-.box-right .ct-style{
-  color: rgb(68, 71, 253);
+.box-right .axis-style {
+  color: #CC3333;
   font-weight: 800;
-  font-size: 16px;
-  opacity: 1;
+  font-size: 14px;
+  padding: 0 4px;
 }
 
-.box-right img{
+.box-right .weapon-text {
+  color: #aaa;
+  font-size: 12px;
+  padding: 0 6px;
+  font-style: italic;
+}
+
+.box-right img {
   height: 16px;
 }
 
+/* ── Kill feed icons ──────────────────────────────────────────── */
+.box-right .kill-headshot-icon {
+  height: 14px;
+  margin: 0 2px;
+  filter: drop-shadow(0 0 2px rgba(255, 200, 50, 0.6));
+}
 
+.box-right .kill-prone-badge {
+  color: #e05555;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  padding: 1px 4px;
+  margin: 0 2px;
+  border-radius: 2px;
+  background-color: rgba(160, 35, 35, 0.3);
+}
 
-/*
-  TEAM PLAYERS AREA START
-*/
+/* ── Cap break in kill feed ───────────────────────────────────── */
+.box-right .kill.cap-break {
+  border: 1px solid rgba(255, 215, 0, 0.4);
+  gap: 6px;
+}
 
-.team-box-left {
-  grid-area: team-box-left;
-  display: grid;
-  grid-template-rows: 1fr 1fr 1fr 1fr 1fr;
-  grid-template-areas:
-  "left-player-1"
-  "left-player-2"
-  "left-player-3"
-  "left-player-4"
-  "left-player-5";
-  border-radius: 5px;
-  perspective: 1px;
+.box-right .cap-break-label {
+  color: #FFD700;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background-color: rgba(255, 215, 0, 0.15);
+}
+
+.box-right .cap-break-flag {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 4px;
+}
+
+/* ── Kill streak badge ────────────────────────────────────────── */
+.box-right .kill-streak-badge {
+  color: #FFD700;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 1px 5px;
+  margin-right: 4px;
+  border-radius: 2px;
+  background-color: rgba(255, 215, 0, 0.15);
+  border: 1px solid rgba(255, 215, 0, 0.4);
+  text-shadow: 0 0 4px rgba(255, 200, 50, 0.5);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BOTTOM BAR — HORIZONTAL PLAYER CARDS
+   ═══════════════════════════════════════════════════════════════════ */
+.bottom-bar {
+  display: flex;
+  align-items: flex-end;
+  padding: 0 8px 8px;
+  gap: 6px;
+}
+
+.team-cards {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+}
+
+/* ── Player Card ───────────────────────────────────────────────── */
+.player-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-radius: 4px;
   overflow: hidden;
+  min-width: 0;
+  transition: box-shadow 0.2s ease;
 }
 
-
-
-/*
-  PLAYER LEFT 1 START
-*/
-
-.left-player-1{
-  grid-area: left-player-1;
-  display: grid;
-  grid-template-rows: 0.7fr 1.3fr;
-  grid-template-areas:
-  "health-player-left-1"
-  "player-info-left-1";
+.player-card.spectated {
+  z-index: 1;
 }
 
-.health-player-left-1{
-  grid-area: health-player-left-1;
-  display: grid;
-  grid-template-columns: 20% 50% 15% 15%;
-  grid-template-areas:
-  ". nick-left-1 armor-left-1 health-number-left-1";
+.player-card-allies.spectated {
+  box-shadow: 0 0 16px rgba(143, 168, 71, 0.5);
 }
 
-.armor-left-1{
-  grid-area:armor-left-1;
+.player-card-axis.spectated {
+  box-shadow: 0 0 16px rgba(196, 48, 48, 0.5);
+}
+
+/* ── Card Top (health area) ────────────────────────────────────── */
+.card-top {
   display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.armor-left-1 img{
-  height: 16px;
-  width: 16px;
-  margin-right: 5px;
-}
-
-.health-number-left-1{
-  grid-area: health-number-left-1;
-  display: grid;
-  font-size: 15px;
-  color: white;
-  font-weight: 800;
-  justify-items: center;
-}
-
-
-.player-info-left-1{
-  grid-area: player-info-left-1;
-  display: grid;
-
-}
-
-.nick-left-1{
-  grid-area: nick-left-1;
-  display: grid;
-  font-size: 13px;
-  color: white;
-  font-weight: 800;
-  align-items: center;
-}
-
-
-.player-info-left-1{
-  grid-area: player-info-left-1;
-  display: grid;
-  opacity: .90;
-  background-color: #303661;
-  grid-template-columns: 20% 15% 40% 25%;
-  grid-template-areas:
-  "avatar-left-1 equipment-left-1 utility-left-1 weapon-left-1";
-}
-
-
-.avatar-left-1{
-  grid-area: avatar-left-1;
-  display: grid;
-  height: 100%;
-}
-
-.avatar-left-1 img{
-  width: 32px;
-  margin: auto;
-}
-
-.equipment-left-1{
-  grid-area: equipment-left-1;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.equipment-left-1 img {
-  height: 16px;
-}
-
-.utility-left-1{
-  grid-area: utility-left-1;
-  display: flex;   
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-
+  padding: 6px 4px;
+  min-height: 56px;
+  background-color: rgba(48, 54, 97, 0.85);
 }
 
-.utility-left-1 img {
-  height: 16px;
-  margin-right: 3px
+.card-dead {
+  background: linear-gradient(to bottom, rgba(70, 70, 70, 0.8), rgba(50, 50, 50, 0.6)) !important;
+  min-height: 48px;
 }
 
-.weapon-left-1{
-  grid-area: weapon-left-1;
-  display: grid;
-}
-
-.weapon-left-1 img{
-  height: 16px;
-  margin: auto;
-}
-
-
-/*
-  PLAYER LEFT 1 END
-*/
-
-
-
-
-/*
-  PLAYER LEFT 2 START
-*/
-
-.left-player-2{
-  grid-area: left-player-2;
-  display: grid;
-  grid-template-rows: 0.7fr 1.3fr;
-  grid-template-areas:
-  "health-player-left-2"
-  "player-info-left-2";
-}
-
-
-.armor-left-2{
-  grid-area:armor-left-2;
+.card-class-icon {
   display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.armor-left-2 img{
-  height: 16px;
-  width: 16px;
-  margin-right: 5px;
-}
-
-.health-number-left-2{
-  grid-area: health-number-left-2;
-  display: grid;
-  font-size: 15px;
-  color: white;
-  font-weight: 800;
-  justify-items: center;
-}
-
-
-.nick-left-2{
-  grid-area: nick-left-2;
-  display: grid;
-  font-size: 13px;
-  color: white;
-  font-weight: 800;
-  align-items: center;
-}
-
-
-.health-player-left-2{
-  grid-area: health-player-left-2;
-  display: grid;
-  grid-template-columns: 20% 50% 15% 15%;
-  grid-template-areas:
-  ". nick-left-2 armor-left-2 health-number-left-2";
-}
-
-
-.player-info-left-2{
-  grid-area: player-info-left-2;
-  display: grid;
-  background-color: #303661;
-  opacity: .90;
-  grid-template-columns: 20% 15% 40% 25%;
-  grid-template-areas:
-  "avatar-left-2 equipment-left-2 utility-left-2 weapon-left-2";
-}
-
-.avatar-left-2{
-  grid-area: avatar-left-2;
-  display: grid;
-  height: 100%;
-}
-
-.avatar-left-2 img{
-  width: 32px;
-  margin: auto;
-}
-
-
-.equipment-left-2{
-  grid-area: equipment-left-2;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.equipment-left-2 img {
-  height: 16px;
-}
-
-.utility-left-2{
-  grid-area: utility-left-2;
-  display: flex;   
   align-items: center;
   justify-content: center;
-
+  margin-bottom: 2px;
 }
 
-.utility-left-2 img {
-  height: 16px;
-  margin-right: 3px
+.card-class-icon img {
+  height: 20px;
 }
 
-.weapon-left-2{
-  grid-area: weapon-left-2;
-  display: grid;
-}
-
-.weapon-left-2 img{
-  height: 16px;
-  margin: auto;
-}
-
-
-/*
-  PLAYER LEFT 2 END
-*/
-
-
-
-/*
-  PLAYER LEFT 3 START
-*/
-
-.left-player-3{
-  grid-area: left-player-3;
-  display: grid;
-  grid-template-rows: 0.7fr 1.3fr;
-  grid-template-areas:
-  "health-player-left-3"
-  "player-info-left-3";
-}
-
-
-.armor-left-3{
-  grid-area:armor-left-3;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.armor-left-3 img{
-  height: 16px;
-  width: 16px;
-  margin-right: 5px;
-}
-
-.health-number-left-3{
-  grid-area: health-number-left-3;
-  display: grid;
-  font-size: 15px;
-  color: white;
+.card-hp {
+  font-size: 22px;
   font-weight: 800;
-  justify-items: center;
-}
-
-
-.nick-left-3{
-  grid-area: nick-left-3;
-  display: grid;
-  font-size: 13px;
   color: white;
-  font-weight: 800;
-  align-items: center;
+  text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.7);
+  line-height: 1;
 }
 
-
-.health-player-left-3{
-  grid-area: health-player-left-3;
-  display: grid;
-  grid-template-columns: 20% 50% 15% 15%;
-  grid-template-areas:
-  ". nick-left-3 armor-left-3 health-number-left-3";
+.card-skull {
+  width: 24px;
+  height: 24px;
+  opacity: 0.5;
 }
 
-.player-info-left-3{
-  grid-area: player-info-left-3;
-  display: grid;
-  background-color: #303661;
-  opacity: .90;
-  grid-template-columns: 20% 15% 40% 25%;
-  grid-template-areas:
-  "avatar-left-3 equipment-left-3 utility-left-3 weapon-left-3";
+/* ── Health Strip ──────────────────────────────────────────────── */
+.card-health-strip {
+  height: 3px;
+  background-color: rgba(0, 0, 0, 0.4);
 }
 
-
-.avatar-left-3{
-  grid-area: avatar-left-3;
-  display: grid;
+.card-health-fill {
   height: 100%;
+  transition: width 0.3s ease;
 }
 
-.avatar-left-3 img{
-  width: 32px;
-  margin: auto;
+.player-card-allies .card-health-fill {
+  background-color: #8FA847;
 }
 
-.equipment-left-3{
-  grid-area: equipment-left-3;
+.player-card-axis .card-health-fill {
+  background-color: #C43030;
+}
+
+/* ── Card Bottom (info area) ───────────────────────────────────── */
+.card-bottom {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-items: center;
+  background-color: rgba(30, 33, 58, 0.95);
+  padding: 4px 4px;
+  gap: 2px;
 }
 
-.equipment-left-3 img {
-  height: 16px;
-}
-
-.utility-left-3{
-  grid-area: utility-left-3;
-  display: flex;   
-  align-items: center;
-  justify-content: center;
-
-}
-
-.utility-left-3 img {
-  height: 16px;
-  margin-right: 3px
-}
-
-.weapon-left-3{
-  grid-area: weapon-left-3;
-  display: grid;
-}
-
-.weapon-left-3 img{
-  height: 16px;
-  margin: auto;
-}
-
-
-/*
-  PLAYER LEFT 3 END
-*/
-
-
-/*
-  PLAYER LEFT 4 START
-*/
-
-.left-player-4{
-  grid-area: left-player-4;
-  display: grid;
-  grid-template-rows: 0.7fr 1.3fr;
-  grid-template-areas:
-  "health-player-left-4"
-  "player-info-left-4";
-}
-
-.health-player-left-4{
-  grid-area: health-player-left-4;
-  display: grid;
-  grid-template-columns: 20% 50% 15% 15%;
-  grid-template-areas:
-  ". nick-left-4 armor-left-4 health-number-left-4";
-}
-
-.armor-left-4{
-  grid-area:armor-left-4;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.armor-left-4 img{
-  height: 16px;
-  width: 16px;
-  margin-right: 5px;
-}
-
-.health-number-left-4{
-  grid-area: health-number-left-4;
-  display: grid;
-  font-size: 15px;
-  color: white;
+.card-name {
+  font-size: 11px;
   font-weight: 800;
-  justify-items: center;
-}
-
-
-.nick-left-4{
-  grid-area: nick-left-4;
-  display: grid;
-  font-size: 13px;
   color: white;
-  font-weight: 800;
-  align-items: center;
-}
-
-
-
-.player-info-left-4{
-  grid-area: player-info-left-4;
-  display: grid;
-  background-color: #303661;
-  opacity: .90;
-  grid-template-columns: 20% 15% 40% 25%;
-  grid-template-areas:
-  "avatar-left-4 equipment-left-4 utility-left-4 weapon-left-4";
-}
-
-
-.avatar-left-4{
-  grid-area: avatar-left-4;
-  display: grid;
-  height: 100%;
-}
-
-.avatar-left-4 img{
-  width: 32px;
-  margin: auto;
-}
-
-.equipment-left-4{
-  grid-area: equipment-left-4;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.equipment-left-4 img {
-  height: 16px;
-}
-
-.utility-left-4{
-  grid-area: utility-left-4;
-  display: flex;   
-  align-items: center;
-  justify-content: center;
-
-}
-
-.utility-left-4 img {
-  height: 16px;
-  margin-right: 3px
-}
-
-.weapon-left-4{
-  grid-area: weapon-left-4;
-  display: grid;
-}
-
-.weapon-left-4 img{
-  height: 16px;
-  margin: auto;
-}
-
-
-
-/*
-  PLAYER LEFT 4 END
-*/
-
-/*
-  PLAYER LEFT 5 START
-*/
-
-.left-player-5{
-  grid-area: left-player-5;
-  display: grid;
-  grid-template-rows: 0.7fr 1.3fr;
-  grid-template-areas:
-  "health-player-left-5"
-  "player-info-left-5";
-}
-
-
-.health-player-left-5{
-  grid-area: health-player-left-5;
-  display: grid;
-  grid-template-columns: 20% 50% 15% 15%;
-  grid-template-areas:
-  ". nick-left-5 armor-left-5 health-number-left-5";
-}
-
-.armor-left-5{
-  grid-area:armor-left-5;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.armor-left-5 img{
-  height: 16px;
-  width: 16px;
-  margin-right: 5px;
-}
-
-.health-number-left-5{
-  grid-area: health-number-left-5;
-  display: grid;
-  font-size: 15px;
-  color: white;
-  font-weight: 800;
-  justify-items: center;
-}
-
-
-.nick-left-5{
-  grid-area: nick-left-5;
-  display: grid;
-  font-size: 13px;
-  color: white;
-  font-weight: 800;
-  align-items: center;
-}
-
-.player-info-left-5{
-  grid-area: player-info-left-5;
-  display: grid;
-  background-color: #303661;
-  opacity: .90;
-  grid-template-columns: 20% 15% 40% 25%;
-  grid-template-areas:
-  "avatar-left-5 equipment-left-5 utility-left-5 weapon-left-5";
-}
-
-
-.avatar-left-5{
-  grid-area: avatar-left-5;
-  display: grid;
-  height: 100%;
-}
-
-.avatar-left-5 img{
-  width: 32px;
-  margin: auto;
-}
-
-.equipment-left-5{
-  grid-area: equipment-left-5;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.equipment-left-5 img {
-  height: 16px;
-}
-
-.utility-left-5{
-  grid-area: utility-left-5;
-  display: flex;   
-  align-items: center;
-  justify-content: center;
-
-}
-
-.utility-left-5 img {
-  height: 16px;
-  margin-right: 3px
-}
-
-.weapon-left-5 {
-  grid-area: weapon-left-5;
-  display: grid;
-}
-
-.weapon-left-5 img{
-  height: 16px;
-  margin: auto;
-}
-
-
-
-/*
-  PLAYER LEFT 5 END
-*/
-
-
-
-.team-box-right { 
-  grid-area: team-box-right;
-  display: grid;
-  grid-template-rows: 1fr 1fr 1fr 1fr 1fr;
-  grid-template-areas:
-  "right-player-1"
-  "right-player-2"
-  "right-player-3"
-  "right-player-4"
-  "right-player-5";
-  border-radius: 5px;
-  perspective: 1px;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  text-align: center;
+  line-height: 1.3;
 }
 
-
-
-/*
-  PLAYER LEFT 1 START
-*/
-
-.right-player-1{
-  grid-area: right-player-1;
-  display: grid;
-  grid-template-rows: 0.7fr 1.3fr;
-  grid-template-areas:
-  "health-player-right-1"
-  "player-info-right-1";
+.player-card.dead .card-name {
+  color: rgba(255, 255, 255, 0.4);
 }
 
-.health-player-right-1{
-  grid-area: health-player-right-1;
-  display: grid;
-  grid-template-columns: 15% 15% 50% 20%;
-  grid-template-areas:
-  "health-number-right-1 armor-right-1 nick-right-1 .";
-  background-color: hsl(239, 98%, 63%);
-}
-
-.armor-right-1{
-  grid-area:armor-right-1;
+.card-stats {
   display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.armor-right-1 img{
-  height: 16px;
-  width: 16px;
-  margin-right: 5px;
-}
-
-.health-number-right-1{
-  grid-area: health-number-right-1;
-  display: grid;
-  font-size: 15px;
-  color: white;
-  font-weight: 800;
-  justify-items: center;
-}
-
-
-.player-info-right-1{
-  grid-area: player-info-right-1;
-  display: grid;
-
-}
-
-.nick-right-1{
-  grid-area: nick-right-1;
-  display: grid;
-  font-size: 13px;
-  color: white;
-  font-weight: 800;
-  align-items: center;
-  text-align: right;
-}
-
-
-.player-info-right-1{
-  grid-area: player-info-right-1;
-  display: grid;
-  background-color: #303661;
-  opacity: .90;
-  grid-template-columns: 25% 40% 15% 20%;
-  grid-template-areas:
-  "weapon-right-1 utility-right-1 equipment-right-1 avatar-right-1";
-}
-
-
-.avatar-right-1{
-  grid-area: avatar-right-1;
-  display: grid;
-  height: 100%;
-}
-
-.avatar-right-1 img{
-  width: 32px;
-  margin: auto;
-}
-
-.equipment-right-1{
-  grid-area: equipment-right-1;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.equipment-right-1 img {
-  height: 16px;
-}
-
-.utility-right-1{
-  grid-area: utility-right-1;
-  display: flex;   
   align-items: center;
   justify-content: center;
-
+  gap: 4px;
+  width: 100%;
 }
 
-.utility-right-1 img {
-  height: 16px;
-  margin-right: 3px
-}
-
-.weapon-right-1{
-  grid-area: weapon-right-1;
-  display: grid;
-}
-
-.weapon-right-1 img{
-  height: 16px;
-  margin: auto;
-  -webkit-transform: scaleX(-1);
-  transform: scaleX(-1);
-}
-
-
-/*
-  PLAYER right 1 END
-*/
-
-
-
-
-/*
-  PLAYER right 2 START
-*/
-
-.right-player-2{
-  grid-area: right-player-2;
-  display: grid;
-  grid-template-rows: 0.7fr 1.3fr;
-  grid-template-areas:
-  "health-player-right-2"
-  "player-info-right-2";
-}
-
-
-.armor-right-2{
-  grid-area:armor-right-2;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.armor-right-2 img{
-  height: 16px;
-  width: 16px;
-  margin-right: 5px;
-}
-
-.health-number-right-2{
-  grid-area: health-number-right-2;
-  display: grid;
-  font-size: 15px;
-  color: white;
+.card-kills {
+  font-size: 11px;
+  color: #8FA847;
   font-weight: 800;
-  justify-items: center;
 }
 
+.card-kd-sep {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.3);
+  font-weight: 600;
+}
 
-.nick-right-2{
-  grid-area: nick-right-2;
-  display: grid;
-  font-size: 13px;
-  color: white;
+.card-deaths {
+  font-size: 11px;
+  color: #C43030;
   font-weight: 800;
-  align-items: center;
-  text-align: right;
 }
 
-
-.health-player-right-2{
-  grid-area: health-player-right-2;
-  display: grid;
-  grid-template-columns: 15% 15% 50% 20%;
-  grid-template-areas:
-  "health-number-right-2 armor-right-2 nick-right-2 .";
-}
-
-
-.player-info-right-2{
-  grid-area: player-info-right-2;
-  display: grid;
-  background-color: #303661;
-  opacity: .90;
-  grid-template-columns: 25% 40% 15% 20%;
-  grid-template-areas:
-  "weapon-right-2 utility-right-2 equipment-right-2 avatar-right-2";
-}
-
-
-
-.avatar-right-2{
-  grid-area: avatar-right-2;
-  display: grid;
-  height: 100%;
-}
-
-.avatar-right-2 img{
-  width: 32px;
-  margin: auto;
-}
-
-
-.equipment-right-2{
-  grid-area: equipment-right-2;
+.card-weapon {
   display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.equipment-right-2 img {
-  height: 16px;
-}
-
-.utility-right-2{
-  grid-area: utility-right-2;
-  display: flex;   
   align-items: center;
   justify-content: center;
-
+  flex: 1;
+  min-width: 0;
 }
 
-.utility-right-2 img {
-  height: 16px;
-  margin-right: 3px
+.card-weapon img {
+  height: 12px;
 }
 
-.weapon-right-2{
-  grid-area: weapon-right-2;
-  display: grid;
+.card-weapon-text {
+  color: #aaa;
+  font-size: 9px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.weapon-right-2 img{
-  height: 16px;
-  margin: auto;
-  -webkit-transform: scaleX(-1);
-  transform: scaleX(-1);
-}
-
-
-/*
-  PLAYER right 2 END
-*/
-
-
-
-/*
-  PLAYER right 3 START
-*/
-
-.right-player-3{
-  grid-area: right-player-3;
-  display: grid;
-  grid-template-rows: 0.7fr 1.3fr;
-  grid-template-areas:
-  "health-player-right-3"
-  "player-info-right-3";
-}
-
-
-.armor-right-3{
-  grid-area:armor-right-3;
+/* ── Prone Indicator on Card ───────────────────────────────────── */
+.card-prone {
   display: flex;
   align-items: center;
-  justify-items: center;
-}
-
-.armor-right-3 img{
-  height: 16px;
-  width: 16px;
-  margin-right: 5px;
-}
-
-.health-number-right-3{
-  grid-area: health-number-right-3;
-  display: grid;
-  font-size: 15px;
-  color: white;
+  gap: 2px;
+  color: #C43030;
+  font-size: 9px;
   font-weight: 800;
-  justify-items: center;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background-color: rgba(160, 35, 35, 0.3);
 }
 
-
-.nick-right-3{
-  grid-area: nick-right-3;
-  display: grid;
-  font-size: 13px;
-  color: white;
-  font-weight: 800;
-  align-items: center;
-  text-align: right;
+.card-prone .prone-label {
+  font-size: 8px;
+  letter-spacing: 0.5px;
 }
 
-
-.health-player-right-3{
-  grid-area: health-player-right-3;
-  display: grid;
-  grid-template-columns: 15% 15% 50% 20%;
-  grid-template-areas:
-  "health-number-right-3 armor-right-3 nick-right-3 .";
+.player-card.prone-active {
+  animation: prone-card-pulse 1.5s ease-in-out infinite;
 }
 
-.player-info-right-3{
-  grid-area: player-info-right-3;
-  display: grid;
-  background-color: #303661;
-  opacity: .90;
-  grid-template-columns: 25% 40% 15% 20%;
-  grid-template-areas:
-  "weapon-right-3 utility-right-3 equipment-right-3 avatar-right-3";
+@keyframes prone-card-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(196, 48, 48, 0.3); }
+  50% { box-shadow: 0 0 8px rgba(196, 48, 48, 0.6); }
 }
 
-
-
-.avatar-right-3{
-  grid-area: avatar-right-3;
-  display: grid;
-  height: 100%;
+/* ── Bottom center gap (for game's native observed player text) ─── */
+.bottom-center-gap {
+  width: 30%;
+  min-width: 30%;
 }
 
-.avatar-right-3 img{
-  width: 32px;
-  margin: auto;
+/* ═══════════════════════════════════════════════════════════════════
+   OBSERVED PLAYER (above team cards)
+   ═══════════════════════════════════════════════════════════════════ */
+.observed-bar {
+  display: flex;
+  justify-content: center;
+  padding: 0 8px 4px;
+  z-index: 3;
 }
 
-
-.equipment-right-3{
-  grid-area: equipment-right-3;
+.player-observed {
   display: flex;
   align-items: center;
-  justify-items: center;
+  gap: 14px;
+  padding: 6px 24px;
+  border-radius: 4px;
+  color: white;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
-.equipment-right-3 img {
-  height: 16px;
+.player-observed.allies-observed {
+  background: linear-gradient(to right, rgba(65, 85, 30, 0.95), rgba(48, 54, 97, 0.95));
+  border: 1px solid rgba(110, 140, 50, 0.4);
 }
 
-.utility-right-3{
-  grid-area: utility-right-3;
-  display: flex;   
+.player-observed.axis-observed {
+  background: linear-gradient(to right, rgba(130, 28, 28, 0.95), rgba(48, 54, 97, 0.95));
+  border: 1px solid rgba(170, 45, 45, 0.4);
+}
+
+/* ── Class icon ──────────────────────────────────────────────────── */
+.observed-class-icon {
+  display: flex;
   align-items: center;
   justify-content: center;
-
 }
 
-.utility-right-3 img {
-  height: 16px;
-  margin-right: 3px
-}
-
-.weapon-right-3{
-  grid-area: weapon-right-3;
-  display: grid;
-}
-
-.weapon-right-3 img{
-  height: 16px;
-  margin: auto;
-  -webkit-transform: scaleX(-1);
-  transform: scaleX(-1);
-}
-
-
-/*
-  PLAYER right 3 END
-*/
-
-
-/*
-  PLAYER right 4 START
-*/
-
-.right-player-4{
-  grid-area: right-player-4;
-  display: grid;
-  grid-template-rows: 0.7fr 1.3fr;
-  grid-template-areas:
-  "health-player-right-4"
-  "player-info-right-4";
-}
-
-.health-player-right-4{
-  grid-area: health-player-right-4;
-  display: grid;
-  grid-template-columns: 15% 15% 50% 20%;
-  grid-template-areas:
-  "health-number-right-4 armor-right-4 nick-right-4 .";
-}
-
-.armor-right-4{
-  grid-area:armor-right-4;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.armor-right-4 img{
-  height: 16px;
-  width: 16px;
-  margin-right: 5px;
-}
-
-.health-number-right-4{
-  grid-area: health-number-right-4;
-  display: grid;
-  font-size: 15px;
-  color: white;
-  font-weight: 800;
-  justify-items: center;
-}
-
-
-.nick-right-4{
-  grid-area: nick-right-4;
-  display: grid;
-  font-size: 13px;
-  color: white;
-  font-weight: 800;
-  align-items: center;
-  text-align: right;
-}
-
-
-
-.player-info-right-4{
-  grid-area: player-info-right-4;
-  display: grid;
-  background-color: #303661;
-  opacity: .90;
-  grid-template-columns: 25% 40% 15% 20%;
-  grid-template-areas:
-  "weapon-right-4 utility-right-4 equipment-right-4 avatar-right-4";
-}
-
-
-
-.avatar-right-4{
-  grid-area: avatar-right-4;
-  display: grid;
-  height: 100%;
-}
-
-.avatar-right-4 img{
-  width: 32px;
-  margin: auto;
-}
-
-.equipment-right-4{
-  grid-area: equipment-right-4;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.equipment-right-4 img {
-  height: 16px;
-}
-
-.utility-right-4{
-  grid-area: utility-right-4;
-  display: flex;   
-  align-items: center;
-  justify-content: center;
-
-}
-
-.utility-right-4 img {
-  height: 16px;
-  margin-right: 3px
-}
-
-.weapon-right-4{
-  grid-area: weapon-right-4;
-  display: grid;
-}
-
-.weapon-right-4 img{
-  height: 16px;
-  margin: auto;
-  -webkit-transform: scaleX(-1);
-  transform: scaleX(-1);
-}
-
-
-
-/*
-  PLAYER right 4 END
-*/
-
-/*
-  PLAYER right 5 START
-*/
-
-.right-player-5{
-  grid-area: right-player-5;
-  display: grid;
-  grid-template-rows: 0.7fr 1.3fr;
-  grid-template-areas:
-  "health-player-right-5"
-  "player-info-right-5";
-}
-
-
-.health-player-right-5{
-  grid-area: health-player-right-5;
-  display: grid;
-  grid-template-columns: 15% 15% 50% 20%;
-  grid-template-areas:
-  "health-number-right-5 armor-right-5 nick-right-5 .";
-}
-
-.armor-right-5{
-  grid-area:armor-right-5;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.armor-right-5 img{
-  height: 16px;
-  width: 16px;
-  margin-right: 5px;
-}
-
-.health-number-right-5{
-  grid-area: health-number-right-5;
-  display: grid;
-  font-size: 15px;
-  color: white;
-  font-weight: 800;
-  justify-items: center;
-}
-
-
-.nick-right-5{
-  grid-area: nick-right-5;
-  display: grid;
-  font-size: 13px;
-  color: white;
-  font-weight: 800;
-  align-items: center;
-  text-align: right;
-}
-
-.player-info-right-5{
-  grid-area: player-info-right-5;
-  display: grid;
-  background-color: #303661;
-  opacity: .90;
-  grid-template-columns: 25% 40% 15% 20%;
-  grid-template-areas:
-  "weapon-right-5 utility-right-5 equipment-right-5 avatar-right-5";
-}
-
-
-
-.avatar-right-5{
-  grid-area: avatar-right-5;
-  display: grid;
-  height: 100%;
-}
-
-.avatar-right-5 img{
-  width: 32px;
-  margin: auto;
-}
-
-.equipment-right-5{
-  grid-area: equipment-right-5;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.equipment-right-5 img {
-  height: 16px;
-}
-
-.utility-right-5{
-  grid-area: utility-right-5;
-  display: flex;   
-  align-items: center;
-  justify-content: center;
-
-}
-
-.utility-right-5 img {
-  height: 16px;
-  margin-right: 3px
-}
-
-.weapon-right-5 {
-  grid-area: weapon-right-5;
-  display: grid;
-}
-
-.weapon-right-5 img{
-  height: 16px;
-  margin: auto;
-  -webkit-transform: scaleX(-1);
-  transform: scaleX(-1);
-}
-
-
-
-/*
-  PLAYER right 5 END
-*/
-
-
-/*
-  TEAM PLAYERS AREA STOP
-*/
-
-.player-info {
-  grid-area: player-info;
-  display: grid;
-  margin-left: 20%; 
-  margin-right: 20%;
-  grid-template-rows: 1fr 1fr;
-  grid-template-areas:
-  "player-spectaded-upper-layer"
-  "player-spectaded-down-layer";
-}
-
-
-.player-spectaded-upper-layer{
-  grid-area: player-spectaded-upper-layer;
-  background-color: #303661;
-  opacity: 0.9;
-  display: grid;
-  grid-template-columns: 15% 15% 40% 15% 15%;
-  grid-template-areas:
-  "player-spectaded-name player-spectaded-name . player-spectaded-health player-spectaded-gear"
-}
-
-.player-spectaded-down-layer{
-  grid-area: player-spectaded-down-layer;
-  display: grid;
-  background-color: hsl(239, 98%, 63%);
-  grid-template-columns: 15% 15% 40% 15% 15%;
-  grid-template-areas: 
-  ". player-spectaded-utility player-spectaded-avatar player-spectaded-amunition .";
+.observed-class-icon img {
   height: 24px;
 }
 
-.player-spectaded-name{
-  grid-area: player-spectaded-name;
-  font-size: 15px;
-  font-weight: 800;
-  color: white;
-  text-align: right;
+/* ── Info rows ───────────────────────────────────────────────────── */
+.observed-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.player-spectaded-health{
-  grid-area: player-spectaded-health;
-  font-size: 15px;
-  font-weight: 800;
-  color: white;
-  text-align: center;
+.observed-top-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
-.player-spectaded-gear{
-  grid-area: player-spectaded-gear;
+.observed-bottom-row {
   display: flex;
   align-items: center;
-  justify-items: center;
+  gap: 8px;
 }
 
-.player-spectaded-gear img{
-  height: 16px;
-  width: 16px;
-  margin-right: 5px;
+.player-observed .observed-name {
+  font-size: 16px;
+  margin-right: 4px;
 }
 
-.player-spectaded-utility {
-  grid-area: player-spectaded-utility;
+.player-observed .observed-class-name {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 600;
+}
+
+/* ── Health ───────────────────────────────────────────────────────── */
+.player-observed .observed-hp {
+  font-size: 13px;
+  min-width: 38px;
+}
+
+.observed-health-bar {
+  width: 80px;
+  height: 4px;
+  background-color: rgba(0, 0, 0, 0.4);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.observed-health-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+  border-radius: 2px;
+}
+
+.observed-health-fill.fill-allies {
+  background-color: #8FA847;
+}
+
+.observed-health-fill.fill-axis {
+  background-color: #C43030;
+}
+
+/* ── K/D ─────────────────────────────────────────────────────────── */
+.player-observed .observed-kd {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 700;
+}
+
+/* ── Weapon ───────────────────────────────────────────────────────── */
+.player-observed .observed-weapon {
   display: flex;
   align-items: center;
-  justify-items: center;
-  justify-content: flex-end;
 }
 
-.player-spectaded-utility img{
+.player-observed .observed-weapon img {
   height: 16px;
-  margin-right: 3px
 }
 
-.player-spectaded-avatar {
-  grid-area: player-spectaded-avatar;
+.player-observed .observed-weapon-text {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 600;
+}
+
+/* ── Prone indicator ─────────────────────────────────────────────── */
+.observed-prone {
   display: flex;
-  align-items: flex-end;
-  justify-content: center;
-}
-
-.player-spectaded-avatar img{
-  height: 128px;
-  position: absolute;
-  z-index: 9;
-}
-
-.player-spectaded-amunition{
-  grid-area: player-spectaded-amunition;
+  align-items: center;
+  gap: 3px;
+  color: #C43030;
+  font-size: 11px;
   font-weight: 800;
-  color: white;
-  max-height: min-content;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background-color: rgba(160, 35, 35, 0.3);
 }
 
+.observed-prone-label {
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}

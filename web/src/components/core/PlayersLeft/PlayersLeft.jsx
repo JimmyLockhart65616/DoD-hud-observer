@@ -1,87 +1,98 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
+function useProneTimer(prone_since) {
+    const [elapsed, setElapsed] = useState(0);
+    useEffect(() => {
+        if (!prone_since) { setElapsed(0); return; }
+        const tick = () => setElapsed(Math.floor((Date.now() - prone_since) / 1000));
+        tick();
+        const id = setInterval(tick, 1000);
+        return () => clearInterval(id);
+    }, [prone_since]);
+    return elapsed;
+}
 
+const weaponImages = {};
+const weaponCtx = require.context('../../screen/resources/images/weapons', false, /\.png$/);
+weaponCtx.keys().forEach(key => { weaponImages[key.replace('./', '').replace('.png', '')] = weaponCtx(key); });
 
-const PlayersLeft = React.memo(({players}) =>{
+const classImages = {};
+const classCtx = require.context('../../screen/resources/images/classes', false, /^\.\/allies_.*\.png$/);
+classCtx.keys().forEach(key => { classImages[key.replace('./', '').replace('.png', '')] = classCtx(key); });
 
+const WeaponIcon = ({ weapon }) => {
+    if (!weapon) return null;
+    if (weaponImages[weapon]) return <img src={weaponImages[weapon]} alt={weapon} />;
+    return <span className="card-weapon-text">{weapon}</span>;
+};
 
-    return(
-        <React.Fragment>
-            {
-                players && players.map((player, index)=>{
-         
-                    const i = index + 1;
-                    
-                  return  (
-                    <div key={i} className={`left-player-${i}`}>
+const ClassIcon = ({ classId }) => {
+    if (classId === null || classId === undefined) return null;
+    const key = `allies_${classId}`;
+    if (classImages[key]) return <img src={classImages[key]} alt={key} />;
+    return null;
+};
 
-                        {!player.dead &&
-                            <div className={`health-player-left-${i}`} style={{backgroundImage: `linear-gradient(90deg, rgba(235,55,55,1) ${player.health}%, rgba(48,54,97,1) ${player.health}%, rgba(48,54,97,1) 100%)`, }}>
-                                <div className={`nick-left-${i}`}>
-                                    {player.player_nickname}
-                                </div>
-                                <div className={`armor-left-${i}`}>
-                                    {player.small_kevlar && <img src={require(`../../screen/resources/images/31.png`)} alt="full"></img>}
-                                    {player.full_kevlar && <img src={require(`../../screen/resources/images/32.png`)} alt="full"></img>}
-                                </div>
-                                <div className={`health-number-left-${i}`}>
-                                    {player.health}
-                                </div>
-                            </div>}
-                        
-                        {player.dead &&
+const PlayerCard = React.memo(({ player }) => {
+    const isProne = player.prone_state === 'prone' || player.prone_state === 'deployed';
+    const elapsed = useProneTimer(player.prone_since);
 
-                            <div className={`health-player-left-${i} dead`} style={{backgroundImage: `linear-gradient(90deg, rgba(85,85,85,1) 0%, rgba(85,85,85,1) 35%, rgba(85,85,85,0.773546918767507) 100%, rgba(85,85,85,0.3701855742296919) 100%)`}}>
-                                <div className={`nick-left-${i}`}>
-                                    {player.player_nickname}
-                                </div>
-                            </div>
-                        }
-                        
-                        {!player.dead &&
-                            <div className={`player-info-left-${i}`}>
-                                <div className={`avatar-left-${i}`}>
-                                    <img src={require(`../../screen/resources/images/unknown-user.png`)} alt="user" />
-                                </div>
-                                <div className={`equipment-left-${i}`}>
-                                    {player.c4 && 
-                                        <img src={require(`../../screen/resources/images/6.png`)} alt="c4"></img>}
-                                </div>
-                                <div className={`utility-left-${i}`}>
+    const classes = ['player-card', 'player-card-allies'];
+    if (player.dead) classes.push('dead');
+    if (player.spectate) classes.push('spectated');
+    if (isProne) classes.push('prone-active');
 
-                                    { 
-                                        player.equipment.map((item, index)=>{
-                                            return <img key={index} src={require(`../../screen/resources/images/${item}.png`)} alt="equipment"></img>
-                                        })
-                                    }
-                                    
-                                </div>
-                                <div className={`weapon-left-${i}`}>
-                                    {player.current_weapon && 
-                                    <img src={require(`../../screen/resources/images/${players[index].current_weapon}.png`)} alt="full"></img> }
-                                </div>
-                            </div>}
+    if (player.dead) {
+        return (
+            <div className={classes.join(' ')}>
+                <div className="card-top card-dead">
+                    <img src={require('../../screen/resources/images/skull.png')} alt="dead" className="card-skull" />
+                </div>
+                <div className="card-bottom">
+                    <div className="card-name">{player.name}</div>
+                </div>
+            </div>
+        );
+    }
 
-                            {player.dead &&
-
-                                <div className={`player-info-left-${i}`} style={{backgroundImage: `linear-gradient(90deg, rgba(85,85,85,1) 0%, rgba(85,85,85,1) 35%, rgba(85,85,85,0.773546918767507) 100%, rgba(85,85,85,0.3701855742296919) 100%)`}}>
-                                    <div className={`avatar-left-${i}`}>
-                                        <img src={require(`../../screen/resources/images/skull.png`)} alt="user" />
-                                    </div>
-
-                                    <div className={`weapon-left-${i}`}>
-                                        <strong style={{color: 'white'}}>$ {player.money}</strong>
-                                    </div>
-                                </div>}
+    return (
+        <div className={classes.join(' ')}>
+            <div className="card-top">
+                <div className="card-class-icon">
+                    <ClassIcon classId={player.class_id} />
+                </div>
+                <div className="card-hp">{player.health}</div>
+                {isProne && (
+                    <div className="card-prone">
+                        <span className="prone-label">PRONE</span>
+                        {elapsed}s
                     </div>
-                   )
-                })
-            }
-            
-           
-        </React.Fragment>
+                )}
+            </div>
+            <div className="card-health-strip">
+                <div className="card-health-fill" style={{ width: `${player.health}%` }} />
+            </div>
+            <div className="card-bottom">
+                <div className="card-name">{player.name}</div>
+                <div className="card-stats">
+                    <span className="card-kills">{player.kills}</span>
+                    <span className="card-kd-sep">/</span>
+                    <span className="card-deaths">{player.deaths}</span>
+                    <span className="card-weapon">
+                        <WeaponIcon weapon={player.weapon_primary} />
+                    </span>
+                </div>
+            </div>
+        </div>
     );
-    
 });
+
+const PlayersLeft = React.memo(({ players }) => (
+    <>
+        {players && players.map(player =>
+            <PlayerCard key={player.user_id} player={player} />
+        )}
+    </>
+));
 
 export default PlayersLeft;

@@ -3,18 +3,19 @@ import KillItem from './kill-item/KillItem';
 
 
 
-const Kill = React.memo(({screentime, kills}) =>{
-
+const Kill = React.memo(({ screentime, kills }) => {
     return (
-        <React.Fragment>
-                <div className="wrapper">
-
-                    {kills && kills.map((kill, index) =>
-                        <KillItem key={index} killinfo={kill} victim={{side: kill.victim.side, name: kill.victim.player_nickname}} killer={{side: kill.attacker.side, name: kill.attacker.player_nickname}}  delay={screentime} />
-                    )}
-                       
-                </div>   
-        </React.Fragment>
+        <div className="wrapper">
+            {kills && kills.map((kill, index) =>
+                <KillItem
+                    key={index}
+                    killinfo={kill}
+                    killer={{ team: kill.killer?.team ?? 'unknown', name: kill.killer?.name ?? kill.killer_id }}
+                    victim={{ team: kill.victim?.team ?? 'unknown', name: kill.victim?.name ?? kill.victim_id }}
+                    delay={screentime}
+                />
+            )}
+        </div>
     );
 });
 

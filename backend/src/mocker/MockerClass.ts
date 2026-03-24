@@ -9,11 +9,17 @@ export default class MockerClass extends EventEmitter {
     constructor() {
         super();
 
-        //this.socket = socket;
         this.data = data;
         this.timeoutList = [];
+    }
 
-        this.parseData(this.data)
+    start() {
+        // Clear any previous run
+        this.timeoutList.forEach(h => clearTimeout(h));
+        this.timeoutList = [];
+        // Deep-clone data so `delete element.time` doesn't mutate the original
+        const clone = JSON.parse(JSON.stringify(this.data));
+        this.parseData(clone);
     }
 
 

@@ -1,0 +1,141 @@
+#
+# Marine Bot Dog Tags
+#
+# This file contains all the default Marine Bot names which are used
+# if you don't specify names when you use the "recruit"/"addmarine"
+# command.
+#
+# There is a maximum of 50 names per team section and a maximum of
+# 31 chars for the name. Please note that if you are playing with
+# rich names the [MB] tag takes up 4 characters, leaving 27 for the name.
+#
+# There are 3 different name sections. One with american names for maps
+# where the allied team is US Army. One with british names for maps where
+# are British Troops. And finally one with german names for Wehrmacht.
+# Each name section must be enclosed in specific headers.
+#
+# Any line beginning with "#" char is a comment line.
+#
+# PLEASE KEEP THIS IN MIND OR YOU MAY EXPERIENCE STRANGE PROBLEMS!
+#
+# Marine Bot comes with couple names by default, but feel free to
+# modify them or make your own.
+
+american_names
+Alec Newman
+Alex Busby
+Barry Norris
+Danny Williams
+Ron Fowler
+Dave Goodnough
+Edward Miller
+Eric Piper
+Graham Hubbard
+Hue Sewell
+Jim Green
+Mark Damon
+Nick McDougall
+Donald Jones
+Ben Carter
+Norman Plante
+Roger Hicks
+Scott Finn
+Shane Maltby
+Lucas Allen
+Adam Gallagher
+Sheldon Bloom
+Dale Jackson
+Steven West
+Trevor Campbell
+Vance Cage
+Arthur Cooke
+Charlie O'Neil
+Paul Stephenson
+Richard McFadden
+Robert Norton
+Wade Chesney
+Jeff Hudson
+american_names-end
+
+british_names
+Andrew Horsley
+Chester Hughes
+Peter Fairfax
+Creighton Griffiths
+Bradley Chapman
+Harvey Watkins
+Colin Chalmers
+Fergus Dunn
+Roscoe Kershaw
+Ian Harding
+Alden Nicholls
+Connor Bradshaw
+David Kellow
+Trevor Cooke
+Elmer Wellington
+Duncan O'Brien
+Clifford Moore
+Gavin Croft
+Jeremy Crabtree
+Lawrence Kearsley
+John Louis Stillman
+Miles Reed
+Kenneth Potts
+Frasier Strefling
+Kyle Frankau
+Lloyd Hill
+Roy Mansfield
+Shaw Burgess
+Holt Goodwin
+William Riddiford
+Nigel Jenkins
+Benedict Pearce
+Harry Coleman
+Wylie Hodge
+british_names-end
+
+german_names
+Manfred Ulrich
+Georg von Doberschutz
+Willi Ritter
+Otto Uhrmann
+Gotz Brandt
+Erich Haas
+Matthias Reichenbach
+Gunther Schuster
+Ludwig Buchheim
+Bernd Zimmermann
+Konrad Dieffenbach
+Stefan Fuchs
+Eberhard Klein
+Jorg Gravenhorst
+Hans Lehmann
+Walter Barkhausen
+Ernst Schneider
+Rudolph Jung
+Thomas Weber
+Kurt Dranckmeister
+Franz Baumann
+Heinrich Meyer
+Egbert Neumann
+Karl Richter
+Dietrich Lindberg
+Rolf Hershel
+Verner Loewe
+Uwe Hoffmann
+Fritz Nussbaum
+Johann von Gerstenberg
+Wilhelm Vogel
+Erwin Pfeiffer
+Jurgen Goldstein
+Dieter Muller
+Reinhart Kirchhoff
+Helmut Braun
+Ferdinand Kraus
+Gert Sommer
+Hermann Falk
+Sigmund Altmann
+Fabian Graf
+Klaus Bergmann
+german_names-end
+

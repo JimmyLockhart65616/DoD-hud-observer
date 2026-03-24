@@ -1,13 +1,16 @@
 {
     "hostname": "http://localhost:3000",
-    "backend": {	
-        "UDP_LOCAL_PORT": 27051,	
-        "TCP_LOCAL_PORT": 3001	
-    },	
-    "web": {	
-        "SOCKET_PORT": 8000	
-    },	
-    "auth": {	
+    "backend": {
+        "TCP_LOCAL_PORT": 3001,
+        "PLUGIN_HOST": "127.0.0.1",
+        "PLUGIN_TCP_PORT": 9000,
+        "PLUGIN_TOKEN": "changeme"
+    },
+    "web": {
+        "SOCKET_PORT": 8000
+    },
+    "auth": {
         "STEAM_API_KEY": ""
-    }	
-} 
+    },
+    "INTERNAL_SOCKET_PORT": 4000
+}

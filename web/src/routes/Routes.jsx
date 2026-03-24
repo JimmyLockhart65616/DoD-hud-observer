@@ -15,7 +15,7 @@ class Routes extends React.Component{
 
                 <Navbar bg="dark" variant="dark">
                     <Navbar.Brand href="/">
-                     CS HUD
+                     DoD HUD
                     </Navbar.Brand>
                     <Navbar.Text>
                         <TeamsRoute />
@@ -27,7 +27,7 @@ class Routes extends React.Component{
                         <MatchesRoute />   
                     </Navbar.Text>
                     <Navbar.Text className="ml-auto nav-icon" style={{color: '#ffffff'}}>
-                        <a href="https://github.com/kallefrombosnia/cs-hud-observer">View this project on <DiGithubBadge size={32}></DiGithubBadge></a>
+                        <a href="https://github.com/JimmyLockhart65616/DoD-hud-observer">View this project on <DiGithubBadge size={32}></DiGithubBadge></a>
                     </Navbar.Text>
                 </Navbar>
             </div>       

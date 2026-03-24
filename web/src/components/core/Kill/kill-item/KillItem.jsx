@@ -1,56 +1,89 @@
-import React, { useEffect, useState }  from 'react';
+import React, { useEffect, useState } from 'react';
 
+// Pre-build weapon image map at compile time
+const weaponImages = {};
+const weaponCtx = require.context('../../../screen/resources/images/weapons', false, /\.png$/);
+weaponCtx.keys().forEach(key => { weaponImages[key.replace('./', '').replace('.png', '')] = weaponCtx(key); });
 
-
-/**
- * Render function for a defined time period
-*/
-
-const KillItem = (props) =>{
-
-    const {killer, victim} = props;
+const KillItem = ({ killinfo, killer, victim, delay }) => {
 
     const [visible, setVisible] = useState(true);
 
     useEffect(() => {
-      setTimeout(() => {
-        setVisible(false);
-      }, props.delay);
-    }, [props.delay]);
+        const t = setTimeout(() => setVisible(false), delay);
+        return () => clearTimeout(t);
+    }, [delay]);
 
-    return visible ? 
-        <React.Fragment>
-            {!props.killinfo.suicide &&
-                <div className="kill">
-                    
-                    {props.killinfo.killer_flashed && <img style={{marginLeft: '4px'}} src={require(`../../../screen/resources/images/flashed_kill.png`)} alt="full"></img>} 
-                    
-                    <span className={ `${killer.side}-style`}>{killer.name}</span>
-                    
-                    <img src={require(`../../../screen/resources/images/${props.killinfo.weapon_id}.png`)} alt="full"></img>
-                    
-                    {props.killinfo.victim_flashed && <img style={{marginLeft: '4px'}} src={require(`../../../screen/resources/images/flashed_kill.png`)} alt="flashed"></img>} 
-                    {props.killinfo.headshot && <img style={{height: '16px', width: '16px', marginLeft: '4px'}} src={require(`../../../screen/resources/images/headshot.png`)} alt="hs"></img>} 
-                    {props.killinfo.wallbang && <img style={{marginLeft: '4px'}} src={require(`../../../screen/resources/images/wallbang.png`)} alt="full"></img>} 
+    if (!visible) return <div />;
 
-                    <span className={ `${victim.side}-style`}>{victim.name}</span>
-                </div> 
-            }
-            {
-               props.killinfo.suicide &&
+    const isSuicide   = killinfo.kill_type === 'suicide';
+    const isTeamkill  = killinfo.kill_type === 'teamkill';
+    const isCapBreak  = killinfo.kill_type === 'cap_break';
 
-               <div className="kill">
-                    
-               {props.killinfo.suicide_reason === 'kill' && <img style={{height: '16px', width: '16px', marginLeft: '4px'}} src={require(`../../../screen/resources/images/skull.png`)} alt="skull"></img>} 
-               {props.killinfo.suicide_reason === 'weapon_c4'  && <img style={{height: '16px', width: '16px', marginLeft: '4px'}} src={require(`../../../screen/resources/images/6.png`)} alt="c4"></img>} 
-               {props.killinfo.suicide_reason === 'fall' && <img style={{height: '16px', width: '16px', marginLeft: '4px'}} src={require(`../../../screen/resources/images/skull.png`)} alt="skull"></img>} 
-               {props.killinfo.suicide_reason === 'weapon_hegrenade' && <img style={{height: '16px', width: '16px', marginLeft: '4px'}} src={require(`../../../screen/resources/images/4.png`)} alt="he"></img>} 
+    if (isCapBreak) {
+        const team = killinfo.contesting_team;
+        const names = (killinfo.contesters || []).map(p => p.name).join(', ');
+        return (
+            <div className={`kill cap-break cap-break-${team}`}>
+                <span className="cap-break-label">CAP BREAK</span>
+                <span className={`${team}-style`}>{names || 'unknown'}</span>
+                <span className="cap-break-flag">{killinfo.flag_name}</span>
+            </div>
+        );
+    }
 
-               <span className={ `${victim.side}-style`}>{victim.name}</span>
-           </div> 
-            }
-        </React.Fragment>
-    : <div />
-}
+    return (
+        <div className={`kill${isTeamkill ? ' teamkill' : ''}`}>
+
+            {isSuicide ? (
+                <>
+                    <img
+                        style={{ height: '16px', width: '16px', marginLeft: '4px' }}
+                        src={require(`../../../screen/resources/images/skull.png`)}
+                        alt="suicide"
+                    />
+                    <span className={`${victim.team}-style`}>{victim.name}</span>
+                </>
+            ) : (
+                <>
+                    {killinfo.streak >= 3 &&
+                        <span className="kill-streak-badge">{killinfo.streak}K</span>
+                    }
+
+                    <span className={`${killer.team}-style`}>{killer.name}</span>
+
+                    {killinfo.killer_prone &&
+                        <span className="kill-prone-badge">PRONE</span>
+                    }
+
+                    <WeaponIcon weapon={killinfo.weapon} />
+
+                    {killinfo.headshot &&
+                        <img
+                            className="kill-headshot-icon"
+                            src={require(`../../../screen/resources/images/headshot.png`)}
+                            alt="headshot"
+                            title="headshot"
+                        />
+                    }
+
+                    {killinfo.victim_prone &&
+                        <span className="kill-prone-badge">PRONE</span>
+                    }
+
+                    <span className={`${victim.team}-style`}>{victim.name}</span>
+                </>
+            )}
+
+        </div>
+    );
+};
+
+// Weapon icon — falls back to text if image not in pre-built map
+const WeaponIcon = ({ weapon }) => {
+    if (!weapon) return null;
+    if (weaponImages[weapon]) return <img src={weaponImages[weapon]} alt={weapon} style={{ margin: '0 4px' }} />;
+    return <span className="weapon-text">{weapon}</span>;
+};
 
 export default KillItem;

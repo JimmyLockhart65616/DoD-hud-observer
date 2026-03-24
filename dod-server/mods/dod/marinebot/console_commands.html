@@ -1,0 +1,322 @@
+<html>
+    <head>
+        <style>
+		body {color: #FBF3ED; background-color: black;}
+		a:link {color: #A3CEF0;}
+		a:visited {color: #2282CC;}
+		a:active {color: #A3CEF0;}
+		ul {margin-top: 5px; margin-bottom: 5px; font-weight: bold;}
+		h2 {margin-top: 0px; margin-bottom: 0px; color: #FFE2B5; font-style: italic; font-weight: bold; font-size: 16px}
+		h6 {margin-top: 50px; margin-bottom: 0px; margin-left: 20px; color: red; font-weight: bold; font-size: 18px; line-height: 1.5; font-family: Arial;}
+		p {font-weight: bold;}
+		p1 {margin-top: 0px; margin-bottom: 0px; margin-right: 80px; color: #FFE2B5; font-style: italic; font-weight: bold; font-size: 16px}
+		p2 {margin-top: 0px; margin-bottom: 0px; color: #FFE2B5; font-weight: bold; font-size: 16px; line-height: 1.5; font-family: Arial;}
+		p3 {margin-top: 0px; margin-bottom: 0px; margin-right: 80px; color: #FFE2B5; font-weight: bold; font-size: 16px}
+	</style>
+
+	<title>Marine Bot console commands</title>
+
+	<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+	<meta name="description" content="Marine Bot a bot for Firearms modification of Valve Software's computer game Half-Life">
+	<meta name="keywords" content="Marinebot,HL,Half-life,Firearms,Firearms 1,bot,bots,ai,controls,control commands">
+
+	<link rel="icon" type="image/png" href="img/site/mbicon.png">
+
+    </head>
+
+    <body>
+	<h6 style="margin-bottom: 20px;">Console commands that allow you to control Marine Bot</h6>
+	<p>In this document you'll find all valid console commands that allow you to get a full control over Marine Bot. First come the listen server commands. That means the commands that are available to you if you start Day of Defeat and click on 'Create a game' (a.k.a. LAN game). After that section is a list of valid commands for dedicated server (a.k.a. HLDS).</p>
+	<p>You can always use 'help' or '?' (without quotes) commands in console to access Marine Bot help system. Where you can find simplified version of this list. Console command help is available on listen server (Create a game) as well as dedicated server (HLDS).</p>
+
+	<h6>Marine Bot Listen Server commands (keep the spaces, because they separate the arguments)</h6>
+	<ul>
+	<li><p1>recruit &ltteam&gt &ltclass&gt &ltskill&gt &ltname&gt</p1>Adds a bot to your game where all arguments are optional. A few examples follow.</li>
+		<ul>
+		<li><p1>recruit</p1>Adds a bot with random team, class, name and default skill. The skill actually depends on <i>randomskill</i> variable (see below).</li>
+		<li><p1>recruit allies</p1>Adds a bot to allied team with random class, name. The skill will be set to default.</li>
+		<li><p1>recruit 1</p1>Also adds a bot to allied team with random class, name. The skill will be set to default.</li>
+		<li><p1>recruit axis 3</p1>Adds a bot to axis team with class 3. The name will be random and the skill will be set to default.</li>
+		<li><p1>recruit 2 1 2</p1>Adds a bot to axis team with specified class and skill. Only the name will be randomly generated.</li>
+		<li><p1>recruit allies 1 2 Jack</p1>Adds a bot to allied team with specified class, skill and name.</li>
+		<li><p1>recruit 0 0 0 Frank</p1>Adds a bot with random team, class. The skill will be set to default. And the name will be set to <i>Frank</i>.</li>
+		</ul>
+	<li><p1>fillserver &ltnumber&gt</p1>Fills the server with the number of bots specified or up to the maximum. The argument is optional.</li>
+		<ul>
+		<li><p1>fillserver</p1>Fills the server with the randomly generated bots to the maximum amount of clients.</li>
+		<li><p1>fillserver 10</p1>Fills the server with 10 randomly generated bots.</li>
+		</ul>
+	<li><p1>kickbot &ltargument&gt</p1>Kicks bot/bots depending on the argument.</li>
+		<ul>
+		<li><p1>kickbot</p1>Kicks a random bot.</li>
+		<li><p1>kickbot all</p1>Kicks all bots.</li>
+		<li><p1>kickbot allies</p1>Kicks a random bot from allied team.</li>
+		<li><p1>kickbot axis</p1>Kicks a random bot from axis team.</li>
+		<li><p1>kickbot "[MB]Alex Cage"</p1>Kicks bot named <i>[MB]Alex Cage</i> if there is one. The name must be in double quotes.</li>
+		<li><p1>kickbot Alex</p1>Kicks first bot with <i>Alex</i> in name. The command is case sensitive.</li>
+		</ul>
+	<li><p1>kick &ltname&gt</p1>Standard Half-Life command that kicks a player. The name must be in double quotes.</li>
+		<ul>
+		<li><p1>kick "[MB]Alex Cage"</p1>Kicks player (in this case bot) named <i>[MB]Alex Cage</i>.</li>
+		</ul>
+	<li><p1>killbot &ltargument&gt</p1>Kills bots depending on the argument.</li>
+		<ul>
+		<li><p1>killbot all</p1>Kills all bots currently in game.</li>
+		<li><p1>killbot allies</p1>Kills all allied team bots.</li>
+		<li><p1>killbot axis</p1>Kills all axis team bots.</li>
+		<li><p1>killbot "[MB]Alex Cage"</p1>Kills bot named <i>[MB]Alex Cage</i> if there is one.</li>
+		<li><p1>killbot Alex</p1>Kills first bot with <i>Alex</i> in name.</li>
+		</ul>
+	<li><p1>balanceteams &ltargument&gt</p1>Checks the number of clients on both teams and balances the teams if they aren't.</li>
+		<ul>
+		<li><p1>balanceteams off</p1>Temporarily (till next map change) turns team balancing off.</li>
+		<li><p1>balanceteams on</p1>Temporarily (till next map change) turns team balancing on.</li>
+		<li><p1>balanceteams</p1>Temporarily (till next map change) toggles team balancing on/off.</li>
+		</ul>
+	<li><p1>setbotskill &ltnumber 1-5&gt</p1>Sets bot skill level for all bots already in game. Lower numbers mean better skills.</li>
+	<li><p1>botskillup</p1>Upgrades bot skill level for all bots already in game (i.e. bots will be better).</li>
+	<li><p1>botskilldown</p1>Downgrades bot skill level for all bots already in game (i.e. bots will be worse).</li>
+	<li><p1>setaimskill &ltnumber 1-5&gt</p1>Sets aim skill level for all bots already in game. Lower numbers are better (i.e. bots are more accurate).</li>
+	<li><p1>botskillview</p1>Prints botskill & aimskill for all bots.</li>
+	<li><p1>spawnskill &ltnumber 1-5&gt</p1>Sets default skill for joining bots. Also sets their aim skill. This has no effect on bots already in the game. Lower numbers mean better skills.</li>
+	<li><p1>randomskill &ltargument&gt</p1>Toggles between using bot skill level given through <i>spawnskill</i> variable and generating the skill level randomly for each added bot.</li>
+		<ul>
+		<li><p1>randomskill</p1>Toggles between both modes.</li>
+		<li><p1>randomskill on</p1>Every added bot will get his skill level randomly generated.</li>
+		<li><p1>randomskill off</p1>Every added bot will use value given through <i> spawnskill</i> variable as his skill level.</li>
+		<li><p1>randomskill current</p1>Returns which mode is activated.</li>
+		</ul>
+	<li><p1>reactiontime &ltargument&gt</p1>Sets bot reaction time on first contact with enemy. Valid value is from 0 to 50, where 1 will be converted to 0.1s and 50 to 5.0s. Lower numbers mean faster reactions.</li>
+		<ul>
+		<li><p1>reactiontime 25</p1>Sets the reaction time to 2.5 seconds.</li>
+		<li><p1>reactiontime current</p1>Prints current reaction time value.</li>
+		</ul>
+	<li><p1>rangelimit &ltargument&gt</p1>Sets max distance of a enemy the bot can see and attack. Useful to limit bot long range sniping and force him to do more CQB fighting. Main purpose is to prevent bots snipe through skybox. Valid range value is from 500 to 7500.</li>
+		<ul>
+		<li><p1>rangelimit 3000</p1>Limits the view distance to 3000 Half-Life units.</li>
+		<li><p1>rangelimit default</p1>Returns it back to default (i.e. 7500 units).</li>
+		<li><p1>rangelimit current</p1>Prints current value.</li>
+		<li><p1>rangelimit help</p1>Prints in game console help.</li>
+		</ul>
+	<li><p1>directory &ltargument&gt</p1>Allows you to change waypoint directory to use other set of waypoints for current map. In such case this command must be followed by 'wpt load' command to actually load the other waypoints.</li>
+		<ul>
+		<li><p1>directory</p1>Switches between directories in cyclic order.</li>
+		<li><p1>directory defaultwpts</p1>Waypoints will be loaded from the <i>defaultwpts</i> directory. This is the default setting.</li>
+		<li><p1>directory customwpts</p1>Waypoints will be loaded from the <i>customwpts</i> directory.</li>
+		<li><p1>directory current</p1>Prints which directory is currently in use.</li>
+		</ul>
+	<li><p1>botdontspeak &ltargument&gt</p1>Sets whether the bots will/won't use Voice commands (ie. will speak or won't speak).</li>
+		<ul>
+		<li><p1>botdontspeak</p1>Bots will not use Voice commands (i.e. bots don't speak). Also serves as a toggle between speaking and silent modes.</li>
+		<li><p1>botdontspeak off</p1>Bots will again use Voice commands normally (i.e. bots speak). This is the default setting.</li>
+		</ul>
+	<li><p1>botdontchat &ltargument&gt</p1>Sets whether the bots will/won't use <i>say</i> & <i>say_team</i> messages (i.e. will chat or won't chat).</li>
+		<ul>
+		<li><p1>botdontchat</p1>Bots will not use <i>say</i> & <i>say_team</i> messages (i.e. bots don't chat). Also serves as a toggle between chatting and silent modes.</li>
+		<li><p1>botdontchat off</p1>Bots will again use <i>say</i> & <i>say_team</i> messages normally (i.e. bots chat). This is the default setting.</li>
+		</ul>
+	<li><p1>botdontchattobots &ltargument&gt</p1>Sets whether the bots will/won't use <i>say</i> & <i>say_team</i> messages directed to other bots (i.e. will chat to humans only or will chat to everyone including other bots).</li>
+		<ul>
+		<li><p1>botdontchattobots</p1>Bots will not use <i>say</i> & <i>say_team</i> messages directed to other bots (i.e. bots will chat only to humans). Also serves as a toggle between chatting to humans only and chatting to everyone.</li>
+		<li><p1>botdontchattobots off</p1>Bots will again use <i>say</i> & <i>say_team</i> messages normally (i.e. bots will chat to everyone including other bots). This is the default setting.</li>
+		</ul>
+	<li><p1>meleeonly &ltargument&gt</p1>Sets whether the bots will switch to using only the knife or spade where all firearms and grenades will be unavailable to them or will be using all weapons normally.</li>
+		<ul>
+		<li><p1>meleeonly</p1>Bots will switch to using only the knife/spade. Also serves as a toggle between using knife/spade only and using all weapons modes.</li>
+		<li><p1>meleeonly off</p1>Bots will be using all weapons again. This is the default setting.</li>
+		</ul>
+	<li><p1>marinebotmenu</p1>Displays the Marine Bot HUD menu. There are also shortcuts into menu sections that are used quite often. These shortcuts can save you some time if you bind them to free keys.</li>
+	<li><p1>mbmenushortcutwpt</p1>Shortcut to waypoint menu.</li>
+	<li><p1>mbmenushortcutwpttags1</p1>Shortcut to waypoint tags menu page 1. Works for both adding as well as changing waypoint. Its function depends on whether you are close to any waypoint (can change its tags or delete it) or not (can add a new one).</li>
+	<li><p1>mbmenushortcutpath</p1>Shortcut to path menu.</li>
+	<li><p1>mbmenushortcutpathtags1</p1>Shortcut to path tags menu page 1.</li>
+	<li><p1>versioninfo</p1>Prints Marine Bot version to the console. Also sends the same text to the top of your screen in a form of a HUD message.</li>
+	<li><p1>wpt author</p1>Shows waypoint signatures if they exist.</li>
+	<li><p1>getwptsystem</p1>Prints the waypoint system version the waypoint file was created in. Also prints the waypoint system version that is currently in use. Useful for checking whether the waypoints are still compatible with current MB or whether they are outdated.</li>
+	<li><p1>gettexturename</p1>Prints the name of the texture in front of you (not further than 100 units away). Allows you to modify or create files for the <i>Detailed textures</i> feature.</li>
+	<li><p1>checkbots &ltargument&gt</p1>Prints basic info about bot behaviour to console.</li>
+		<ul>
+		<li><p1>checkbots</p1>Prints the info about the first bot added to the game if exist.</li>
+		<li><p1>checkbots all</p1>Prints the info about all bots currently present in the game.</li>
+		<li><p1>checkbots used</p1>Does exactly the same thing as argument all.</li>
+		<li><p1>checkbots &ltnumber 1-32&gt</p1>Prints the info about the bot matching the number. Where number usually means the order in which this bot joined the game.</li>
+		<li><p1>checkbots Alex</p1>Prints the info about the first bot with <i>Alex</i> in name.</li>
+		</ul>
+	<li><p1>changestartpositions &ltargument&gt</p1>Allows you to switch between using alternative coordinates for the player start positions of either of the teams and the default positions that are defined in map file. It needs a map restart to take effect.</li>
+		<ul>
+		<li><p1>changestartpositions</p1>Toggles between using alternative start positions and default start positions.</li>
+		<li><p1>changestartpositions on</p1>Alternative start positions defined in mapname_startpoints.cfg file inside <i>mapcfgs</i> will be used. This is the default setting.</li>
+		<li><p1>changestartpositions off</p1>Default start positions stored in the map file will be used.</li>
+		<li><p1>changestartpositions current</p1>Returns which mode is activated.</li>
+		</ul>
+	<li><p1>changecaptureareas &ltargument&gt</p1>Allows you to switch between using the alternative data for the capture areas and the default values that are defined in map file. It needs a map restart to take effect.</li>
+		<ul>
+		<li><p1>changecaptureareas</p1>Toggles between using alternative data and default values for the capture areas.</li>
+		<li><p1>changecaptureareas on</p1>Alternative data for the capture areas defined in mapname_captureareas.cfg file inside <i>mapcfgs</i> will be used. This is the default setting.</li>
+		<li><p1>changecaptureareas off</p1>Default values for the capture areas stored in the map file will be used.</li>
+		<li><p1>changecaptureareas current</p1>Returns which mode is activated.</li>
+		</ul>
+	<li><p1>generatecaptureareasfile</p1>Activates a mode where MB system will gather data about capture areas during a map load in order to create a new configuration file for that map inside <i>mapcfgs</i>. It automatically turns off once the file is created.</li>
+	<li><p1>fixparticlemanagercrash &ltargument&gt</p1>Allows you to activate the fix for a crash to desktop that happens on Linux game client as a result of a bug in HL engine where too many particles at one moment will crash the game.</li>
+		<ul>
+		<li><p1>fixparticlemanagercrash</p1>Toggles between having the patch for the crash of Linux game client due to a bug in HL engine activated and deactivated.</li>
+		<li><p1>fixparticlemanagercrash off</p1>Disables the patch for the crash of Linux game client due to a bug in HL engine. This is the default setting.</li>
+		</ul>
+	<p>Next five commands are kind of cheat commands. They alter standard way how the things work. Useful especially for waypoint testing or any kind of tests.</p>
+	<li><p1>observer &ltargument&gt</p1>Ignore human players mode.</li>
+		<ul>
+		<li><p1>observer</p1>Bots will ignore you. Also serves as a toggle between modes.</li>
+		<li><p1>observer off</p1>Bots will again target you. This is the default setting.</li>
+		</ul>
+	<li><p1>mrfreeze &ltargument&gt</p1>A mode where the bots are frozen. So they won't move and shoot.</li>
+		<ul>
+		<li><p1>mrfreeze</p1>Bots will completely stop. Also serves as a toggle between modes.</li>
+		<li><p1>mrfreeze off</p1>Bots will again move normally. This is the default setting.</li>
+		</ul>
+	<li><p1>botdontshoot &ltargument&gt</p1>A mode where the bots won't shoot any firearm or use any other weapon in general, but they can still move and do the other actions.</li>
+		<ul>
+		<li><p1>botdontshoot</p1>Bots will NOT shoot any firearm or use a knife or throw any grenade. Also serves as a toggle between modes.</li>
+		<li><p1>botdontshoot off</p1>Bots will again use all weapons normally. This is the default setting.</li>
+		</ul>
+	<li><p1>botdontshootfirearm &ltargument&gt</p1>A mode where the bots won't shoot any firearm, but they can still throw a grenade and use knife as well as move and do the other actions.</li>
+		<ul>
+		<li><p1>botdontshootfirearm</p1>Bots will NOT shoot any firearm, but they're still able to stab with knife or throw a grenade. Also serves as a toggle between modes.</li>
+		<li><p1>botdontshootfirearm off</p1>Bots will again use all weapons normally. This is the default setting.</li>
+		</ul>
+	<li><p1>botignoreall &ltargument&gt</p1>A mode where the bots ignore all enemies (including other bots).</li>
+		<ul>
+		<li><p1>botignoreall</p1>Bots will NOT target any enemy. Also serves as a toggle between modes.</li>
+		<li><p1>botignoreall off</p1>Bots will again target enemies. This is the default setting.</li>
+		</ul>
+	<li><p1>mbnoclip &ltargument&gt</p1>No clipping mode i.e. flying.</li>
+		<ul>
+		<li><p1>mbnoclip</p1>You will be able to fly through everything on the map. Also serves as a toggle between modes.</li>
+		<li><p1>mbnoclip off</p1>You will move again normally. This is the default setting.</li>
+		</ul>
+	<p>Note: No clipping mode is automatically turned off if you die.</p>
+	</ul>
+
+	<h6>Marine Bot on a Dedicated Server (HLDS)</h6>
+	<p>Before we get to the commands here's a list and description of message types Marine Bot prints to the HLDS console. All messages are followed by additional text.</p>
+	<ul>
+	<li style="margin-top: 35px; margin-bottom: 15px;"><p3>MARINE_BOT CFG FILE INIT</p3>Is printed when an MB CVAR (configuration variable) is read from a configuration file (usually "marine.cfg").</li>
+	<li style="margin-top: 15px; margin-bottom: 15px;"><p3>MARINE_BOT CFG FILE ERROR</p3>Is printed when an MB CVAR (read from .cfg file) is invalid and MB instead takes the default value (hard coded). To solve this problem edit your .cfg file and correct the value. Also check to see if there is a .cfg file for the specific map loaded at the time and do the same.</li>
+	<li style="margin-top: 15px; margin-bottom: 15px;"><p3>MARINE_BOT</p3>Validates console commands.</li>
+	<li style="margin-top: 15px; margin-bottom: 15px;"><p3>MARINE_BOT ERROR</p3>Is printed when an invalid command/argument is entered. Or as a result of a problem during automated/cyclic processes (for example auto balance). MB will also print why this error occurred.</li>
+	<li style="margin-top: 15px; margin-bottom: 15px;"><p3>MARINE_BOT INFO</p3>Is printed when some process is in progress. Or as a result of an automated/cyclic process.</li>
+	<li style="margin-top: 15px; margin-bottom: 35px;"><p3>MARINE_BOT WARNING</p3>Warns you about a nonfatal error. Usually something is missing.</li>
+	</ul>
+	<p>Marine Bot is using special syntax for all Dedicated Server commands. There's a special keyword <i>m_bot</i> that must precede all commands on the list below. The syntax is <span style= 'color: #FFE2B5'>m_bot &ltcommand&gt &ltlist of arguments&gt</span>. For example if you want to add one randomly generated bot then you must write <span style= 'color: #FFE2B5'>m_bot addmarine</span> into HLDS console. Or if you want to change minimum amount of bots on server you must write <span style= 'color: #FFE2B5'>m_bot min_bots 10</span>. Since Marine Bot 0.95b there's an option to omit underscore character in the keyword as well as in any command so <span style= 'color: #FFE2B5'>mbot minbots 10</span> will work too. Make sure to use the spaces to separate the keyword, the command and the arguments. Next is a list of all dedicated server commands and their explanation.</p>
+	<ul>
+	<li><p1>addmarine</p1>Adds bot with random team, class, name and default skill. The skill actually depends on <i>random_skill</i> variable (see below).</li>
+	<li><p1>addmarine1</p1>Adds bot to allied team with random class, name and default skill.</li>
+	<li><p1>addmarine2</p1>Adds bot to axis team with random class, name and default skill.</li>
+	<li><p1>addmarine &ltteam&gt &ltclass&gt &ltskill&gt &ltname&gt</p1>Adds a fully customized bot. A few examples follow.</li>
+		<ul>
+		<li><p1>addmarine 1</p1>Adds a bot to allied team with random class and name. The skill will be set to default.</li>
+		<li><p1>addmarine 2 3</p1>Adds a bot to axis team with class 3. The name will be random and the skill will be set to default.</li>
+		<li><p1>addmarine allies 3</p1>Adds a bot to allied team with class 3. The name will be randomly generated and the skill will be set to default.</li>
+		<li><p1>addmarine axis 1 2</p1>Adds a bot to axis team with specified class and skill. Only the name will be randomly generated.</li>
+		<li><p1>addmarine 1 1 2 Jack</p1>Adds a bot to allied team with specified class, skill and name.</li>
+		<li><p1>addmarine 0 0 0 Frank</p1>Adds a bot with random team and class. The skill will be set to default. And the name will be set to <i>Frank</i>.</li>
+		</ul>
+	<p>Note: If you have specified max_bots then any addmarine command will temporarily (till next map change) override its value to allow more bots on the server. After the map change max_bots will again take control and keep only given number of bots on the server.</p>
+	<li><p1>min_bots &ltnumber 0-31&gt</p1>Specifies minimum of bots on server. Setting it to value 31 will disable this feature. Which means that bots will not be kicked no matter how many players join.</li>
+	<li><p1>max_bots &ltnumber 0-31&gt</p1>Specifies maximum of bots on server. Setting it to value 0 will disable the feature. Which means that no bots will automatically join to maintain desired amount of clients on the server.</li>
+	<li><p1>kick_bot &ltargument&gt</p1>Kicks bot/bots depending on the argument.</li>
+		<ul>
+		<li><p1>kick_bot</p1>Kicks a random bot.</li>
+		<li><p1>kick_bot all</p1>Kicks all bots.</li>
+		<li><p1>kick_bot allies</p1>Kicks a random bot from allied team.</li>
+		<li><p1>kick_bot axis</p1>Kicks a random bot from axis team.</li>
+		<li><p1>kick_bot "[MB]Alex Cage"</p1>Kicks bot named <i>[MB]Alex Cage</i> if there is one. The name must be in double quotes.</li>
+		<li><p1>kick_bot Alex</p1>Kicks first bot with <i>Alex</i> in name. The command is case sensitive.</li>
+		</ul>
+	<li><p1>kill_bot &ltargument&gt</p1>Kills bots depending on the argument.</li>
+		<ul>
+		<li><p1>kill_bot all</p1>Kills all bots currently in game.</li>
+		<li><p1>kill_bot allies</p1>Kills all allied team bots.</li>
+		<li><p1>kill_bot axis</p1>Kills all axis team bots.</li>
+		<li><p1>kill_bot "[MB]Alex Cage"</p1>Kills bot named <i>[MB]Alex Cage</i> if there is one.</li>
+		<li><p1>kill_bot Alex</p1>Kills first bot with <i>Alex</i> in name.</li>
+		</ul>
+	<li><p1>set_botskill &ltnumber 1-5&gt</p1>Sets bot skill level for all bots already in game. Lower numbers mean better skills.</li>
+	<li><p1>botskill_up</p1>Upgrades bot skill level for all bots already in game (i.e. bots will be better).</li>
+	<li><p1>botskill_down</p1>Downgrades bot skill level for all bots already in game (i.e. bots will be worse).</li>
+	<li><p1>set_aimskill &ltnumber 1-5&gt</p1>Sets aim skill level for all bots already in game. Lower numbers are better (i.e. bots are more accurate).</li>
+	<li><p1>spawn_skill &ltnumber 1-5&gt</p1>Sets default skill for joining bots. Also sets their aim skill. This has no effect on bots already in the game. Lower numbers mean better skills.</li>
+	<li><p1>random_skill &ltargument&gt</p1>Toggles between using bot skill level given through <i>spawn_skill</i> variable and generating the skill level randomly for each added bot.</li>
+		<ul>
+		<li><p1>random_skill</p1>Toggles between both modes.</li>
+		<li><p1>random_skill on</p1>Every added bot will get his skill level randomly generated.</li>
+		<li><p1>random_skill off</p1>Every added bot will use value given through <i> spawn_skill</i> variable as his skill level.</li>
+		<li><p1>random_skill current</p1>Returns which mode is activated.</li>
+		</ul>
+	<li><p1>reaction_time &ltargument&gt</p1>Sets bot reaction time on first contact with enemy. Valid value is from 0 to 50, where 1 will be converted to 0.1s and 50 to 5.0s. Lower numbers mean faster reactions.</li>
+		<ul>
+		<li><p1>reaction_time 25</p1>Sets the reaction time to 2.5 seconds.</li>
+		<li><p1>reaction_time current</p1>Prints current reaction time value.</li>
+		</ul>
+	<li><p1>range_limit &ltargument&gt</p1>Sets max distance of a enemy the bot can see and attack. Useful to limit bot long range sniping and force him to do more CQB fighting. Main purpose is to prevent bots snipe through skybox. Valid range value is from 500 to 7500.</li>
+		<ul>
+		<li><p1>range_limit 3000</p1>Limits the view distance to 3000 Half-Life units.</li>
+		<li><p1>range_limit default</p1>Returns it back to default (i.e. 7500 units).</li>
+		<li><p1>range_limit current</p1>Prints current value.</li>
+		<li><p1>range_limit help</p1>Prints in game console help.</li>
+		</ul>
+	<li><p1>auto_balance &ltnumber&gt</p1>Sets time for automatic team balance checks. Valid value is from 30 to 3600. Where 30 means 30 seconds and 3600 is 1 hour. Setting it to 0 will disable automatic team balancing.</li>
+	<li><p1>balance_teams</p1>Runs a one time balance team check (some bots will move to weaker team when teams are unbalanced).</li>
+	<li><p1>clients</p1>Prints clients/bots count currently on server. Also prints how many bots are in each team.</li>
+	<li><p1>version_info</p1>Prints MB version.</li>
+	<li><p1>directory &ltargument&gt</p1>Allows you to change waypoint directory to use other set of waypoints for current map.</li>
+		<ul>
+		<li><p1>directory</p1>Switches between directories in cyclic order.</li>
+		<li><p1>directory defaultwpts</p1>Waypoints will be loaded from the <i>defaultwpts</i> directory. This is the default setting.</li>
+		<li><p1>directory customwpts</p1>Waypoints will be loaded from the <i>customwpts</i> directory.</li>
+		<li><p1>directory current</p1>Prints which directory is currently in use.</li>
+		</ul>
+	<li><p1>load_unsupported</p1>Allows you to convert and save older waypoint files. Useful if you notice that MB is doing automatic waypoint conversion on map load. Such process is temporar and the conversion is lost after next map change. Using this command will keep the conversion, because the old waypoint files are overwritten by the converted waypoint data.</li>
+	<li><p1>send_info &ltnumber&gt</p1>Sets time in seconds for HLDS console info message auto sending. Valid value is from 30 to 3600. When set to 0 there will be no info messages printed to HLDS console.</li>
+	<li><p1>send_presentation &ltnumber&gt</p1>Sets time in seconds for clients HUD message auto sending. Valid value is from 30 to 3600. When set to 0 there will be no HUD messages <i>This server runs Marine Bot in version ...</i></li>
+	<li><p1>dont_speak &ltargument&gt</p1>Sets whether the bots will/won't use Voice commands (ie. will speak or won't speak).</li>
+		<ul>
+		<li><p1>dont_speak</p1>Bots will not use Voice commands (i.e. bots don't speak). Also serves as a toggle between speaking and silent modes.</li>
+		<li><p1>dont_speak off</p1>Bots will again use Voice commands normally (i.e. bots speak). This is the default setting.</li>
+		</ul>
+	<li><p1>dont_chat &ltargument&gt</p1>Sets whether the bots will/won't use <i>say</i> & <i>say_team</i> messages (i.e. will chat or won't chat).</li>
+		<ul>
+		<li><p1>dont_chat</p1>Bots will not use <i>say</i> & <i>say_team</i> messages (i.e. bots don't chat). Also serves as a toggle between chatting and silent modes.</li>
+		<li><p1>dont_chat off</p1>Bots will again use <i>say</i> & <i>say_team</i> messages normally (i.e. bots chat). This is the default setting.</li>
+		</ul>
+	<li><p1>bot_dontchat_tobots &ltargument&gt</p1>Sets whether the bots will/won't use <i>say</i> & <i>say_team</i> messages directed to other bots (i.e. will chat to humans only or will chat to everyone including other bots).</li>
+		<ul>
+		<li><p1>bot_dontchat_tobots</p1>Bots will not use <i>say</i> & <i>say_team</i> messages directed to other bots (i.e. bots will chat only to humans). Also serves as a toggle between chatting to humans only and chatting to everyone.</li>
+		<li><p1>bot_dontchat_tobots off</p1>Bots will again use <i>say</i> & <i>say_team</i> messages normally (i.e. bots will chat to everyone including other bots). This is the default setting.</li>
+		</ul>
+	<li><p1>melee_only &ltargument&gt</p1>Sets whether the bots will switch to using only the knife or spade where all firearms and grenades will be unavailable to them or will be using all weapons normally.</li>
+		<ul>
+		<li><p1>melee_only</p1>Bots will switch to using only the knife/spade. Also serves as a toggle between using knife/spade only and using all weapons modes.</li>
+		<li><p1>melee_only off</p1>Bots will be using all weapons again. This is the default setting.</li>
+		<li><p1>melee_only current</p1>Returns which mode is activated.</li>
+		</ul>
+	<li><p1>change_start_positions &ltargument&gt</p1>Allows you to switch between using alternative coordinates for the player start positions of either of the teams and the default positions that are defined in map file. It needs a map restart to take effect.</li>
+		<ul>
+		<li><p1>change_start_positions</p1>Toggles between using alternative start positions and default start positions.</li>
+		<li><p1>change_start_positions on</p1>Alternative start positions defined in mapname_startpoints.cfg file inside <i>mapcfgs</i> will be used. This is the default setting.</li>
+		<li><p1>change_start_positions off</p1>Default start positions stored in the map file will be used.</li>
+		<li><p1>change_start_positions current</p1>Returns which mode is activated.</li>
+		</ul>
+	<li><p1>change_capture_areas &ltargument&gt</p1>Allows you to switch between using the alternative data for the capture areas and the default values that are defined in map file. It needs a map restart to take effect.</li>
+		<ul>
+		<li><p1>change_capture_areas</p1>Toggles between using alternative data and default values for the capture areas.</li>
+		<li><p1>change_capture_areas on</p1>Alternative data for the capture areas defined in mapname_captureareas.cfg file inside <i>mapcfgs</i> will be used. This is the default setting.</li>
+		<li><p1>change_capture_areas off</p1>Default values for the capture areas stored in the map file will be used.</li>
+		<li><p1>change_capture_areas current</p1>Returns which mode is activated.</li>
+		</ul>
+	</ul>
+
+	<p style="margin-top: 50px; margin-bottom: 300px; text-align: center; font-size: small; font-style: italic;">by Frank McNeil 2005-2025</p>
+	<hr>
+	<p style="text-align: center; font-size: x-small; font-style: italic;">end of file</p>
+    </body>
+</html>

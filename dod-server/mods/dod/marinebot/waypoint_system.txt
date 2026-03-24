@@ -1,0 +1,13 @@
+
+Waypointing with Marine Bot
+
+Please visit http://marinebot.xf.cz/support.html where you can find a link to a manual with detailed information and pictures.
+
+!!WARNING!! DO NOT WAYPOINT WITH BOTS ALREADY IN THE MAP!
+
+When bots are in the map and you start waypointing, the bots will behave strangely.
+Also you may experience strange bugs in waypoints. Or the game can even crash and you would lose all your work.
+
+Tip:  If you want to waypoint with bots in the map use the 'mrfreeze' command to stop them.
+
+If you want to waypoint for Marine Bot please check the Marine Bot official web page for more information.

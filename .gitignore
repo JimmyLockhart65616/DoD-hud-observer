@@ -5,3 +5,18 @@ game/addons/amxmodx/scripting/Events.amxx
 game/addons/amxmodx/scripting/Events.sma.bak
 game/addons/amxmodx/scripting/Events.smaa
 current.code-workspace
+
+# DoD server — AMXX binaries and compiled plugin (too large / platform-specific)
+dod-server/mods/addons/amxmodx/dlls/
+dod-server/mods/addons/amxmodx/modules/
+dod-server/mods/addons/amxmodx/plugins/*.amxx
+dod-server/mods/addons/metamod/dlls/
+dod-server/mods/addons/metamod/*.so
+dod-server/mods/addons/metamod/*.dll
+dod-server/mods/addons/metamod/example_plugin/
+dod-server/mods/addons/metamod/sdk/
+
+# Playwright E2E test artifacts
+e2e/snapshots/
+test-results/
+playwright-report/

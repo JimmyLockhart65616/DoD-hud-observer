@@ -1,0 +1,156 @@
+<html>
+    <head>
+        <style>
+		body {color: #FBF3ED; background-color: black;}
+		a:link {color: #A3CEF0;}
+		a:visited {color: #2282CC;}
+		a:active {color: #A3CEF0;}
+		ul {margin-top: 5px; margin-bottom: 5px; font-weight: bold;}
+		h2 {margin-top: 0px; margin-bottom: 0px; color: #FFE2B5; font-style: italic; font-weight: bold; font-size: 16px}
+		h6 {margin-top: 50px; margin-bottom: 0px; margin-left: 20px; color: red; font-weight: bold; font-size: 18px; line-height: 1.5; font-family: Arial;}
+		p {margin-left: 20px; font-weight: bold;}
+	</style>
+
+	<title>Marine Bot FAQ</title>
+
+	<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+	<meta name="description" content="Marine Bot a bot for Firearms modification of Valve Software's computer game Half-Life">
+	<meta name="keywords" content="Marinebot,HL,Half-life,Firearms,Firearms 1,bot,bots,ai,faq,frequently asked questions">
+
+	<link rel="icon" type="image/png" href="img/site/mbicon.png">
+
+    </head>
+
+    <body>
+	<h6 style="margin-bottom: 20px;">Frequently Asked Questions</h6>
+	<p style="margin-left: 0px;">In this document you'll find the answers to the most common problems you may encounter while using Marine Bot.</p>
+	
+	<h2>What does FAQ mean?</h2>
+	<p>It's an acronym for Frequently Asked Questions.</p>
+
+	<h2>Is there any in-game help?</h2>
+	<p>Yes, access it by opening the console and entering 'help' or '?' (no quotation marks).</p>
+
+	<h2>How do I open this console?</h2>
+	<p>Press the tilde key (located between esc and tab keys).</p>
+
+	<h2>So I will have to use the console commands to control Marine Bot?</h2>
+	<p>Yes full control can only be done using the console commands. However you can get a basic control over Marine Bot using the HUD menu bound to your END key. Note that this is for a listenserver only, see the <a href="console_commands.html" target="_blank">'console_commands.html'</a> file for a full listing of all commands available on a dedicated server.</p>
+
+	<h2>Can I use Marine Bot on Linux OS?</h2>
+	<p>Yes you can.
+	<ul style="margin-top: 0; margin-left: -20">
+		<li>If you are Dedicated Server admin then download the package from Marine Bot homepage, unpack it to 'dod' folder on your server and use the Adminmod/Metamod commandline option +localinfo mm_gamedll or Metamod 'config.ini' file to load Marine Bot.</li>
+		<li>If you are gamer and you want to play the Day of Defeat on your computer, and you don't use Metamod or similar loader in your Steam installation of DoD mod, then you'll need to have 'Wine' installed on your Linux OS in order to correctly install Marine Bot. See the 'Install instructions' in the 'Support' section of Marine Bot homepage for more info.</li>
+		<li>If you are gamer and you use Metamod to play the Day of Defeat on your computer, unpack Marine Bot package to your 'dod' folder and use the Metamod commandline option +localinfo mm_gamedll or 'config.ini' file to load Marine Bot.</li>
+	</ul>
+	</p>
+
+	<h2>How do I add bots into my game?</h2>
+	<p><ul style="margin-top: 0; margin-left: -20">
+		<li>If you are starting with a new installation, bots should join automatically.</li>
+		<li>Open the console and type 'recruit' (without quotes) to add randomly generated bot to the game.</li>
+		<li>If the 'recruit' command for adding bots doesn't work, then you probably don't have a modified 'liblist.gam' file in your <i>...\Half-Life\dod</i> folder. Visit Marine Bot homepage 'Support' section or see the 'readme.txt' file for details.</li>
+	</ul>
+	</p>
+
+	<h2>Can I arrange it so that bots automatically join the game instead of having to add them one by one?</h2>
+	<p><ul style="margin-top: 0; margin-left: -20">
+		<li>If you are starting from a fresh installation, 15 bots should join automatically.</li>
+		<li>If you only want a certain number of bots to join the game, you can use the console command 'fillserver #' (doesn't work on HLDS) where # is the number of bots you wish to add (e.g. fillserver 15).</li>
+		<li>If you don't want to fill the server, or want more control, you can add bots using your 'marine.cfg' file. See that file for details.</li>
+		<li>If you want different numbers or configurations of bots for each map, you can create a separate file for this. Simply copy the 'marine.cfg' file into your <i>marinebot\mapcfgs</i> folder, and rename it to the same name as the map plus '_marine.cfg' e.g. for dod_anzio map you would rename it to 'dod_anzio_marine.cfg' or for dod_caen map it would be 'dod_caen_marine.cfg' and so on. Then edit it in the same way.</li>
+	</ul>
+	</p>
+
+	<h2>Bots appear to be stuck, moving blindly between corners. They don't seem to be able to find their way around the map at all, why is this?</h2>
+	<p><ul style="margin-top: 0; margin-left: -20">
+		<li>For Marine Bot to work correctly, you need to have specially created waypoints for each map you want to use bots on. Marine Bot should tell you with a message on the screen if it is missing waypoints. Look in your <i>marinebot\defaultwpts</i> folder to see if there are .pth and .wpt files with the same name as the map, such as 'dod_anzio.pth' and 'dod_anzio.wpt'.</li>
+		<li>If you can't find waypoints for a specific map, you could always make them yourself and email them to me. If they are sufficiently good they may even be included in the next version of Marine Bot and/or put in the 'Files' section on Marine Bot homepage for others to download.</li>
+	</ul>
+	</p>
+
+	<h2>When I view the scoreboard, I see some bots joined as spectators, but never really appeared in the game. Why they don't want to spawn to the game?</h2>
+	<p><ul style="margin-top: 0; margin-left: -20">
+		<li>This is a problem with your 'marine.cfg' file or '&ltmapname&gt_marine.cfg' if there is one for this map. Check the 'Custom Recruiting' section in that file. You are probably adding bots only to one team and you have automatic team balancing turned off.</li>
+		<li>DoD forces team balance and you are recruiting bots (either via console command or menu) to only one team while having the automatic team balancing turned off. Either recruit more bots to the other team or do a team balancing by typing 'balanceteams' (without quotes) into the console or via the menu.</li>
+	</ul>
+	</p>
+
+	<h2>The bots are too good for me to stand a chance against them. Is there a way to make them easier to kill?</h2>
+	<p>Yes there are several options to lower their skills.
+	<ul style="margin-top: 0; margin-left: -20">
+		<li>You can use command 'botskilldown' (no quotation marks) to lower the skill by one level for all bots that are already in game. There's also an option with the same name in the Marine Bot menu.</li>
+		<li>You can edit 'marine.cfg' file and change their spawn skill permanently. By default it's set to moderate skill, but there are two worse options for you to use.</li>
+		<li>You can also modify their reaction time using command 'reactiontime #' (no quotation marks). Where # is a number between 0 (best) and 50 (worst). Default value is 5 which means 0.5 seconds. So if you want them to be slower then increase the value. You may try setting it to value 20 which will be 2.0 seconds delay before they start shooting at you. Option to change reaction time is also available in Marine Bot menu.</li>
+		<li>If you want to permanently change their reaction time then edit 'marine.cfg' file.</li>
+	</ul>
+	</p>
+
+	<h2>Can I change the names the bots use ingame?</h2>
+	<p>Yes, in the 'marine_dog-tags.txt' file. Be sure to read and follow the instuctions there otherwise things may not work.</p>
+
+	<h2>Can I change the classes the bots use ingame?</h2>
+	<p><ul style="margin-top: 0; margin-left: -20">
+		<li>If you want bots to have different classes for certain maps, then go to your <i>marinebot\mapcfgs</i> folder and create a '&ltmapname&gt_marine.cfg' file for that map in the same way as described above and then edit the 'addmarine' commands in 'Custom Recruiting'. See that file for details.</li>
+	</ul>
+	</p>
+
+	<h2>I have waypoints for a map, but they don't work. Why?</h2>
+	<p><ul style="margin-top: 0; margin-left: -20">
+		<li>Marine Bot automatically converts waypoints from the previous version into its current version. Try typing 'wpt load' in the console (no quotation marks), or if that doesn't work try 'wpt loadunsupported', or if that doesn't work try 'wpt loadunsupportedversion6'. If either of these works, use 'wpt save' to save them. If all return an error, then your waypoint file is probably corrupt, try downloading it again.</li>
+		<li>The waypoints may be just too old, because Marine Bot can only convert last two most recent waypoint formats. Anything older than Marine Bot in version 0.9b will not be supported.<br><span style="font-weight: normal">Tip: You can type 'get_wpt_system' command to see which waypoint system are the waypoints created in. Marine Bot 0.9b used waypoint system version 6. Marine Bot in version 0.91b up to 0.95b used waypoint system version 7. And Marine Bot 0.96b is using waypoint system version 8.</span></li>
+	</ul>
+	</p>
+
+	<h2>Why do I get the message 'waypoints subscription FAILED ...' when I try to change the authors name for a set of waypoints?</h2>
+	<p><ul style="margin-top: 0; margin-left: -20">
+		<li>The author's signature can only be set once by the author. Once the author's signature is set you can only set/change the 'modified by' signature.</li>
+		<li>If you are creating new waypoints from scratch just save them first and then you will be able to set your signature.</li>
+		<li>If you have used the autowaypointing feature then the waypoints are automatically marked as done by the autowaypointing. So you can't set your own signature. You can only set the 'modified by' signature.</li>
+	</ul>
+	</p>
+
+	<h2>Why does Half-Life crash when I use the 'wpt save' command to save my waypoints?</h2>
+	<p>Sorry that you lost your work, but you don't have Marine Bot properly installed. This error will result if there is no <i>marinebot\defaultwpts</i> (or <i>marinebot\customwpts</i>) folder, which should be created during a correct installation.</p>
+
+	<h2>When I start a game with Marine Bot I get the message 'Host_Error: Couldn't get DLL API from...'. What's wrong?</h2>
+	<p>This error occurs when Half-Life can't find the correct Marine Bot files, usually due to problems with your 'liblist.gam' file. Make sure you have Marine Bot properly installed. Visit Marine Bot homepage 'Support' section or see the 'readme.txt' file for details on how to do this.</p>
+
+	<h2>When I'm trying to start a game with Marine Bot on Linux nothing happens and I stay in the main menu. But when I press the tilde key to open the console, I can see an error message along the lines of "LoadLibrary failed ... 'GLIBC_2.34' not found ...". What does it mean?</h2>
+	<p>This means the system libraries of your Linux distribution are older than what GCC put as a requirement into 'marinebot.so' during its compilation. Marine Bot is being compiled on Ubuntu 22.04 LTS, but if you try to use it on Ubuntu 20.04 LTS for example then you will get this error.
+	<ul style="margin-top: 0; margin-left: -20">
+		<li>Either upgrade your Linux distribution to latest version.</li>
+		<li>Or you can build your own Marine Bot library. Which will then be fully compatible with your current Linux system. There is a simple <a href="http://marinebot.xf.cz/compilingmbonlinux.html" target="_blank">guide</a> available in 'Links' section of Marine Bot homepage that is meant to help you with compiling your own 'marinebot.so' library.</li>
+	</ul>
+	</p>
+
+	<h2>I'm trying to run Marine Bot on a Linux server, but it keeps failing with error "libstdc++.so.6: version `CXXABI_1.3.9' not found". Where can I get that?</h2>
+	<p><ul style="margin-top: 0; margin-left: -20">
+		<li>This is an issue with Valve's SteamCMD Dedicated Server for Linux. There's a trick where you will either delete or just rename 3 files within your HLDS folder. Look at <a href="http://marinebot.xf.cz/img/hlds_fa_linux.jpg" target="_blank">this picture</a>. You can see that there is only '.orig' added to their names. This will ensure that HLDS will fail to locate them and will have to use your system libraries which won't cause the error. So your server will run then. If you use SteamCMD to update your server or to validate it then these 3 files will probably be recreated again. So be sure to check that before starting the server up again.</li>
+		<li>You can build your own Marine Bot .so library. Download the source code from 'Files' section on Marine Bot homepage and read the 'mb_readme.txt' file, which is part of the source code since version 0.94b. You'll find all the info there including the solution how to deal with this error without touching any HLDS files.</li>
+	</ul>
+	</p>
+
+	<h2>While the map is loading, I get an error along the lines of 'NULL entity ...', but the game still loads, and certain gameplay features don't work. How can I fix this?</h2>
+	<p>If you are using standard Steam version of Day of Defeat 1.3 this shouldn't happen. If this does happen please let me know using the contact information below.</p>
+
+	<h2>Who made Marine Bot?</h2>
+	<p>Visit Marine Bot homepage 'Info' section or see the 'readme.txt' file for a full list of contributors and credits.</p>
+
+	<h2>How can I help develop Marine Bot?</h2>
+	<p><ul style="margin-top: 0; margin-left: -20">
+		<li>Play it and test it. If you run into serious bug/s and/or constant crashes feel free to let me know (see below).</li>
+		<li>Create waypoints for maps (see the documentation for details), especially those which have not been waypointed before. If the waypoints are good enough and you email them to me, I may include them in the next release or add them to 'Files' on Marine Bot homepage for others to download. Please note this is not guaranteed.</li>
+	</ul>
+	</p>
+
+	<h2>How can I contact you?</h2>
+	<p>If you have any questions, or find any problems that aren't already addressed in this FAQ, you can contact me by any of these methods (ordered by preference):<br><span style="margin-left: 20px;"><a href="mailto:mailtomapper@centrum.cz">Email Frank McNeil</a></span><br><span style="font-weight: normal">Note: Please remember to include all details of Day of Defeat, Half-Life, Steam and Marine Bot versions. The more information you give me on your problem, the easier it will be for me to help you.</span></p>
+
+
+	<p style="margin-top: 50px; margin-bottom: 300px; text-align: center; font-size: small; font-style: italic;">by Frank McNeil 2005-2024</p>
+	<hr>
+	<p style="text-align: center; font-size: x-small; font-style: italic;">end of file</p>
+    </body>
+</html>

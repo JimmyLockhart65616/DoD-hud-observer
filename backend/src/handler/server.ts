@@ -1,255 +1,107 @@
-
-
 import net from 'net';
-import {EventEmitter} from 'events';
-import { Socket } from "socket.io-client";
-
-export interface ClientSocket{
-	state: State;
-	socket: net.Socket;
-	info: {
-		address: string;
-		port: number;
-		token: string;
-	}
-	io: Socket;
-	lastError: string;
-}
-
-export interface State{
-	connected: boolean;
-	authed: boolean;
-}
-
-
+import { EventEmitter } from 'events';
+import { Socket as IOSocket } from 'socket.io-client';
 
 /**
- * ClientSocket class
- * 
- * Main handler for incoming server data 
+ * PluginServer
+ *
+ * Listens for inbound TCP connections from the DoD AMXX plugin.
+ * The plugin connects out from the game server to this backend.
+ *
+ * Protocol:
+ *   1. Plugin connects and sends:  "Bearer <token>\n"
+ *   2. We validate token and begin accepting newline-delimited JSON events.
  */
-
-export class ClientSocket extends EventEmitter{
-
-	constructor(address: string, port: number, token: string, socketio: Socket) {
-
-		super();
-
-		// Map class constructor data
-		this.info = {
-			address,
-			port,
-			token
-		}
-
-
-		// Socket io instance
-		this.io = socketio;
-
-		// Local client socket connection
-		this.socket = new net.Socket();
-
-		// Internal state 
-		this.state = {
-			connected: false,
-			authed: false
-		}
-
-		this.lastError = '';
-
-		// Listen for successfull connection event
-		this.socket.on('connect', (info: any[]) =>{ 
-
-			// Send auth key after connection
-			this.socket.write(`Bearer ${this.info.token}`);
-			
-		});
-
-
-		// Listen for error connection event
-		this.socket.on('error', (err: Error) =>{ 
-			console.log('Error', err);
-
-			// Set last error message
-			this.lastError = err.message;
-		});
-
-
-		this.socket.on('close', () => {
-			console.log('Connection closed');
-
-			// Auth check if we are connected but not authed and close event fired
-			// That means token is invalid
-			if(this.state.connected && !this.state.authed){
-				this.emit('auth_failed');
-			}
-		});
-
-		// Call message parser function
-		this._messageParser();
-	}
-
-	/**
-	 * _connect
-	 * 
-	 * Connect to the specific address and port
-	 */
-	_connect(connected: Function){
-
-		// Connect to the address and port, event will fire on successfull or failed connection
-		this.socket.connect(this.info.port, this.info.address, () =>{
-
-			// Set connected state for check in timeout
-			this.state.connected = true;
-
-			// Resolve callback with true
-			connected(true);
-		});
-
-		// Set connected callback to false
-		setTimeout(() =>{
-
-			// Check if we have connected state true?
-			if(!this.state.connected){
-
-				// Resolve callback with error message
-				connected(this.lastError);
-			}
-			
-		}, 5000);
-	}
-
-	/**
-	 * _auth
-	 * 
-	 * Function used to make auth to the remote game socket
-	 */
-	_auth(authed: Function){
-
-		// Listen for auth event
-		this.once('auth', status =>{ 
-
-			console.log('socket called', status);
-
-			// Set interal state
-			this.state.authed = status;
-
-			// Callback auth
-			authed(status);
-		});
-	}
-
-
-	/**
-	 * _messageParser
-	 * 
-	 * Internal function used for parsing incoming socket messages
-	 */
-	_messageParser(){
-
-		console.log('message parser called')
-		
-		// Init empty string variable
-		let message = '';
-
-		// Listen for socket data event
-		this.socket.on('data', (msg: Buffer) =>{
-
-			const m = msg.toString('utf-8');
-
-			console.log(m, 'END');
-
-			// Check if string char is not closing bracket
-			if(m.slice(-1) !== '}'){
-
-				// Append new string to the message variable
-				message += m;
-
-			}else{
-
-				// Check do we have old chunks of message?
-				if(message !== ''){
-
-					// If yes append it to the old chunk and form 'good' string
-					// Later we need to unset this to empty string
-					message += m;
-				}
-
-				// Try to JSON parse message
-				try {
-
-					// Try to parse as JSON object
-					const data = JSON.parse(m);
-
-					console.log(data)
-
-					// Check if this event is auth response
-					if(data.event_name === 'auth'){
-
-						// Check if message is successfull
-						if(data.authed){
-
-							// Emit success
-							this.emit('auth', true);
-						}else{
-
-							// Emit failed auth
-							this.emit('auth', false);
-						}
-					}
-
-					// If socket io instance is set send message
-					if(this.io) {
-						console.log('io exists')
-						this.io.emit(data.event_name, JSON.stringify(data));
-					}
-
-
-					// Unset string
-					message = '';
-					
-				} catch (error) {
-
-				
-					// Remove all whitespaces and newlines from string
-					const cleanjsonstring = m.replace(/(\r\n|\n|\r)/gm, "");
-
-					// Remove all sticked curly brackets with commas
-					const jsonstrings = cleanjsonstring.replace(/}{/gm, '},{')
-
-
-					const jsontrim = jsonstrings.split(' ').join('')
-
-
-					// Parse string
-					const json = JSON.parse(`[${jsontrim}]`);
-
-
-					// Check if regex succeded
-					if(json !== null && json.length > 0){
-
-					
-						// Parse trough array
-						// Event is now just any, later gonna implement type checking
-						json.forEach((event: any) =>{
-
-							console.log(event)
-
-							// If socket io instance is set send message
-							if(this.io) this.io.emit(event.event_name, JSON.stringify(event));
-
-						});
-					}
-
-					// Unset message
-					message = '';
-				}
-			}
-	
-		});
-	}
+export class PluginServer extends EventEmitter {
+
+    private server: net.Server;
+    private io: IOSocket;
+    private token: string;
+    private port: number;
+    private client: net.Socket | null = null;
+    private connected: boolean = false;
+    private authed: boolean = false;
+
+    constructor(port: number, token: string, socketio: IOSocket) {
+        super();
+        this.port  = port;
+        this.token = token;
+        this.io    = socketio;
+
+        this.server = net.createServer((socket) => {
+            console.log(`[plugin] Game server connected from ${socket.remoteAddress}:${socket.remotePort}`);
+
+            // Only allow one active connection
+            if (this.client) {
+                console.log('[plugin] Replacing previous connection');
+                this.client.destroy();
+            }
+
+            this.client    = socket;
+            this.connected = true;
+            this.authed    = false;
+            this.emit('game_connected');
+
+            this._setupClient(socket);
+        });
+    }
+
+    listen() {
+        this.server.listen(this.port, '0.0.0.0', () => {
+            console.log(`[plugin] TCP server listening on port ${this.port}`);
+        });
+    }
+
+    isConnected()  { return this.connected; }
+    isAuthed()     { return this.authed; }
+
+    private _setupClient(socket: net.Socket) {
+        let buffer = '';
+
+        socket.on('data', (chunk: Buffer) => {
+            buffer += chunk.toString('utf-8');
+
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+
+                // First message must be auth
+                if (!this.authed) {
+                    if (trimmed === `Bearer ${this.token}`) {
+                        this.authed = true;
+                        console.log('[plugin] Auth: success');
+                        this.emit('game_authed', true);
+                    } else {
+                        console.warn('[plugin] Auth: failed (bad token)');
+                        this.emit('game_authed', false);
+                        socket.destroy();
+                    }
+                    continue;
+                }
+
+                try {
+                    const data = JSON.parse(trimmed);
+                    console.log('[plugin] event:', data.event, data);
+                    this.io.emit(data.event, JSON.stringify(data));
+                } catch (err) {
+                    console.warn('[plugin] Failed to parse line:', trimmed);
+                }
+            }
+        });
+
+        socket.on('error', (err) => {
+            console.error('[plugin] Connection error:', err.message);
+        });
+
+        socket.on('close', () => {
+            console.log('[plugin] Game server disconnected');
+            this.connected = false;
+            this.authed    = false;
+            this.client    = null;
+            this.emit('game_disconnected');
+        });
+    }
 }
-
-
-module.exports = {ClientSocket};
-

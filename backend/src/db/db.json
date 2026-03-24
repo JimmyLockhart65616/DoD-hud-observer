@@ -2,19 +2,19 @@
   "teams": [
     {
       "id": "e81a1843f0696d280415732af3c63f8176c3793f",
-      "team_name": "Mysterious team",
-      "team_short_name": "mysterious",
-      "team_country_code": "ba",
+      "team_name": "nein to five",
+      "team_short_name": "925",
+      "team_country_code": "International",
       "team_logo_name": "e81a1843f0696d280415732af3c63f8176c3793f.png",
-      "team_description": "Small local team from Buzim, BIH"
+      "team_description": ""
     },
     {
       "id": "f7e381f4f9bad5c05035ffb08a4aa001aa639e0a",
-      "team_name": "Infectors",
-      "team_short_name": "inf",
-      "team_country_code": "eu",
+      "team_name": "best buds",
+      "team_short_name": "bb",
+      "team_country_code": "",
       "team_logo_name": "f7e381f4f9bad5c05035ffb08a4aa001aa639e0a.png",
-      "team_description": "Mixed team from balkan"
+      "team_description": ""
     }
   ],
   "players": [
@@ -77,6 +77,28 @@
       "player_steamid": "STEAM_0:0:4250978",
       "player_countrycode": "si",
       "player_teamid": "f7e381f4f9bad5c05035ffb08a4aa001aa639e0a"
+    },
+    {
+      "id": "5ea7a1699545d9aed497b7a5f3f3f860d0f7b9ee",
+      "player_name": "Jimmy",
+      "player_nickname": "cadaver",
+      "player_lastname": "Lockhart",
+      "player_description": "",
+      "player_age": null,
+      "player_steamid": "65616",
+      "player_countrycode": "ca",
+      "player_teamid": null
+    },
+    {
+      "id": "ce54cfc5d0a59d3834bc14d1a01c42ea6717e90f",
+      "player_name": "Caleb",
+      "player_nickname": "",
+      "player_lastname": "",
+      "player_description": "",
+      "player_age": null,
+      "player_steamid": "",
+      "player_countrycode": "",
+      "player_teamid": null
     }
   ],
   "matches": [
@@ -85,18 +107,10 @@
       "team_one": "e81a1843f0696d280415732af3c63f8176c3793f",
       "team_two": "f7e381f4f9bad5c05035ffb08a4aa001aa639e0a",
       "status": "ongoing",
-      "match_type": "bo5",
+      "match_type": "bo1",
       "maps_selected": [],
-      "team_one_players": [
-        "43bf7743ebd930d65a411e83465a7a04e30d09f7",
-        "54ad612023639bb17657a905c7763b1060a09b87",
-        "5bc098a26287e9ec4972acfddbf455fd2ce0a39c"
-      ],
-      "team_two_players": [
-        "e81a1843f0696d280415732af3c63f8176c3792f",
-        "6c30b0bce41d1c1a62a6b76a8a1c2ae665f4e8a9",
-        "7688237efd64e27d0a0f245e7dcd2f18937d706e"
-      ]
+      "team_one_players": [],
+      "team_two_players": []
     }
   ],
   "error_list": []

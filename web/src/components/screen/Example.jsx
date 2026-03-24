@@ -1,134 +1,106 @@
-import React, {useEffect, useState} from 'react';
+import React, { useEffect, useState } from 'react';
 
-import { SocketStoreComponent } from '../core/Socket/Socket';
-import TeamNames from '../core/TeamName/TeamNames';
+import { SocketStoreComponent, useHudStore } from '../core/Socket/Socket';
 import Crosshair from '../core/Crosshair/Crosshair';
-import MapsPool from '../core/MapsPool/MapsPool';
-import Radar from '../core/Radar/Radar';
 import Kill from '../core/Kill/Kill';
 import Score from '../core/Score/Score';
 import PlayersLeft from '../core/PlayersLeft/PlayersLeft';
 import PlayersRight from '../core/PlayersRight/PlayersRight';
+import Flags from '../core/Flags/Flags';
 import PlayerObserved from '../core/PlayerObserved/PlayerObserved';
 
-
 import * as api from './api/api';
-import { useHudStore } from '../core/Socket/Socket';
 import hudconfig from './hud.json';
 
+import './Screen.css';
 
-import './Screen.css'
+function Example() {
 
-function Example() { 
+    const [team1Name,  setTeam1Name]  = useState('ALLIES');
+    const [team2Name,  setTeam2Name]  = useState('AXIS');
+    const [logoLeft,   setLogoLeft]   = useState('default.png');
+    const [logoRight,  setLogoRight]  = useState('default.png');
 
-    const [allPlayers, setAllPlayers] = useState([]);
-    const [matchID, setMatchID] = useState(null);
-    const [team1Name, setTeam1Name] = useState('TEAM 1');
-    const [team2Name, setTeam2Name] = useState('TEAM 2');
-    const [team1Players, setTeam1Players] = useState([]);
-    const [team2Players, setTeam2Players] = useState([]);
-    const [type, setType] = useState(null);
-    const [mapsPool, setMapsPool] = useState([]);
-    const [logoLeft, setLogoLeft] = useState('default.png')
-    const [logoRight, setLogoRight] = useState('default.png')
-    const [update, setUpdate] = useState(false);
-
+    // Load team branding from match ID in URL (?match=<id>)
     useEffect(() => {
-
-        console.log('Calin match info')
-
         const urlParams = new URLSearchParams(window.location.search);
-        const id = urlParams.get('match');
-        
-        if(!id){console.error('match id not found')}
+        const matchId = urlParams.get('match');
+        if (!matchId) return;
 
-        api.matches.getMatch(id).then(res =>{
+        api.matches.getMatch(matchId)
+            .then(res => {
+                const { team_one, team_two } = res.match_info;
+                return Promise.all([
+                    api.teams.getTeam(team_one),
+                    api.teams.getTeam(team_two),
+                ]);
+            })
+            .then(([t1, t2]) => {
+                setTeam1Name(t1.team_info.team_short_name.toUpperCase());
+                setLogoLeft(t1.team_info.team_logo_name);
+                setTeam2Name(t2.team_info.team_short_name.toUpperCase());
+                setLogoRight(t2.team_info.team_logo_name);
+            })
+            .catch(err => console.error('[Example] Failed to load match info:', err));
+    }, []);
 
-            setMatchID(res.id)
-            setTeam1Players(res.match_info.team_one_players);
-            setTeam2Players(res.match_info.team_two_players);
-            setAllPlayers([...res.match_info.team_one_players, ...res.match_info.team_two_players]);
-            setType(res.match_info.match_type)
-            setMapsPool(res.match_info.maps_selected)
+    const alliesPlayers = useHudStore(s => s.allies_players);
+    const axisPlayers   = useHudStore(s => s.axis_players);
+    const kills         = useHudStore(s => s.kills);
+    const alliesScore   = useHudStore(s => s.allies_score);
+    const axisScore     = useHudStore(s => s.axis_score);
+    const roundState    = useHudStore(s => s.round_state);
+    const flags         = useHudStore(s => s.flags);
+    const timeleft      = useHudStore(s => s.timeleft);
+    const timeleftAt    = useHudStore(s => s.timeleft_at);
 
-            //socketStore(res.match_info.team_one_players, res.match_info.team_two_players);
-            
-            return res
-        })
-        .then((res) =>{
+    return (
+        <div className="grid-container">
 
-            // TEAM 1
-            api.teams.getTeam(res.match_info.team_one).then(res => {
-               console.log(res.team_info.team_logo_name); 
+            <SocketStoreComponent />
 
-               setLogoLeft(res.team_info.team_logo_name);
-               setTeam1Name(res.team_info.team_short_name.toUpperCase())
-            });
+            <Crosshair />
 
-            // TEAM 2
-            api.teams.getTeam(res.match_info.team_two).then(res => {
-                setLogoRight(res.team_info.team_logo_name);
-                setTeam2Name(res.team_info.team_short_name.toUpperCase())}
-            )
+            <div className="flags-bar">
+                <Flags flags={flags} />
+            </div>
 
-        })  
-        .catch(err => console.log(err));
+            <div className="box-right">
+                <Kill screentime={hudconfig.settings.kill_displaytime} kills={kills} />
+            </div>
 
-   
+            <div className="top-bar">
+                <span className="team-name team-name-allies">{team1Name}</span>
+                <Score
+                    roundState={roundState}
+                    alliesScore={alliesScore}
+                    axisScore={axisScore}
+                    logoLeft={logoLeft}
+                    logoRight={logoRight}
+                    timeleft={timeleft}
+                    timeleftAt={timeleftAt}
+                />
+                <span className="team-name team-name-axis">{team2Name}</span>
+            </div>
 
-    },[update])
+            <div className="hud-middle" />
 
-        // Hook left players state
-        const playersLeftGlobal = useHudStore(state => state.tt_players);
-        const playersRightGlobal = useHudStore(state => state.ct_players);
-        const kills = useHudStore(state => state.kills);
-        const team1Score = useHudStore(state => state.team1_score);
-        const team2Score = useHudStore(state => state.team2_score);
-        const roundInfo = useHudStore(state => state.state);
+            <div className="observed-bar">
+                <PlayerObserved players={[...alliesPlayers, ...axisPlayers]} />
+            </div>
 
-
-        return(
-     
-
-               <div className="grid-container">
-                
-                    <SocketStoreComponent teamLeft={team1Players} teamRight={team2Players} />
-                
-                    <Crosshair />
-
-                    <Score roundInfo={roundInfo} team1score={team1Score} team2score={team2Score} logoLeft={logoLeft} logoRight={logoRight} />
-
-                    <TeamNames teamleft={team1Name} teamright={team2Name} />
-
-                    <div className="box-left">
-                       
-                        <MapsPool type={type} pool={mapsPool} />
-
-                        <Radar />
-
-                    </div>
-
-                    <div className="box-right">
-                        <Kill screentime={hudconfig.settings.kill_displaytime} kills={kills} />
-                    </div>
-                    
-                    <div className="team-box-left">
-                        <PlayersLeft players={playersLeftGlobal} />
-                    </div>
-                    
-                    
-                    <div className="team-box-right">
-                        <PlayersRight players={playersRightGlobal} />
-                    </div> 
-
-                    <div className="player-info">
-
-                        <PlayerObserved players={[...playersLeftGlobal, ...playersRightGlobal]} />
-                      
-                    </div>
+            <div className="bottom-bar">
+                <div className="team-cards">
+                    <PlayersLeft players={alliesPlayers} />
                 </div>
-        );
-    
+                <div className="bottom-center-gap" />
+                <div className="team-cards">
+                    <PlayersRight players={axisPlayers} />
+                </div>
+            </div>
+
+        </div>
+    );
 }
 
 export default Example;

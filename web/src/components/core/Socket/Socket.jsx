@@ -1,887 +1,502 @@
-import React, {useEffect} from 'react';
-import socketio from "socket.io-client";
+import React, { useEffect } from 'react';
+import socketio from 'socket.io-client';
 import create from 'zustand';
-import api from '../../screen/api/api';
 
-export const socket = socketio.connect('localhost:4000', {withCredentials: true});
+const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://localhost:4000';
+export const socket = socketio.connect(SOCKET_URL, { withCredentials: true });
 
-// Emit back that hud is present
-socket.on('connect', () =>{
+socket.on('connect', () => {
     socket.emit('hud_socket');
-})
+});
 
+socket.onAny((event, msg) => {
+    console.log('[socket]', event, msg);
+});
 
-// Log all socket messages
-socket.onAny((event, msg) =>{
-    console.log(event, msg)
-})
+// Persistent player directory — maps user_id to {name, team}.
+// Updated on every player event, never cleared. Fallback for kill feed resolution
+// when the player isn't yet in a team array (e.g. connect arrives with team "spectator").
+const playerDirectory = {};
 
-
+// ─── Zustand Store ────────────────────────────────────────────────────────────
 
 export const useHudStore = create(set => ({
 
-    // Teamscores
-    team1_score: 0,
-    team2_score: 0,
+    // Team scores (round wins)
+    allies_score: 0,
+    axis_score: 0,
 
-    // Half
-    half: 'first',
+    // Current half (1 or 2)
+    half: 1,
 
-    // Teams
-    tt_players: [],
-    ct_players: [],
+    // Players keyed by steam ID for fast lookup
+    // Each player: { user_id, name, team, class_id, weapon_primary, weapon_secondary,
+    //                health, dead, prone_state, prone_since, kills, deaths, score, spectate }
+    allies_players: [],
+    axis_players:   [],
 
-    // Total kills
+    // Flag state: [{ flag_id, flag_name, owner, capping_team }]
+    flags: [],
+
+    // Kill feed entries
     kills: [],
 
-    // State holder
-    state: {
-        round_end: false,
+    // Kill streaks: { [user_id]: number } — consecutive kills without dying (resets on death/round)
+    kill_streaks: {},
+
+    // Chat messages: [{ user_id, name, team, team_only, message, timestamp }]
+    chat: [],
+
+    // Round state
+    round_state: {
+        round_end:    false,
         round_freeze: false,
-        round_start: false,
-        freeze_time: 0,
-        round_time: 0
+        round_start:  false,
     },
 
+    // Half countdown timer (seconds remaining + browser timestamp of last sync)
+    timeleft:    null,
+    timeleft_at: null,
 
-    initLeftTeam: (playerInfo) => set(state => ({tt_players: [...playerInfo]})),
-    initRightTeam: (playerInfo) => set(state => ({ct_players: [...playerInfo]})), 
+    // ── Actions ──────────────────────────────────────────────────────────────
 
-    setKill: (kill) => set(state => ({kills: [...state.kills, kill]})),
+    setAlliesScore: (n) => set({ allies_score: n }),
+    setAxisScore:   (n) => set({ axis_score: n }),
+    setHalf:        (n) => set({ half: n }),
+    setTimeleft:    (seconds) => set({ timeleft: seconds, timeleft_at: Date.now() }),
 
-    updateTeam1Score: () => set(state => ({team1_score: state.team1_score + 1})),
-    updateTeam2Score: () => set(state => ({team2_score: state.team2_score + 1})), 
+    setAlliesPlayers: (updater) => set(state => ({
+        allies_players: typeof updater === 'function' ? updater(state.allies_players) : [...updater],
+    })),
+    setAxisPlayers: (updater) => set(state => ({
+        axis_players: typeof updater === 'function' ? updater(state.axis_players) : [...updater],
+    })),
 
+    setFlags: (flags) => set({ flags: [...flags] }),
 
-    updateRoundState: (roundInfo) => set(state => ({state: {...roundInfo}})),
+    addKill: (kill) => set(state => {
+        const streaks = { ...state.kill_streaks };
+        // Increment killer's streak (only for normal kills, not suicides/teamkills)
+        if (kill.kill_type === 'normal') {
+            streaks[kill.killer_id] = (streaks[kill.killer_id] || 0) + 1;
+        }
+        // Reset victim's streak
+        streaks[kill.victim_id] = 0;
+        return {
+            kills: [...state.kills, { ...kill, streak: streaks[kill.killer_id] || 0 }],
+            kill_streaks: streaks,
+        };
+    }),
+    addChat: (msg)  => set(state => ({ chat: [...state.chat.slice(-19), msg] })),
 
-}))
+    setRoundState: (info) => set({ round_state: { ...info } }),
 
-let renderCount = 0
+    // Reset kill streaks (on round start)
+    resetStreaks: () => set({ kill_streaks: {} }),
 
-export const SocketStoreComponent = ({teamLeft, teamRight}) =>{
+    // Wipe per-player game state at half time (keep roster, reset stats)
+    resetHalf: () => set(state => ({
+        kills: [],
+        chat: [],
+        kill_streaks: {},
+        allies_score: 0,
+        axis_score: 0,
+        timeleft: null,
+        timeleft_at: null,
+        allies_players: state.allies_players.map(p => ({
+            ...p, health: 100, dead: false, prone_state: 'standing', prone_since: null,
+            kills: 0, deaths: 0, score: 0,
+            weapon_primary: null, weapon_secondary: null, class_id: null,
+        })),
+        axis_players: state.axis_players.map(p => ({
+            ...p, health: 100, dead: false, prone_state: 'standing', prone_since: null,
+            kills: 0, deaths: 0, score: 0,
+            weapon_primary: null, weapon_secondary: null, class_id: null,
+        })),
+    })),
+}));
 
-    renderCount += 1;
-    console.log(`SocketStoreComponent renderCount: `, renderCount);
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-    const addTeamLeft = useHudStore(state => state.initLeftTeam);
-    const addTeamRight = useHudStore(state => state.initRightTeam);
+function makeDefaultPlayer(user_id, name, team) {
+    return {
+        user_id,
+        name,
+        team,
+        class_id:         null,
+        weapon_primary:   null,
+        weapon_secondary: null,
+        health:           100,
+        dead:             false,
 
-    const setKill = useHudStore(state => state.setKill);
+        prone_state:      'standing',
+        prone_since:      null,
+        kills:            0,
+        deaths:           0,
+        score:            0,
+        spectate:         false,
+    };
+}
 
-    const team1Score = useHudStore(state => state.updateTeam1Score);
-    const team2Score = useHudStore(state => state.updateTeam2Score);
+function updatePlayer(players, user_id, updater) {
+    const idx = players.findIndex(p => p.user_id === user_id);
+    if (idx === -1) return players;
+    const next = [...players];
+    next[idx] = { ...next[idx], ...updater(next[idx]) };
+    return next;
+}
 
-    const leftPlayers = useHudStore(state => state.tt_players);
-    const rightPlayers = useHudStore(state => state.ct_players);
+// ─── Socket Event Component ───────────────────────────────────────────────────
 
-    const updateRoundStateInfo = useHudStore(state => state.updateRoundState);
-    const roundState = useHudStore(state => state.state);
+export const SocketStoreComponent = () => {
 
+    const setAlliesPlayers = useHudStore(s => s.setAlliesPlayers);
+    const setAxisPlayers   = useHudStore(s => s.setAxisPlayers);
+    const setFlags         = useHudStore(s => s.setFlags);
+    const addKill          = useHudStore(s => s.addKill);
+    const addChat          = useHudStore(s => s.addChat);
+    const setAlliesScore   = useHudStore(s => s.setAlliesScore);
+    const setAxisScore     = useHudStore(s => s.setAxisScore);
+    const setHalf          = useHudStore(s => s.setHalf);
+    const setRoundState    = useHudStore(s => s.setRoundState);
+    const setTimeleft      = useHudStore(s => s.setTimeleft);
+    const resetHalf        = useHudStore(s => s.resetHalf);
+    const resetStreaks     = useHudStore(s => s.resetStreaks);
+
+    // Use refs via store getState() for event handlers to avoid stale closures
+    const getState = useHudStore.getState;
 
     useEffect(() => {
 
-        // Temp holder of player left
-        let tempPlayersLeft = [];
+        // ── Player connect / disconnect ───────────────────────────────────────
 
-        // Map backend info
-        teamLeft.map((playerid, index) =>{
+        socket.on('player_connect', (raw) => {
+            const e = JSON.parse(raw);
+            playerDirectory[e.user_id] = { name: e.name, team: e.team };
+            const player = makeDefaultPlayer(e.user_id, e.name, e.team);
 
-            // Get specific info for the tt players
-            api.players.getPlayer(playerid).then(p =>{
-
-                const playerinfo = {
-                    current_weapon: 17,
-                    primary_weapon: 0,
-                    secondary_weapon: 17,
-                    primary_ammo_current: 0,
-                    secondary_ammo_current: 20,
-                    primary_ammo_reserve: 0,
-                    secondary_ammo_reserve: 40,
-                    health: 100,
-                    equipment: [],
-                    c4: false,
-                    small_kevlar: false,
-                    full_kevlar: false,
-                    dead: false,
-                    money: 0,
-                    spectate: false
-                };
-
-   
-                tempPlayersLeft.push({...p.player_info, ...playerinfo})
-
-                if(index === teamLeft.length - 1){
-
-                    addTeamLeft(tempPlayersLeft);
-            
-                }
-            })
-        })
-    }, [teamLeft]);
-
-
-
-    useEffect(() => {
-
-        // Temp holder of player left
-        let tempPlayersRight = [];
-
-        teamRight.map((playerid, index) =>{
-
-            api.players.getPlayer(playerid).then(p =>{
-
-                const playerinfo = {
-                    current_weapon: 16,
-                    primary_weapon: 0,
-                    secondary_weapon: 16,
-                    primary_ammo_current: 0,
-                    secondary_ammo_current: 12,
-                    primary_ammo_reserve: 0,
-                    secondary_ammo_reserve: 24,
-                    health: 100,
-                    equipment: [],
-                    defuse: false,
-                    small_kevlar: false,
-                    full_kevlar: false,
-                    dead: false,
-                    money: 0,
-                    spectate: p.player_info.player_steamid === "STEAM_0:1:115179770" ? true : false
-                };
-
-
-               
-                tempPlayersRight.push({...p.player_info, ...playerinfo})
-
-                if(index === teamRight.length - 1){
-
-                    addTeamRight(tempPlayersRight);
-
-                }
-            })
-        })
-    }, [teamRight]);
-
-
-
-
-    useEffect(() =>{
-
-        socket.on('weapon_switched', (event) =>{
-
-            const object = JSON.parse(event);
-
-            if(leftPlayers.length > 0){
-
-                const playerindex = leftPlayers.findIndex(player => player.player_steamid === object.user_pick_id);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...leftPlayers];
-                    
-                    newplayers[playerindex].current_weapon = object.weapon_id;
-        
-                    addTeamLeft(newplayers);
-                }
-        
-            }
-
-        });
-        
-
-            
-        socket.on('weapon_switched', (event) =>{
-
-            const object = JSON.parse(event);
-
-            if(rightPlayers.length > 0){
-        
-                const playerindex = rightPlayers.findIndex(player => player.player_steamid === object.user_pick_id);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...rightPlayers];
-                    
-                    newplayers[playerindex].current_weapon = object.weapon_id;
-        
-                    addTeamRight(newplayers);
-                }
-        
+            if (e.team === 'allies') {
+                setAxisPlayers(prev => prev.filter(p => p.user_id !== e.user_id));
+                setAlliesPlayers(prev => prev.find(p => p.user_id === e.user_id) ? prev : [...prev, player]);
+            } else if (e.team === 'axis') {
+                setAlliesPlayers(prev => prev.filter(p => p.user_id !== e.user_id));
+                setAxisPlayers(prev => prev.find(p => p.user_id === e.user_id) ? prev : [...prev, player]);
             }
         });
 
-        
-        /**
-         * Listen for c4 tt player pickup
-         */
-        socket.on('c4_pick', (event) =>{
-
-            const object = JSON.parse(event);
-
-            if(leftPlayers.length > 0){
-
-                const playerindex = leftPlayers.findIndex(player => player.player_steamid === object.user_pick_id);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...leftPlayers];
-                    
-                    newplayers[playerindex].c4 = true;
-        
-                    addTeamLeft(newplayers);
-                }
-        
-            }
-
+        socket.on('player_disconnect', (raw) => {
+            const e = JSON.parse(raw);
+            setAlliesPlayers(prev => prev.filter(p => p.user_id !== e.user_id));
+            setAxisPlayers(prev => prev.filter(p => p.user_id !== e.user_id));
         });
 
+        socket.on('player_team_change', (raw) => {
+            const e = JSON.parse(raw);
+            if (playerDirectory[e.user_id]) playerDirectory[e.user_id].team = e.team;
+            const { allies_players, axis_players } = getState();
+            // Move player to correct team array
+            const fromAllies = allies_players.find(p => p.user_id === e.user_id);
+            const fromAxis   = axis_players.find(p => p.user_id === e.user_id);
 
-        /**
-         * Listen for c4 tt player pickup
-         */
-        socket.on('c4_drop', (event) =>{
-
-            const object = JSON.parse(event);
-
-            if(leftPlayers.length > 0){
-
-                const playerindex = leftPlayers.findIndex(player => player.player_steamid === object.user_drop_id);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...leftPlayers];
-                    
-                    newplayers[playerindex].c4 = false;
-        
-                    addTeamLeft(newplayers);
-                }
-        
-            }
-
-        });
-
-        /**
-         * Listen for plant event
-         */
-        socket.on('c4_planted', (event) =>{
-
-            const object = JSON.parse(event);
-
-            if(leftPlayers.length > 0){
-
-                const playerindex = leftPlayers.findIndex(player => player.player_steamid === object.plant_invoker_id);
-        
-                if(playerindex !== -1){
-
-                    const newplayers = [...leftPlayers];
-                    
-                    newplayers[playerindex].c4 = false;
-        
-                    addTeamLeft(newplayers);
-                }
-        
-            }
-
-        });
-
-
-        /**
-         * Listen for equipment buy
-         */
-        socket.on('buy_equipment', (event) =>{
-
-            const object = JSON.parse(event);
-        
-            if(leftPlayers.length > 0){
-        
-                const playerindex = leftPlayers.findIndex(player => player.player_steamid === object.weapon_buyer);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...leftPlayers];
-
-                    switch (object.weapon_id) {
-        
-                        // small kevlar
-                        case 31:
-                                newplayers[playerindex].small_kevlar = true;
-                            break;
-        
-                        // full 
-                        case 32:
-                                newplayers[playerindex].full_kevlar = true;
-                            break;
-                    
-                        default:
-                            break;
-                    }
-        
-                   addTeamLeft(newplayers);
-                }
-        
-            }
-
-
-            if(rightPlayers.length > 0){
-        
-                const playerindex = rightPlayers.findIndex(player => player.player_steamid === object.weapon_buyer);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...rightPlayers];
-    
-                    switch (object.weapon_id) {
-        
-                        // small kevlar
-                        case 31:
-                                newplayers[playerindex].small_kevlar = true;
-                            break;
-        
-                        // full 
-                        case 32:
-                                newplayers[playerindex].full_kevlar = true;
-                            break;
-
-                        // defuse 
-                        case 33:
-                                newplayers[playerindex].defuse = true;
-                        break;
-                    
-                        default:
-                            break;
-                    }
-        
-                   addTeamRight(newplayers);
-                }
-        
+            if (e.team === 'allies' && fromAxis) {
+                setAxisPlayers(axis_players.filter(p => p.user_id !== e.user_id));
+                setAlliesPlayers([...allies_players, { ...fromAxis, team: 'allies' }]);
+            } else if (e.team === 'axis' && fromAllies) {
+                setAlliesPlayers(allies_players.filter(p => p.user_id !== e.user_id));
+                setAxisPlayers([...axis_players, { ...fromAllies, team: 'axis' }]);
             }
         });
 
 
-        socket.on('damage', (event) =>{
+        // ── Spawn ─────────────────────────────────────────────────────────────
 
-            const object = JSON.parse(event);
-        
-            if(leftPlayers.length > 0){
-        
-                const playerindex = leftPlayers.findIndex(player => player.player_steamid === object.victim_id);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...leftPlayers];
-                
-                    newplayers[playerindex].health = object.health;
-        
-                    addTeamLeft(newplayers);
-                }
-        
-            }
+        socket.on('player_spawn', (raw) => {
+            const e = JSON.parse(raw);
+            const dir = playerDirectory[e.user_id];
+            if (dir) dir.team = e.team;
+            else playerDirectory[e.user_id] = { name: e.user_id, team: e.team };
 
-            if(rightPlayers.length > 0){
-        
-                const playerindex = rightPlayers.findIndex(player => player.player_steamid === object.victim_id);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...rightPlayers];
-                
-                    newplayers[playerindex].health = object.health;
-        
-                    addTeamRight(newplayers);
-                }
-            }
-        });
+            const spawnState = {
+                class_id:         e.class_id,
+                weapon_primary:   e.weapon_primary,
+                weapon_secondary: e.weapon_secondary,
+                health:           100,
+                dead:             false,
 
+                prone_state:      'standing',
+                prone_since:      null,
+                disconnected:     false,
+            };
 
-        socket.on('pickup_item', (event) =>{
+            const applySpawn = (prev, team) => {
+                const exists = prev.find(p => p.user_id === e.user_id);
+                if (exists) return updatePlayer(prev, e.user_id, () => spawnState);
+                const knownName = playerDirectory[e.user_id]?.name ?? e.user_id;
+                return [...prev, { ...makeDefaultPlayer(e.user_id, knownName, team), ...spawnState }];
+            };
 
-            const object = JSON.parse(event);
-        
-            if(leftPlayers.length > 0){
-        
-                const playerindex = leftPlayers.findIndex(player => player.player_steamid === object.user_id);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...leftPlayers];
-        
-                    // HE HeGrenade
-                    if(object.item_id === 4){
-                        newplayers[playerindex].equipment.push(4);
-                    }
-        
-        
-                    // Smoke grenade
-                    if(object.item_id === 9){
-                        newplayers[playerindex].equipment.push(9);
-                    }
-        
-        
-                    // Flesh grenade
-                    if(object.item_id === 25){
-                        newplayers[playerindex].equipment.push(25);
-                    }
-
-
-                    // Check if pickup is main weapon
-                    if(object.weapon_type === 'primary'){
-                        newplayers[playerindex].primary_weapon = object.item_id;
-                        newplayers[playerindex].primary_ammo_current = object.current_ammo;
-                        newplayers[playerindex].primary_ammo_reserve = object.ammo_reserve;
-                    }
-
-                    // Check if pickup is secondary weapon
-                    if(object.weapon_type === 'secondary'){
-                        newplayers[playerindex].secondary_weapon = object.item_id;
-                        newplayers[playerindex].primary_ammo_current = object.current_ammo;
-                        newplayers[playerindex].primary_ammo_reserve = object.ammo_reserve;
-                    }
-
-        
-                    addTeamLeft(newplayers);
-                }
-            }
-
-
-            if(rightPlayers.length > 0){
-        
-                const playerindex = rightPlayers.findIndex(player => player.player_steamid === object.user_id);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...rightPlayers];
-        
-        
-                    // HE HeGrenade
-                    if(object.item_id === 4){
-                        newplayers[playerindex].equipment.push(4);
-                    }
-        
-        
-                    // Smoke grenade
-                    if(object.item_id === 9){
-                        newplayers[playerindex].equipment.push(9);
-                    }
-        
-        
-                    // Flesh grenade
-                    if(object.item_id === 25){
-                        newplayers[playerindex].equipment.push(25);
-                    }
-
-
-                    // Check if pickup is main weapon
-                    if(object.weapon_type === 'primary'){
-                        newplayers[playerindex].primary_weapon = object.item_id;
-                        newplayers[playerindex].primary_ammo_current = object.current_ammo;
-                        newplayers[playerindex].primary_ammo_reserve = object.ammo_reserve;
-                    }
-
-                    // Check if pickup is secondary weapon
-                    if(object.weapon_type === 'secondary'){
-                        newplayers[playerindex].secondary_weapon = object.item_id;
-                        newplayers[playerindex].primary_ammo_current = object.current_ammo;
-                        newplayers[playerindex].primary_ammo_reserve = object.ammo_reserve;
-                    }
-                    
-        
-        
-                    addTeamRight(newplayers);
-                }
+            if (e.team === 'allies') {
+                setAxisPlayers(prev => prev.filter(p => p.user_id !== e.user_id));
+                setAlliesPlayers(prev => applySpawn(prev, 'allies'));
+            } else if (e.team === 'axis') {
+                setAlliesPlayers(prev => prev.filter(p => p.user_id !== e.user_id));
+                setAxisPlayers(prev => applySpawn(prev, 'axis'));
             }
         });
 
 
-        socket.on('kill', (event) =>{
+        // ── Kill ──────────────────────────────────────────────────────────────
 
-            const object = JSON.parse(event);
+        socket.on('kill', (raw) => {
+            const e = JSON.parse(raw);
+            const { allies_players, axis_players } = getState();
 
-            const findattackertt = leftPlayers.find(player => player.player_steamid === object.killer_id);
-            const findattackerct = rightPlayers.find(player => player.player_steamid === object.killer_id);
+            // Resolve names for kill feed — try team arrays first, fall back to persistent directory
+            const allPlayers = [...allies_players, ...axis_players];
+            const killer = allPlayers.find(p => p.user_id === e.killer_id)
+                ?? playerDirectory[e.killer_id]
+                ?? { name: e.killer_id, team: 'unknown' };
+            const victim = allPlayers.find(p => p.user_id === e.victim_id)
+                ?? playerDirectory[e.victim_id]
+                ?? { name: e.victim_id, team: 'unknown' };
 
-            let attacker = {};
-            let victim = {};
+            addKill({ ...e, killer, victim });
 
-            if(findattackertt){
-                attacker = {...findattackertt, side: 'tt'};
-            }
-
-            if(findattackerct){
-                attacker = {...findattackerct, side: 'ct'};
-            }
-
-            const findvictimtt = leftPlayers.find(player => player.player_steamid === object.victim_id);
-            const findvictimct = rightPlayers.find(player => player.player_steamid === object.victim_id);
-
-            if(findvictimtt){
-                victim = {...findvictimtt, side: 'tt'};
-            }
-
-            if(findvictimct){
-                victim = {...findvictimct, side: 'ct'};
-            }
-
-
-            setKill({...object, attacker, victim});
-
-
-            if(leftPlayers.length > 0){
-        
-                const playerindex = leftPlayers.findIndex(player => player.player_steamid === object.victim_id);
-        
-                if(playerindex !== -1){
-
-
-                    const newplayers = [...leftPlayers];
-                
-                    newplayers[playerindex].health = 0;
-                    newplayers[playerindex].dead = true;
-                    newplayers[playerindex].current_weapon = 0;
-                    newplayers[playerindex].primary_weapon = 0;
-                    newplayers[playerindex].secondary_weapon = 0;
-                    newplayers[playerindex].primary_ammo_current = 0;
-                    newplayers[playerindex].secondary_ammo_current = 0;
-                    newplayers[playerindex].primary_ammo_reserve = 0;
-                    newplayers[playerindex].secondary_ammo_reserve = 0;
-                    newplayers[playerindex].equipment = [];
-                    newplayers[playerindex].c4 = false;
-                    newplayers[playerindex].small_kevlar = false;
-                    newplayers[playerindex].full_kevlar = false;
-        
-                    addTeamLeft(newplayers);
-                }
-            }
-
-
-            if(rightPlayers.length > 0){
-        
-                const playerindex = rightPlayers.findIndex(player => player.player_steamid === object.victim_id);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...rightPlayers];
-                
-                    newplayers[playerindex].health = 0;
-                    newplayers[playerindex].dead = true;
-                    newplayers[playerindex].current_weapon = 0;
-                    newplayers[playerindex].primary_weapon = 0;
-                    newplayers[playerindex].secondary_weapon = 0;
-                    newplayers[playerindex].primary_ammo_current = 0;
-                    newplayers[playerindex].secondary_ammo_current = 0;
-                    newplayers[playerindex].primary_ammo_reserve = 0;
-                    newplayers[playerindex].secondary_ammo_reserve = 0;
-                    newplayers[playerindex].equipment = [];
-                    newplayers[playerindex].c4 = false;
-                    newplayers[playerindex].small_kevlar = false;
-                    newplayers[playerindex].full_kevlar = false;
-        
-                    addTeamRight(newplayers);
-                }
-            }
-
-        });
-        
-
-        socket.on('round_end', (event) =>{
-
-            const object = JSON.parse(event);
-        
-            if(leftPlayers.length > 0){
-        
-                setTimeout(() =>{
-        
-                    leftPlayers.forEach((player, index) =>{
-        
-                        const newplayers = [...leftPlayers];
-        
-                        newplayers[index].dead = false;
-                        newplayers[index].health = 100;
-                        newplayers[index].current_weapon = 17;
-        
-                        addTeamLeft(newplayers);
-                    });
-        
-                }, 5000);
-            }
-
-            if(rightPlayers.length > 0){
-        
-                setTimeout(() =>{
-        
-                    rightPlayers.forEach((player, index) =>{
-        
-                        const newplayers = [...rightPlayers];
-        
-                        newplayers[index].dead = false;
-                        newplayers[index].health = 100;
-                        newplayers[index].current_weapon = 16;
-        
-                        addTeamRight(newplayers);
-                    });
-        
-                }, 5000);
-            }
+            // Mark victim dead, clear prone shame
+            const deadState = { health: 0, dead: true, prone_state: 'standing', prone_since: null };
+            setAlliesPlayers(prev => updatePlayer(prev, e.victim_id, () => deadState));
+            setAxisPlayers(prev => updatePlayer(prev, e.victim_id, () => deadState));
         });
 
 
-        socket.on('nade_land', (event) =>{
+        // ── Damage ────────────────────────────────────────────────────────────
 
-            const object = JSON.parse(event);
-        
-            if(leftPlayers.length > 0){
-        
-                const playerindex = leftPlayers.findIndex(player => player.player_steamid === object.invoker_id);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...leftPlayers];
-        
-                    // HE HeGrenade
-                    if(object.nade_type === 'weapon_hegrenade'){
-        
-                        const filtered = newplayers[playerindex].equipment.filter(equip => equip !== 4);
-                        newplayers[playerindex].equipment  = [...filtered];
-                    }
-        
-        
-                    // Smoke grenade
-                    if(object.nade_type === 'weapon_smokegrenade'){
-        
-                        const filtered = newplayers[playerindex].equipment.filter(equip => equip !== 9);
-                        newplayers[playerindex].equipment  = [...filtered];
-                    }
-        
-        
-                    // Flesh grenade
-                    if(object.nade_type === 'weapon_flashbang'){
-        
-                        const exists = newplayers[playerindex].equipment.find(item => item === 25);
-        
-                        if(exists){
-                            // User can have two flashbangs
-                            // Find first element of flashbang
-                            const id = newplayers[playerindex].equipment.findIndex(equip => equip === 25);
-        
-                            // Remove first element
-                            newplayers[playerindex].equipment.splice(id,1); 
-                        }
-                    }
-        
-        
-                    addTeamLeft(newplayers);
-                }
-            }
-
-            if(rightPlayers.length > 0){
-        
-                const playerindex = rightPlayers.findIndex(player => player.player_steamid === object.invoker_id);
-        
-                if(playerindex !== -1){
-        
-                    const newplayers = [...rightPlayers];
-        
-                    // HE HeGrenade
-                    if(object.nade_type === 'weapon_hegrenade'){
-        
-                        const filtered = newplayers[playerindex].equipment.filter(equip => equip !== 4);
-                        newplayers[playerindex].equipment  = [...filtered];
-                    }
-        
-        
-                    // Smoke grenade
-                    if(object.nade_type === 'weapon_smokegrenade'){
-        
-                        const filtered = newplayers[playerindex].equipment.filter(equip => equip !== 9);
-                        newplayers[playerindex].equipment  = [...filtered];
-                    }
-        
-        
-                    // Flesh grenade
-                    if(object.nade_type === 'weapon_flashbang'){
-        
-                        const exists = newplayers[playerindex].equipment.find(item => item === 25);
-        
-                        if(exists){
-                            // User can have two flashbangs
-                            // Find first element of flashbang
-                            const id = newplayers[playerindex].equipment.findIndex(equip => equip === 25);
-        
-                            // Remove first element
-                            newplayers[playerindex].equipment.splice(id,1); 
-                        }
-                    }
-        
-        
-                    addTeamRight(newplayers);
-                }
-            }
-
+        socket.on('damage', (raw) => {
+            const e = JSON.parse(raw);
+            const healthUpdate = () => ({ health: Math.max(0, e.victim_health) });
+            setAlliesPlayers(prev => updatePlayer(prev, e.victim_id, healthUpdate));
+            setAxisPlayers(prev => updatePlayer(prev, e.victim_id, healthUpdate));
         });
 
 
+        // ── Prone ─────────────────────────────────────────────────────────────
 
-        
-    socket.on('money_change', (event) =>{
-
-        const object = JSON.parse(event);
-
-        if(leftPlayers.length > 0){
-
-            const playerindex = leftPlayers.findIndex(player => player.player_steamid === object.user_id);
-
-            if(playerindex !== -1){
-
-                const newplayers = [...leftPlayers];
-
-                newplayers[playerindex].money = object.current_money;
-
-                addTeamLeft(newplayers);
-            }
-
-        }
-
-        if(rightPlayers.length > 0){
-
-            const playerindex = rightPlayers.findIndex(player => player.player_steamid === object.user_id);
-
-            if(playerindex !== -1){
-
-                const newplayers = [...rightPlayers];
-
-                newplayers[playerindex].money = object.current_money;
-
-                addTeamRight(newplayers);
-            }
-
-        }
-    });
-        
-    socket.on('ammo_update', (event) =>{
-
-        const object = JSON.parse(event);
-
-        object.players.map((playerInfo) =>{
-
-            if(leftPlayers.length > 0){
-
-                const playerindex = leftPlayers.findIndex(player => player.player_steamid === playerInfo.player_id);
-
-                if(playerindex !== -1){
-
-                    const newplayers = [...leftPlayers];
-
-                    if(playerInfo.weapon_type === 'primary'){
-                        newplayers[playerindex].primary_ammo_current = playerInfo.current_ammo;
-                        newplayers[playerindex].primary_ammo_reserve = playerInfo.ammo_reserve;
-                    }
+        socket.on('prone_change', (raw) => {
+            const e = JSON.parse(raw);
+            const proneUpdate = () => ({
+                prone_state: e.state,
+                prone_since: e.state !== 'standing' ? e.timestamp : null,
+            });
+            setAlliesPlayers(prev => updatePlayer(prev, e.user_id, proneUpdate));
+            setAxisPlayers(prev => updatePlayer(prev, e.user_id, proneUpdate));
+        });
 
 
-                    if(playerInfo.weapon_type === 'secondary'){
-                        newplayers[playerindex].secondary_ammo_current = playerInfo.current_ammo;
-                        newplayers[playerindex].secondary_ammo_reserve = playerInfo.ammo_reserve;
-                    }
-            
+        // ── Weapon pickup / drop ─────────────────────────────────────────────
 
-                    addTeamLeft(newplayers);
-                }
+        socket.on('weapon_pickup', (raw) => {
+            const e = JSON.parse(raw);
+            const wpnUpdate = () => ({ weapon_primary: e.weapon });
+            setAlliesPlayers(prev => updatePlayer(prev, e.user_id, wpnUpdate));
+            setAxisPlayers(prev => updatePlayer(prev, e.user_id, wpnUpdate));
+        });
 
-            }
-
-            if(rightPlayers.length > 0){
-
-                const playerindex = rightPlayers.findIndex(player => player.player_steamid === playerInfo.player_id);
-
-                if(playerindex !== -1){
-
-                    const newplayers = [...rightPlayers];
-
-                    
-                    if(playerInfo.weapon_type === 'primary'){
-                        newplayers[playerindex].primary_ammo_current = playerInfo.current_ammo;
-                        newplayers[playerindex].primary_ammo_reserve = playerInfo.ammo_reserve;
-                    }
+        socket.on('weapon_drop', (raw) => {
+            const e = JSON.parse(raw);
+            setAlliesPlayers(prev => updatePlayer(prev, e.user_id, (p) =>
+                p.weapon_primary === e.weapon ? { weapon_primary: null } : {}
+            ));
+            setAxisPlayers(prev => updatePlayer(prev, e.user_id, (p) =>
+                p.weapon_primary === e.weapon ? { weapon_primary: null } : {}
+            ));
+        });
 
 
-                    if(playerInfo.weapon_type === 'secondary'){
-                        newplayers[playerindex].secondary_ammo_current = playerInfo.current_ammo;
-                        newplayers[playerindex].secondary_ammo_reserve = playerInfo.ammo_reserve;
-                    }
-            
+        // ── Grenade throw ────────────────────────────────────────────────────
 
-                    addTeamRight(newplayers);
-                }
-
-            }
-        })
-    });   
-
-
-    socket.on('round_end', (event) =>{
-
-        const object = JSON.parse(event);
-
-        if(object.side_win === 'TT') team1Score();
-        if(object.side_win === 'CT') team2Score();
-
-        // Spread object accross temp object
-        let roundinfo = {...roundState};
-
-        // Update state
-        roundinfo.round_end = true;
-        roundinfo.round_start = false;
-        roundinfo.round_time = 0;
-
-        // Set state
-        updateRoundStateInfo(roundinfo);
-
-    });
+        socket.on('nade_throw', (raw) => {
+            const e = JSON.parse(raw);
+            setAlliesPlayers(prev => updatePlayer(prev, e.user_id, (p) => ({
+                nades_thrown: (p.nades_thrown || 0) + 1,
+            })));
+            setAxisPlayers(prev => updatePlayer(prev, e.user_id, (p) => ({
+                nades_thrown: (p.nades_thrown || 0) + 1,
+            })));
+        });
 
 
-    socket.on('round_start_freeze', (event) =>{
+        // ── Chat ─────────────────────────────────────────────────────────────
 
-        const object = JSON.parse(event);
-
-        // Spread object accross temp object
-        let roundinfo = {...roundState};
-
-        // Update state
-        roundinfo.round_freeze = true;
-        roundinfo.freeze_time = object.freeze_time - 1;
-        roundinfo.round_end = false;
-        roundinfo.round_start = false;
-        roundinfo.round_time = 0;
-
-        // Set state
-        updateRoundStateInfo(roundinfo);
-
-    });
+        socket.on('user_say', (raw) => {
+            const e = JSON.parse(raw);
+            const { allies_players, axis_players } = getState();
+            const allPlayers = [...allies_players, ...axis_players];
+            const sender = allPlayers.find(p => p.user_id === e.user_id) ?? playerDirectory[e.user_id];
+            addChat({
+                user_id: e.user_id,
+                name: sender?.name ?? e.user_id,
+                team: sender?.team ?? 'unknown',
+                team_only: e.team_only,
+                message: e.message,
+                timestamp: Date.now(),
+            });
+        });
 
 
-    socket.on('round_start_normal', (event) =>{
+        // ── Score ─────────────────────────────────────────────────────────────
 
-        const object = JSON.parse(event);
+        socket.on('player_score', (raw) => {
+            const e = JSON.parse(raw);
+            const scoreUpdate = () => ({ kills: e.kills, deaths: e.deaths, score: e.score });
+            setAlliesPlayers(prev => updatePlayer(prev, e.user_id, scoreUpdate));
+            setAxisPlayers(prev => updatePlayer(prev, e.user_id, scoreUpdate));
+        });
 
-        // Spread object accross temp object
-        let roundinfo = {...roundState};
+        socket.on('team_score', (raw) => {
+            const e = JSON.parse(raw);
+            setAlliesScore(e.allies_score);
+            setAxisScore(e.axis_score);
+        });
 
-        // Update state
-        roundinfo.round_freeze = false;
-        roundinfo.freeze_time = 0;
-        roundinfo.round_start = true;
-        roundinfo.round_time = object.round_time - 1;
 
-        // Set state
-        updateRoundStateInfo(roundinfo);
+        // ── Round ─────────────────────────────────────────────────────────────
 
-    });
-        
+        socket.on('round_start_freeze', () => {
+            setRoundState({ round_end: false, round_freeze: true, round_start: false });
+        });
+
+        socket.on('round_start', (raw) => {
+            const e = typeof raw === 'string' ? JSON.parse(raw) : {};
+            if (e.timeleft != null) setTimeleft(e.timeleft);
+            setRoundState({ round_end: false, round_freeze: false, round_start: true });
+            resetStreaks();
+        });
+
+        socket.on('round_end', (raw) => {
+            const e = JSON.parse(raw);
+            setAlliesScore(e.allies_score);
+            setAxisScore(e.axis_score);
+            setRoundState({ round_end: true, round_freeze: false, round_start: false });
+
+            // Revive all players 5s after round end (for scoreboard display)
+            setTimeout(() => {
+                const { allies_players, axis_players } = getState();
+                const revive = players => players.map(p => ({
+                    ...p, dead: false, health: 100, prone_state: 'standing', prone_since: null,
+                }));
+                setAlliesPlayers(revive(allies_players));
+                setAxisPlayers(revive(axis_players));
+            }, 5000);
+        });
+
+        socket.on('half_start', (raw) => {
+            const e = JSON.parse(raw);
+            setHalf(e.half);
+            resetHalf();
+            if (e.timeleft != null) setTimeleft(e.timeleft);
+            setRoundState({ round_end: false, round_freeze: false, round_start: false });
+        });
+
+
+        // ── Time sync ────────────────────────────────────────────────────────
+
+        socket.on('time_sync', (raw) => {
+            const e = JSON.parse(raw);
+            if (e.timeleft != null) setTimeleft(e.timeleft);
+        });
+
+
+        // ── Flags ─────────────────────────────────────────────────────────────
+
+        socket.on('flags_init', (raw) => {
+            const e = JSON.parse(raw);
+            setFlags(e.flags.map(f => ({
+                ...f, capping_team: null, captor_ids: [], contested: false, progress: 0,
+                allies_in_zone: [], axis_in_zone: [],
+            })));
+        });
+
+        socket.on('flag_cap_started', (raw) => {
+            const e = JSON.parse(raw);
+            const { flags } = getState();
+            setFlags(flags.map(f =>
+                f.flag_id === e.flag_id ? { ...f, capping_team: e.capping_team, captor_ids: e.captor_ids } : f
+            ));
+        });
+
+        socket.on('flag_cap_stopped', (raw) => {
+            const e = JSON.parse(raw);
+            const { flags } = getState();
+            setFlags(flags.map(f =>
+                f.flag_id === e.flag_id ? { ...f, capping_team: null, captor_ids: [], progress: 0, contested: false } : f
+            ));
+        });
+
+        socket.on('flag_captured', (raw) => {
+            const e = JSON.parse(raw);
+            const { flags } = getState();
+            setFlags(flags.map(f =>
+                f.flag_id === e.flag_id
+                    ? { ...f, owner: e.new_owner, capping_team: null, captor_ids: [], progress: 0, contested: false, allies_in_zone: [], axis_in_zone: [] }
+                    : f
+            ));
+        });
+
+        socket.on('flag_zone_players', (raw) => {
+            const e = JSON.parse(raw);
+            const { flags } = getState();
+            setFlags(flags.map(f => {
+                const zone = e.zones.find(z => z.flag_id === f.flag_id);
+                if (!zone) return f;
+                return { ...f, allies_in_zone: zone.allies_ids, axis_in_zone: zone.axis_ids };
+            }));
+        });
+
+        socket.on('flag_cap_contested', (raw) => {
+            const e = JSON.parse(raw);
+            const { flags, allies_players, axis_players } = getState();
+            setFlags(flags.map(f =>
+                f.flag_id === e.flag_id ? { ...f, contested: true } : f
+            ));
+
+            // Add cap break to kill feed
+            const allPlayers = [...allies_players, ...axis_players];
+            const contesters = (e.contester_ids || []).map(id =>
+                allPlayers.find(p => p.user_id === id) ?? playerDirectory[id]
+            ).filter(Boolean);
+
+            addKill({
+                kill_type: 'cap_break',
+                flag_name: e.flag_name,
+                flag_id: e.flag_id,
+                contesting_team: e.contesting_team,
+                contesters,
+            });
+        });
+
+        socket.on('flag_cap_progress', (raw) => {
+            const e = JSON.parse(raw);
+            const { flags } = getState();
+            setFlags(flags.map(f =>
+                f.flag_id === e.flag_id
+                    ? { ...f, progress: e.progress, capping_team: e.capping_team, contested: false }
+                    : f
+            ));
+        });
+
+
+        // ── Caster observed ───────────────────────────────────────────────────
+
+        socket.on('caster_observed_player', (raw) => {
+            const e = JSON.parse(raw);
+            setAlliesPlayers(prev => prev.map(p => ({ ...p, spectate: p.user_id === e.user_id })));
+            setAxisPlayers(prev => prev.map(p => ({ ...p, spectate: p.user_id === e.user_id })));
+        });
+
 
         return () => socket.removeAllListeners();
 
-    }, [leftPlayers, rightPlayers]);
+    }, []);  // empty deps — we read state via getState() to avoid stale closures
 
-
-    // Return null, we are not rendering nothing
     return null;
-
-}
+};
