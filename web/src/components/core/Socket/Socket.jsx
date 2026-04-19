@@ -1,16 +1,43 @@
 import React, { useEffect } from 'react';
 import socketio from 'socket.io-client';
 import create from 'zustand';
+import gameEvents from '../gameEvents';
 
 const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://localhost:4000';
 export const socket = socketio.connect(SOCKET_URL, { withCredentials: true });
 
+// Read ?match=, ?server=, and ?replay= from URL
+const urlParams = new URLSearchParams(window.location.search);
+const matchIdParam = urlParams.get('match');
+const serverParam = urlParams.get('server');
+const isReplay = urlParams.get('replay') === 'true';
+
 socket.on('connect', () => {
-    socket.emit('hud_socket');
+    if (isReplay) {
+        // Replay mode — don't join any live room, events come from Replay component
+        console.log('[socket] Replay mode — not joining any live room');
+        return;
+    }
+    if (serverParam) {
+        // Server mode — observe a game server (pre-match or live)
+        socket.emit('join_server', serverParam);
+        console.log(`[socket] Joining server room: ${serverParam}`);
+    } else if (matchIdParam) {
+        socket.emit('join_match', matchIdParam);
+        console.log(`[socket] Joining match room: ${matchIdParam}`);
+    } else {
+        // Legacy fallback — join the old broadcast room
+        socket.emit('hud_socket');
+        console.log('[socket] No match/server param, joined legacy hud_socket room');
+    }
 });
 
+// Forward all live socket events into the shared game event bus
 socket.onAny((event, msg) => {
     console.log('[socket]', event, msg);
+    if (!isReplay) {
+        gameEvents.emit(event, msg);
+    }
 });
 
 // Persistent player directory — maps user_id to {name, team}.
@@ -40,6 +67,9 @@ export const useHudStore = create(set => ({
 
     // Kill feed entries
     kills: [],
+
+    // Flag-event feed entries (captures + cap breaks), shown under the flags bar
+    flag_feed: [],
 
     // Kill streaks: { [user_id]: number } — consecutive kills without dying (resets on death/round)
     kill_streaks: {},
@@ -89,6 +119,10 @@ export const useHudStore = create(set => ({
     }),
     addChat: (msg)  => set(state => ({ chat: [...state.chat.slice(-19), msg] })),
 
+    addFlagEvent: (entry) => set(state => ({
+        flag_feed: [...state.flag_feed.slice(-9), { ...entry, id: state.flag_feed.length }],
+    })),
+
     setRoundState: (info) => set({ round_state: { ...info } }),
 
     // Reset kill streaks (on round start)
@@ -97,6 +131,7 @@ export const useHudStore = create(set => ({
     // Wipe per-player game state at half time (keep roster, reset stats)
     resetHalf: () => set(state => ({
         kills: [],
+        flag_feed: [],
         chat: [],
         kill_streaks: {},
         allies_score: 0,
@@ -155,6 +190,7 @@ export const SocketStoreComponent = () => {
     const setFlags         = useHudStore(s => s.setFlags);
     const addKill          = useHudStore(s => s.addKill);
     const addChat          = useHudStore(s => s.addChat);
+    const addFlagEvent     = useHudStore(s => s.addFlagEvent);
     const setAlliesScore   = useHudStore(s => s.setAlliesScore);
     const setAxisScore     = useHudStore(s => s.setAxisScore);
     const setHalf          = useHudStore(s => s.setHalf);
@@ -170,7 +206,7 @@ export const SocketStoreComponent = () => {
 
         // ── Player connect / disconnect ───────────────────────────────────────
 
-        socket.on('player_connect', (raw) => {
+        gameEvents.on('player_connect', (raw) => {
             const e = JSON.parse(raw);
             playerDirectory[e.user_id] = { name: e.name, team: e.team };
             const player = makeDefaultPlayer(e.user_id, e.name, e.team);
@@ -184,13 +220,13 @@ export const SocketStoreComponent = () => {
             }
         });
 
-        socket.on('player_disconnect', (raw) => {
+        gameEvents.on('player_disconnect', (raw) => {
             const e = JSON.parse(raw);
             setAlliesPlayers(prev => prev.filter(p => p.user_id !== e.user_id));
             setAxisPlayers(prev => prev.filter(p => p.user_id !== e.user_id));
         });
 
-        socket.on('player_team_change', (raw) => {
+        gameEvents.on('player_team_change', (raw) => {
             const e = JSON.parse(raw);
             if (playerDirectory[e.user_id]) playerDirectory[e.user_id].team = e.team;
             const { allies_players, axis_players } = getState();
@@ -210,11 +246,15 @@ export const SocketStoreComponent = () => {
 
         // ── Spawn ─────────────────────────────────────────────────────────────
 
-        socket.on('player_spawn', (raw) => {
+        gameEvents.on('player_spawn', (raw) => {
             const e = JSON.parse(raw);
             const dir = playerDirectory[e.user_id];
-            if (dir) dir.team = e.team;
-            else playerDirectory[e.user_id] = { name: e.user_id, team: e.team };
+            if (dir) {
+                dir.team = e.team;
+                if (e.name) dir.name = e.name;
+            } else {
+                playerDirectory[e.user_id] = { name: e.name ?? e.user_id, team: e.team };
+            }
 
             const spawnState = {
                 class_id:         e.class_id,
@@ -247,7 +287,7 @@ export const SocketStoreComponent = () => {
 
         // ── Kill ──────────────────────────────────────────────────────────────
 
-        socket.on('kill', (raw) => {
+        gameEvents.on('kill', (raw) => {
             const e = JSON.parse(raw);
             const { allies_players, axis_players } = getState();
 
@@ -271,7 +311,7 @@ export const SocketStoreComponent = () => {
 
         // ── Damage ────────────────────────────────────────────────────────────
 
-        socket.on('damage', (raw) => {
+        gameEvents.on('damage', (raw) => {
             const e = JSON.parse(raw);
             const healthUpdate = () => ({ health: Math.max(0, e.victim_health) });
             setAlliesPlayers(prev => updatePlayer(prev, e.victim_id, healthUpdate));
@@ -281,7 +321,7 @@ export const SocketStoreComponent = () => {
 
         // ── Prone ─────────────────────────────────────────────────────────────
 
-        socket.on('prone_change', (raw) => {
+        gameEvents.on('prone_change', (raw) => {
             const e = JSON.parse(raw);
             const proneUpdate = () => ({
                 prone_state: e.state,
@@ -294,14 +334,14 @@ export const SocketStoreComponent = () => {
 
         // ── Weapon pickup / drop ─────────────────────────────────────────────
 
-        socket.on('weapon_pickup', (raw) => {
+        gameEvents.on('weapon_pickup', (raw) => {
             const e = JSON.parse(raw);
             const wpnUpdate = () => ({ weapon_primary: e.weapon });
             setAlliesPlayers(prev => updatePlayer(prev, e.user_id, wpnUpdate));
             setAxisPlayers(prev => updatePlayer(prev, e.user_id, wpnUpdate));
         });
 
-        socket.on('weapon_drop', (raw) => {
+        gameEvents.on('weapon_drop', (raw) => {
             const e = JSON.parse(raw);
             setAlliesPlayers(prev => updatePlayer(prev, e.user_id, (p) =>
                 p.weapon_primary === e.weapon ? { weapon_primary: null } : {}
@@ -314,7 +354,7 @@ export const SocketStoreComponent = () => {
 
         // ── Grenade throw ────────────────────────────────────────────────────
 
-        socket.on('nade_throw', (raw) => {
+        gameEvents.on('nade_throw', (raw) => {
             const e = JSON.parse(raw);
             setAlliesPlayers(prev => updatePlayer(prev, e.user_id, (p) => ({
                 nades_thrown: (p.nades_thrown || 0) + 1,
@@ -327,7 +367,7 @@ export const SocketStoreComponent = () => {
 
         // ── Chat ─────────────────────────────────────────────────────────────
 
-        socket.on('user_say', (raw) => {
+        gameEvents.on('user_say', (raw) => {
             const e = JSON.parse(raw);
             const { allies_players, axis_players } = getState();
             const allPlayers = [...allies_players, ...axis_players];
@@ -345,14 +385,14 @@ export const SocketStoreComponent = () => {
 
         // ── Score ─────────────────────────────────────────────────────────────
 
-        socket.on('player_score', (raw) => {
+        gameEvents.on('player_score', (raw) => {
             const e = JSON.parse(raw);
             const scoreUpdate = () => ({ kills: e.kills, deaths: e.deaths, score: e.score });
             setAlliesPlayers(prev => updatePlayer(prev, e.user_id, scoreUpdate));
             setAxisPlayers(prev => updatePlayer(prev, e.user_id, scoreUpdate));
         });
 
-        socket.on('team_score', (raw) => {
+        gameEvents.on('team_score', (raw) => {
             const e = JSON.parse(raw);
             setAlliesScore(e.allies_score);
             setAxisScore(e.axis_score);
@@ -361,18 +401,18 @@ export const SocketStoreComponent = () => {
 
         // ── Round ─────────────────────────────────────────────────────────────
 
-        socket.on('round_start_freeze', () => {
+        gameEvents.on('round_start_freeze', () => {
             setRoundState({ round_end: false, round_freeze: true, round_start: false });
         });
 
-        socket.on('round_start', (raw) => {
+        gameEvents.on('round_start', (raw) => {
             const e = typeof raw === 'string' ? JSON.parse(raw) : {};
             if (e.timeleft != null) setTimeleft(e.timeleft);
             setRoundState({ round_end: false, round_freeze: false, round_start: true });
             resetStreaks();
         });
 
-        socket.on('round_end', (raw) => {
+        gameEvents.on('round_end', (raw) => {
             const e = JSON.parse(raw);
             setAlliesScore(e.allies_score);
             setAxisScore(e.axis_score);
@@ -389,7 +429,7 @@ export const SocketStoreComponent = () => {
             }, 5000);
         });
 
-        socket.on('half_start', (raw) => {
+        gameEvents.on('half_start', (raw) => {
             const e = JSON.parse(raw);
             setHalf(e.half);
             resetHalf();
@@ -400,7 +440,7 @@ export const SocketStoreComponent = () => {
 
         // ── Time sync ────────────────────────────────────────────────────────
 
-        socket.on('time_sync', (raw) => {
+        gameEvents.on('time_sync', (raw) => {
             const e = JSON.parse(raw);
             if (e.timeleft != null) setTimeleft(e.timeleft);
         });
@@ -408,73 +448,99 @@ export const SocketStoreComponent = () => {
 
         // ── Flags ─────────────────────────────────────────────────────────────
 
-        socket.on('flags_init', (raw) => {
+        gameEvents.on('flags_init', (raw) => {
             const e = JSON.parse(raw);
             setFlags(e.flags.map(f => ({
                 ...f, capping_team: null, captor_ids: [], contested: false, progress: 0,
-                allies_in_zone: [], axis_in_zone: [],
+                allies_count: 0, axis_count: 0,
             })));
         });
 
-        socket.on('flag_cap_started', (raw) => {
+        gameEvents.on('flag_cap_started', (raw) => {
             const e = JSON.parse(raw);
             const { flags } = getState();
             setFlags(flags.map(f =>
-                f.flag_id === e.flag_id ? { ...f, capping_team: e.capping_team, captor_ids: e.captor_ids } : f
+                f.flag_id === e.flag_id ? { ...f, capping_team: e.capping_team, captor_ids: e.captor_ids || [] } : f
             ));
         });
 
-        socket.on('flag_cap_stopped', (raw) => {
+        gameEvents.on('flag_cap_stopped', (raw) => {
             const e = JSON.parse(raw);
             const { flags } = getState();
             setFlags(flags.map(f =>
-                f.flag_id === e.flag_id ? { ...f, capping_team: null, captor_ids: [], progress: 0, contested: false } : f
+                f.flag_id === e.flag_id ? { ...f, capping_team: null, captor_ids: [], progress: 0, contested: false, allies_count: 0, axis_count: 0 } : f
             ));
         });
 
-        socket.on('flag_captured', (raw) => {
+        gameEvents.on('flag_captured', (raw) => {
             const e = JSON.parse(raw);
-            const { flags } = getState();
+            const { flags, allies_players, axis_players } = getState();
             setFlags(flags.map(f =>
                 f.flag_id === e.flag_id
-                    ? { ...f, owner: e.new_owner, capping_team: null, captor_ids: [], progress: 0, contested: false, allies_in_zone: [], axis_in_zone: [] }
+                    ? { ...f, owner: e.new_owner, capping_team: null, captor_ids: [], progress: 0, contested: false, allies_count: 0, axis_count: 0 }
                     : f
             ));
+
+            // Capture kill feed entry with real captor attribution from dod_score_event.
+            const allPlayers = [...allies_players, ...axis_players];
+            const captors = (e.captor_ids || []).map(id =>
+                allPlayers.find(p => p.user_id === id) ?? playerDirectory[id]
+            ).filter(Boolean);
+
+            addFlagEvent({
+                kind: 'captured',
+                flag_name: e.flag_name,
+                flag_id: e.flag_id,
+                new_owner: e.new_owner,
+                captors,
+            });
         });
 
-        socket.on('flag_zone_players', (raw) => {
+        gameEvents.on('flag_zone_players', (raw) => {
             const e = JSON.parse(raw);
             const { flags } = getState();
             setFlags(flags.map(f => {
                 const zone = e.zones.find(z => z.flag_id === f.flag_id);
                 if (!zone) return f;
-                return { ...f, allies_in_zone: zone.allies_ids, axis_in_zone: zone.axis_ids };
+                // Accept either count fields (production plugin) or id arrays (mocker fixtures).
+                const raw_allies = zone.allies_count ?? (zone.allies_ids?.length ?? 0);
+                const raw_axis   = zone.axis_count   ?? (zone.axis_ids?.length   ?? 0);
+                const allies_numcap = zone.allies_numcap ?? f.allies_numcap ?? 1;
+                const axis_numcap   = zone.axis_numcap   ?? f.axis_numcap   ?? 1;
+
+                // Engine zone counts pulse on touch ticks — the same player can
+                // appear/disappear between polls. While a team is actively capping,
+                // hold the displayed count at the rolling max so the badge doesn't
+                // flicker. Reset on cap end (handled in cap_started/stopped/captured).
+                let allies_count = raw_allies;
+                let axis_count   = raw_axis;
+                if (f.capping_team === 'allies') {
+                    allies_count = Math.max(raw_allies, f.allies_count || 0);
+                } else if (f.capping_team === 'axis') {
+                    axis_count = Math.max(raw_axis, f.axis_count || 0);
+                }
+
+                return { ...f, allies_count, axis_count, allies_numcap, axis_numcap };
             }));
         });
 
-        socket.on('flag_cap_contested', (raw) => {
+        gameEvents.on('flag_cap_contested', (raw) => {
             const e = JSON.parse(raw);
-            const { flags, allies_players, axis_players } = getState();
+            const { flags } = getState();
             setFlags(flags.map(f =>
                 f.flag_id === e.flag_id ? { ...f, contested: true } : f
             ));
 
-            // Add cap break to kill feed
-            const allPlayers = [...allies_players, ...axis_players];
-            const contesters = (e.contester_ids || []).map(id =>
-                allPlayers.find(p => p.user_id === id) ?? playerDirectory[id]
-            ).filter(Boolean);
-
-            addKill({
-                kill_type: 'cap_break',
+            addFlagEvent({
+                kind: 'cap_break',
                 flag_name: e.flag_name,
                 flag_id: e.flag_id,
                 contesting_team: e.contesting_team,
-                contesters,
+                contester_count: e.contester_count ?? (e.contester_ids?.length ?? 0),
             });
         });
 
-        socket.on('flag_cap_progress', (raw) => {
+        gameEvents.on('flag_cap_progress', (raw) => {
             const e = JSON.parse(raw);
             const { flags } = getState();
             setFlags(flags.map(f =>
@@ -487,14 +553,14 @@ export const SocketStoreComponent = () => {
 
         // ── Caster observed ───────────────────────────────────────────────────
 
-        socket.on('caster_observed_player', (raw) => {
+        gameEvents.on('caster_observed_player', (raw) => {
             const e = JSON.parse(raw);
             setAlliesPlayers(prev => prev.map(p => ({ ...p, spectate: p.user_id === e.user_id })));
             setAxisPlayers(prev => prev.map(p => ({ ...p, spectate: p.user_id === e.user_id })));
         });
 
 
-        return () => socket.removeAllListeners();
+        return () => gameEvents.removeAllListeners();
 
     }, []);  // empty deps — we read state via getState() to avoid stale closures
 

@@ -7,15 +7,11 @@ class Welcome extends React.Component {
             <Container style={{ marginTop: '40px' }}>
                 <Row>
                     <Col>
-                        <h2>DoD HUD Observer</h2>
-                        <p style={{ marginTop: '16px' }}>
+                        <p>
                             Day of Defeat 1.3 live broadcast overlay for OBS.
                         </p>
                         <ul style={{ marginTop: '16px', lineHeight: '2' }}>
-                            <li><a href="/screen">HUD overlay</a> — open this as an OBS browser source</li>
-                            <li><a href="/teams">Teams</a></li>
-                            <li><a href="/players">Players</a></li>
-                            <li><a href="/matches">Matches</a></li>
+                            <li><a href="/watch">Watch / Replay</a> — pick a live or completed match</li>
                         </ul>
                     </Col>
                 </Row>

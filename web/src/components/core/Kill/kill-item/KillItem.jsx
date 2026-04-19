@@ -16,21 +16,8 @@ const KillItem = ({ killinfo, killer, victim, delay }) => {
 
     if (!visible) return <div />;
 
-    const isSuicide   = killinfo.kill_type === 'suicide';
-    const isTeamkill  = killinfo.kill_type === 'teamkill';
-    const isCapBreak  = killinfo.kill_type === 'cap_break';
-
-    if (isCapBreak) {
-        const team = killinfo.contesting_team;
-        const names = (killinfo.contesters || []).map(p => p.name).join(', ');
-        return (
-            <div className={`kill cap-break cap-break-${team}`}>
-                <span className="cap-break-label">CAP BREAK</span>
-                <span className={`${team}-style`}>{names || 'unknown'}</span>
-                <span className="cap-break-flag">{killinfo.flag_name}</span>
-            </div>
-        );
-    }
+    const isSuicide  = killinfo.kill_type === 'suicide';
+    const isTeamkill = killinfo.kill_type === 'teamkill';
 
     return (
         <div className={`kill${isTeamkill ? ' teamkill' : ''}`}>

@@ -1,0 +1,16 @@
+[Unit]
+Description=DoD HUD Observer frontend (static build on :3000)
+After=network.target
+
+[Service]
+Type=simple
+User=cadaver
+WorkingDirectory=/opt/hud-observer
+ExecStart=/usr/bin/npx serve -s /opt/hud-observer/web/build -l 3000
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:/var/log/hud-observer/web.log
+StandardError=append:/var/log/hud-observer/web-err.log
+
+[Install]
+WantedBy=multi-user.target

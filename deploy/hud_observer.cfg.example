@@ -1,0 +1,9 @@
+// DoD HUD Observer — plugin config template
+// Copy to hud_observer.cfg and fill in the real auth key (must match HUD_AUTH_KEY
+// in deploy/hud-observer.service on the data server).
+//
+// Installed at: /home/dodserver/dod-27019/serverfiles/dod/addons/ktpamx/configs/hud_observer.cfg
+// Executed from server.cfg via: exec addons/ktpamx/configs/hud_observer.cfg
+
+dod_hud_url "http://74.91.112.242:9000/ingest"
+dod_hud_key "REPLACE_WITH_SECRET"

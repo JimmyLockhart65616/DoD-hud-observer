@@ -2,35 +2,21 @@ import React from 'react';
 import {Navbar} from 'react-bootstrap';
 import {DiGithubBadge} from 'react-icons/di'
 
-
-import PlayersRoute from './players/PlayersRoute';
-import TeamsRoute from './teams/TeamsRoute';
-import MatchesRoute from './matches/MatchesRoute';
-
 class Routes extends React.Component{
 
-    render(){        
+    render(){
         return(
             <div>
 
                 <Navbar bg="dark" variant="dark">
                     <Navbar.Brand href="/">
-                     DoD HUD
+                     KTP DoD HuD
                     </Navbar.Brand>
-                    <Navbar.Text>
-                        <TeamsRoute />
-                    </Navbar.Text>
-                    <Navbar.Text>
-                        <PlayersRoute />
-                    </Navbar.Text>
-                    <Navbar.Text>
-                        <MatchesRoute />   
-                    </Navbar.Text>
                     <Navbar.Text className="ml-auto nav-icon" style={{color: '#ffffff'}}>
                         <a href="https://github.com/JimmyLockhart65616/DoD-hud-observer">View this project on <DiGithubBadge size={32}></DiGithubBadge></a>
                     </Navbar.Text>
                 </Navbar>
-            </div>       
+            </div>
         );
     }
 }

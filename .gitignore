@@ -16,7 +16,24 @@ dod-server/mods/addons/metamod/*.dll
 dod-server/mods/addons/metamod/example_plugin/
 dod-server/mods/addons/metamod/sdk/
 
+# Match recordings (generated at runtime)
+matches/
+
 # Playwright E2E test artifacts
 e2e/snapshots/
 test-results/
 playwright-report/
+
+# Deploy — the real systemd unit contains the HUD_AUTH_KEY secret.
+# Checked-in counterpart: deploy/hud-observer.service.example
+deploy/hud-observer.service
+deploy/hud_observer.cfg
+
+# Compiled plugin — build output, not source
+/KTPHudObserver.amxx
+
+# Local reference files (event captures, external .sma refs) — not for commit
+/.local-refs/
+
+# Build artifacts from local HLDS/AMXX Docker builds
+/.build-output/

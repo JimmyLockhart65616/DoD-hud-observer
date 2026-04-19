@@ -1,0 +1,78 @@
+.replay-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 36px;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    z-index: 9999;
+    font-family: 'Segoe UI', sans-serif;
+    font-size: 13px;
+    color: #ccc;
+}
+
+.replay-label {
+    color: #ff4444;
+    font-weight: 700;
+    letter-spacing: 1px;
+    font-size: 11px;
+}
+
+.replay-btn {
+    background: none;
+    border: 1px solid #555;
+    color: #ccc;
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.replay-btn:hover {
+    background: #333;
+    color: #fff;
+}
+
+.replay-speed {
+    background: #222;
+    color: #ccc;
+    border: 1px solid #555;
+    border-radius: 3px;
+    padding: 2px 4px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.replay-progress-track {
+    flex: 1;
+    height: 6px;
+    background: #333;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.replay-progress-fill {
+    height: 100%;
+    background: #ff4444;
+    border-radius: 3px;
+    transition: width 0.25s linear;
+}
+
+.replay-time {
+    font-variant-numeric: tabular-nums;
+    min-width: 80px;
+    text-align: center;
+}
+
+.replay-count {
+    font-variant-numeric: tabular-nums;
+    min-width: 60px;
+    text-align: right;
+    color: #888;
+    font-size: 11px;
+}

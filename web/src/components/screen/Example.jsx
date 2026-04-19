@@ -1,48 +1,30 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 
 import { SocketStoreComponent, useHudStore } from '../core/Socket/Socket';
+import Replay from '../core/Replay/Replay';
 import Crosshair from '../core/Crosshair/Crosshair';
 import Kill from '../core/Kill/Kill';
 import Score from '../core/Score/Score';
 import PlayersLeft from '../core/PlayersLeft/PlayersLeft';
 import PlayersRight from '../core/PlayersRight/PlayersRight';
 import Flags from '../core/Flags/Flags';
+import FlagFeed from '../core/FlagFeed/FlagFeed';
 import PlayerObserved from '../core/PlayerObserved/PlayerObserved';
 
-import * as api from './api/api';
 import hudconfig from './hud.json';
 
 import './Screen.css';
 
 function Example() {
 
-    const [team1Name,  setTeam1Name]  = useState('ALLIES');
-    const [team2Name,  setTeam2Name]  = useState('AXIS');
-    const [logoLeft,   setLogoLeft]   = useState('default.png');
-    const [logoRight,  setLogoRight]  = useState('default.png');
+    const team1Name = 'ALLIES';
+    const team2Name = 'AXIS';
+    const logoLeft = 'default.png';
+    const logoRight = 'default.png';
 
-    // Load team branding from match ID in URL (?match=<id>)
-    useEffect(() => {
-        const urlParams = new URLSearchParams(window.location.search);
-        const matchId = urlParams.get('match');
-        if (!matchId) return;
-
-        api.matches.getMatch(matchId)
-            .then(res => {
-                const { team_one, team_two } = res.match_info;
-                return Promise.all([
-                    api.teams.getTeam(team_one),
-                    api.teams.getTeam(team_two),
-                ]);
-            })
-            .then(([t1, t2]) => {
-                setTeam1Name(t1.team_info.team_short_name.toUpperCase());
-                setLogoLeft(t1.team_info.team_logo_name);
-                setTeam2Name(t2.team_info.team_short_name.toUpperCase());
-                setLogoRight(t2.team_info.team_logo_name);
-            })
-            .catch(err => console.error('[Example] Failed to load match info:', err));
-    }, []);
+    const urlParams = new URLSearchParams(window.location.search);
+    const matchId = urlParams.get('match');
+    const isReplay = urlParams.get('replay') === 'true';
 
     const alliesPlayers = useHudStore(s => s.allies_players);
     const axisPlayers   = useHudStore(s => s.axis_players);
@@ -51,6 +33,7 @@ function Example() {
     const axisScore     = useHudStore(s => s.axis_score);
     const roundState    = useHudStore(s => s.round_state);
     const flags         = useHudStore(s => s.flags);
+    const flagFeed      = useHudStore(s => s.flag_feed);
     const timeleft      = useHudStore(s => s.timeleft);
     const timeleftAt    = useHudStore(s => s.timeleft_at);
 
@@ -59,10 +42,16 @@ function Example() {
 
             <SocketStoreComponent />
 
+            {isReplay && matchId && <Replay matchId={matchId} />}
+
             <Crosshair />
 
             <div className="flags-bar">
                 <Flags flags={flags} />
+            </div>
+
+            <div className="flagfeed-container">
+                <FlagFeed entries={flagFeed} screentime={hudconfig.settings.kill_displaytime} />
             </div>
 
             <div className="box-right">

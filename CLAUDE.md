@@ -1,7 +1,7 @@
 # DoD HUD Observer — Claude Context
 
 ## Project Goal
-Retrofit the CS 1.6 HUD Observer into a **Day of Defeat 1.3** live broadcast overlay.
+Retrofit the CS 1.6 HUD Observer Project into a **Day of Defeat 1.3** live broadcast overlay, and integrate with KTP League infrastructure and systems.
 Displays real-time game state (kills, flag captures, player classes, prone shame timer) as an OBS browser source overlay.
 
 ## What This Is NOT
@@ -14,17 +14,18 @@ Displays real-time game state (kills, flag captures, player classes, prone shame
 ## Architecture
 
 ```
-DoD Game Server (hlds + Metamod + AMXX)
-  └─ our AMXX plugin (.sma)
-       └─ runs a TCP server on PLUGIN_TCP_PORT (default 9000)
-       └─ game server has a known public/dedicated IP
+KTP-ReHLDS Game Server (KTPAMXX extension mode — NO Metamod)
+  └─ KTPHudObserver.amxx
+       └─ HTTP POSTs JSON events via KTPAMXXCurl to backend :8088
+       └─ hooks ktp_match_start/end from KTPMatchHandler
+       └─ uses DODX forwards for spawn/death/prone/cap/team events
 
-Observer's PC (or VPS for production)
+Data Server (or local dev machine)
   └─ Node.js backend (this repo /backend)
-       ├─ connects OUT to game server IP:9000 on startup (no port forwarding needed on observer side)
-       ├─ authenticates with PLUGIN_TOKEN
-       ├─ relays events via Socket.IO to frontend
-       └─ serves REST API (teams, players, matches via LowDB)
+       ├─ Express HTTP ingest on :8088 (X-Auth-Key auth)
+       ├─ MatchRecorder → events.jsonl + metadata.json per matchId
+       ├─ Socket.IO rooms keyed by matchId on :4000
+       └─ REST API on :3001 (teams, players, matches)
 
   └─ React frontend (this repo /web)
        └─ OBS browser source at http://localhost:3000/screen
@@ -34,11 +35,21 @@ Observer's PC (or VPS for production)
 - `3000` — React dev server (OBS browser source)
 - `3001` — Node.js backend REST API
 - `4000` — Internal Socket.IO server (backend ↔ frontend)
-- `9000` — TCP listener for AMXX plugin events (configurable)
+- `8088` — HTTP ingest endpoint (plugin POSTs events here)
 
 ### Deployment Modes
 - **Local/test**: everything on one PC, AMXX sends to 127.0.0.1:9000
 - **Production**: Node backend on a VPS with public IP, game server sends to VPS IP:9000, OBS points browser source at VPS:3000. Switching is one config value change.
+
+### Extension-mode constraint (HARD RULE)
+
+**Nothing in the game-server pipeline may depend on Metamod or any of its dependencies.** The production KTP stack loads AMXX modules in "extension mode" — only `dodx_ktp`, `reapi_ktp`, `amxxcurl_ktp` are loaded per `../KTPInfrastructure/config/online/modules.ini`. No fakemeta, no hamsandwich, no engine module, no Metamod-P/R.
+
+When adding natives (to dodx, reapi, or a new KTP module):
+- Use HL SDK directly (`edict->v.*`, `gpGlobals`, `g_engfuncs`) — these are available in extension mode
+- Use existing dodx extension-mode natives (`dodx_get_user_origin`, `dodx_get_user_movetype`, etc.) from plugins instead of pev/entity_get_*
+- Do not use `META_*` macros or `MDLL_*` wrappers
+- New modules must handle `g_bExtensionMode` branching (dodx is the reference implementation)
 
 ---
 
@@ -231,21 +242,39 @@ Screenshots save to `e2e/snapshots/` (gitignored). Claude can read these PNGs to
 
 ## Compiling the AMXX Plugin
 
-Source: `dod_hud_observer.sma` (repo root)
-Output: `dod-server/mods/dod/addons/amxmodx/plugins/dod_hud_observer.amxx`
+Source: `KTPHudObserver.sma` (repo root)
+Output: `../KTPInfrastructure/local/plugins/KTPHudObserver.amxx`
+(mounted into game server containers at startup via `local/plugins/` volume)
 
-Compile using the AMXX compiler inside the Docker container:
+Compile using the AMXX compiler from the KTPInfrastructure artifacts. The compiler resolves
+includes relative to its own directory, so everything must be copied to `/tmp` first
+(Windows volume mounts cause read issues for the compiler):
+
 ```bash
-docker compose run --rm --entrypoint="" \
+docker run --rm --entrypoint sh \
   -v "d:/Git/DoD-hud-observer:/src" \
-  hlds sh -c '
-    rsync --recursive --update /temp/mods/* /opt/steam/hlds
-    cat /src/dod_hud_observer.sma | tr -d "\r" > /tmp/dod_hud_observer.sma
-    cd /opt/steam/hlds/dod/addons/amxmodx/scripting
-    ./amxxpc /tmp/dod_hud_observer.sma -o/tmp/dod_hud_observer.amxx -i./include
-    cp /tmp/dod_hud_observer.amxx /src/dod-server/mods/dod/addons/amxmodx/plugins/dod_hud_observer.amxx
+  -v "d:/Git/KTPInfrastructure:/infra" \
+  jives/hlds:dod -c '
+    mkdir -p /tmp/compile/include
+    cp /infra/artifacts/latest/ktpamx/scripting/include/*.inc /tmp/compile/include/
+    cp /infra/artifacts/latest/ktpamx/scripting/amxxpc /tmp/compile/
+    cp /infra/artifacts/latest/ktpamx/scripting/amxxpc32.so /tmp/compile/
+    cat /src/KTPHudObserver.sma | tr -d "\r" > /tmp/compile/KTPHudObserver.sma
+    cd /tmp/compile
+    chmod +x amxxpc
+    ./amxxpc KTPHudObserver.sma -oKTPHudObserver.amxx
+    cp KTPHudObserver.amxx /infra/local/plugins/KTPHudObserver.amxx
   '
 ```
+
+Expected: 1 warning (`client_disconnect` deprecated — harmless, DODX still fires it).
+Expected output size: ~14.7 KB.
+
+### Deploying the compiled plugin
+
+- **Local test env**: compiled `.amxx` ends up in `../KTPInfrastructure/local/plugins/`, which is volume-mounted into the game-server containers. Restart the container or reload plugins to pick up changes.
+- **All 25 production servers (fan-out)**: drop the `.amxx` into `/home/dod/distribute/` on the data server (74.91.112.242). KTPFileDistributor (.NET 8 systemd worker) SFTPs it to every server and notifies Discord.
+- **Single production server (targeted, e.g. Denver 5 only)**: `scp` directly into `cadaver@<server-ip>:/home/dodserver/dod-<port>/serverfiles/dod/addons/ktpamx/plugins/KTPHudObserver.amxx` and skip KTPFileDistributor. Add `KTPHudObserver.amxx debug` under the "Custom - Add 3rd party plugins" section of `configs/plugins.ini` if not already present. Reload via `rcon restart` or `changelevel`.
 
 ### Pawn language notes
 
@@ -254,45 +283,91 @@ docker compose run --rm --entrypoint="" \
 - Null terminator: `'^0'`
 - Backslash is a normal character: `'\'` (single char, no escape needed)
 
-## Docker Server
+## Docker Environment
+
+Game servers and the full KTP stack are managed in **KTPInfrastructure** (`../KTPInfrastructure`).
+This repo provides the application source (backend + frontend + plugin) that KTPInfrastructure builds and deploys.
+
+### Running the full stack (game servers + data server)
 
 ```bash
-docker compose up       # start DoD HLDS with Metamod-P + AMXX
-docker compose down     # stop
+cd ../KTPInfrastructure
+make local-up           # builds + starts ktp-game-1, ktp-game-2, data (3 containers)
+make local-down         # stop
+make local-logs         # tail all logs
+docker compose -f docker-compose.local.yml logs -f data   # data server only
 ```
 
-### Stack inside container
+### Containers (defined in KTPInfrastructure/docker-compose.local.yml)
 
-- **HLDS**: vanilla Valve build 10211 (`jives/hlds:dod` image)
-- **Metamod-P** 1.21p38 (NOT Metamod-R — Metamod-R is for ReHLDS only)
-- **AMX Mod X** 1.10.0.5474
+- **`ktp-game-1`** — KTP-ReHLDS + KTPAMXX, dod_anzio. Ports: 27016 (game), 26900 (HLTV src)
+- **`ktp-game-2`** — KTP-ReHLDS + KTPAMXX, dod_flash. Ports: 27017 (game), 26901 (HLTV src)
+- **`data`** — All data server processes (supervisord). Ports: 3000 (frontend), 3001 (REST), 4000 (Socket.IO), 8088 (plugin ingest), 27020-21 (HLTV proxies), 27500 (HLStatsX UDP)
 
-### Volume mount structure
+### Data server processes (inside `data` container)
+
+- **`mysql`** — HLStatsX database
+- **`hltv-1`** — HLTV proxy → ktp-game-1
+- **`hltv-2`** — HLTV proxy → ktp-game-2
+- **`hlstatsx-stub`** — UDP log receiver on :27500 (socat stub)
+- **`backend`** — Node.js HUD Observer (REST + Socket.IO + HTTP ingest)
+- **`frontend`** — React build served statically on :3000
+
+### Standalone data server (no game servers)
+
+If you only need the backend/frontend (e.g. for mocker-based frontend development):
+
+```bash
+docker compose up -d    # runs data container only from this repo
+docker compose down
+```
+
+### KTPInfrastructure config for this repo
 
 ```text
-dod-server/mods/dod/           → rsync'd to /opt/steam/hlds/dod/
-  liblist.gam                  # points gamedll_linux to addons/metamod/metamod.so
-  addons/
-    metamod/
-      metamod.so               # Metamod-P binary
-      plugins.ini              # loads amxmodx_mm_i386.so
-    amxmodx/
-      configs/plugins.ini      # lists dod_hud_observer.amxx
-      configs/modules.ini      # sockets, dodfun, dodx uncommented
-      plugins/                 # compiled .amxx files go here
+KTPInfrastructure/config/local/config.yaml          → backend config (auth key, ports)
+KTPInfrastructure/config/local/plugins.ini          → includes KTPHudObserver.amxx
+KTPInfrastructure/config/local/dodserver.cfg        → dod_hud_url = http://data:8088/ingest
+KTPInfrastructure/local/plugins/KTPHudObserver.amxx → compiled plugin (see above)
+KTPInfrastructure/test-env/data/hltv-1.cfg          → HLTV proxy config
+KTPInfrastructure/test-env/data/demos/              → HLTV demo recordings
+```
 
-dod-server/config/             → rsync'd to /opt/steam/hlds/dod/
-  server.cfg
+### Legacy reference
+
+`docker-compose.legacy.yml` — kept for reference only. Vanilla HLDS + Metamod-P setup.
+Do not use for active development.
+
+---
+
+## Pushing to KTP Dependency Repos
+
+Breaking `KTPAMXX` or `KTPInfrastructure` corrupts every downstream plugin,
+including our own. Before pushing to either repo, see
+[docs/KTP_PUSH_WORKFLOW.md](docs/KTP_PUSH_WORKFLOW.md) — covers the pre-push
+hook, GitHub Actions, and the Denver-before-prod deploy sequence.
+
+Install the pre-push hooks once:
+
+```bash
+cd ../KTPInfrastructure && bash scripts/install-hooks.sh
+cd ../KTPAMXX           && bash scripts/install-hooks.sh
 ```
 
 ---
 
 ## Key Files
-- `backend/src/handler/server.ts` — TCP listener, parses incoming JSON from AMXX
-- `backend/src/socket/socket.ts` — Socket.IO relay to frontend
+- `KTPHudObserver.sma` — AMXX plugin source (KTP stack: curl + DODX, no Metamod)
+- `backend/src/handler/ingest.ts` — HTTP ingest endpoint (POST /ingest, X-Auth-Key)
+- `backend/src/handler/matchRecorder.ts` — per-match events.jsonl + metadata.json
+- `backend/src/handler/metrics.ts` — /metrics endpoint (EPS, per-source, latency)
+- `backend/src/config.ts` — YAML config loader with env-var overrides
+- `backend/src/socket/socket.ts` — Socket.IO rooms (matchId-keyed)
 - `backend/src/routes/apiRouter.ts` — REST API for teams/players/matches
 - `web/src/components/core/Socket/Socket.jsx` — all game state logic (Zustand store + event handlers)
-- `web/src/components/screen/api/api.js` — weapon name → display info mapping (was numeric IDs)
+- `web/src/components/screen/api/api.js` — weapon name → display info mapping
 - `web/src/components/screen/Example.jsx` — main HUD layout
-- `config.example.json` — copy to config.json, configure ports and Steam API key
-- `dod_hud_observer.sma` — AMXX plugin (to be created at repo root)
+- `config.yaml` — backend configuration (ports, auth key, storage)
+- `data-server/Dockerfile` — build source for the KTPInfrastructure data container
+- `dod_hud_observer.sma` — legacy plugin (vanilla Metamod version, kept for reference)
+- `docs/KTP_PUSH_WORKFLOW.md` — safety playbook for pushing to KTPAMXX / KTPInfrastructure

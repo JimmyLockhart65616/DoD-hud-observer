@@ -24,7 +24,7 @@ export default defineConfig({
 
     webServer: [
         {
-            command: 'npx ts-node --script-mode backend/src/mocker/mocker.ts',
+            command: 'npx ts-node --script-mode backend/src/mocker/mocker.ts -- --socket',
             port: 8000,
             reuseExistingServer: true,
             timeout: 30_000,

@@ -1,0 +1,29 @@
+# DoD HUD Observer — KTP Backend Configuration
+#
+# Environment variable overrides (take precedence over this file):
+#   HUD_AUTH_KEY        → ingest.auth_key
+#   HUD_INGEST_PORT     → ingest.port
+#   HUD_API_PORT        → api.port
+#   HUD_SOCKET_PORT     → socket.port
+#   HUD_MATCHES_DIR     → storage.matches_dir
+#   HUD_FRONTEND_ORIGIN → frontend.origin
+
+ingest:
+  port: 8088
+  auth_key: changeme
+
+api:
+  port: 3001
+
+socket:
+  port: 4000
+
+storage:
+  matches_dir: ./matches
+
+frontend:
+  origin: "http://localhost:3000"
+
+# Legacy fields kept for API router compatibility (teams/players/matches CRUD)
+auth:
+  steam_api_key: ""

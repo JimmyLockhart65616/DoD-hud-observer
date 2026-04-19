@@ -1,0 +1,9 @@
+node_modules
+web/node_modules
+.git
+e2e/snapshots
+test-env/data/demos
+dod-server
+ktp-server
+*.amxx
+*.amx

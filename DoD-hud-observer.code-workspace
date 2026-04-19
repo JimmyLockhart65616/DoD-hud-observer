@@ -1,8 +1,20 @@
 {
 	"folders": [
-		{
-			"path": "."
-		}
+		{ "name": "DoD-hud-observer", "path": "." },
+		{ "name": "KTPInfrastructure", "path": "../KTPInfrastructure" },
+		{ "name": "KTPReHLDS", "path": "../KTPReHLDS" },
+		{ "name": "KTPAMXX", "path": "../KTPAMXX" },
+		{ "name": "KTPReAPI", "path": "../KTPReAPI" },
+		{ "name": "KTPAmxxCurl", "path": "../KTPAmxxCurl" },
+		{ "name": "KTPhlsdk", "path": "../KTPhlsdk" },
+		{ "name": "metamod-am", "path": "../metamod-am" },
+		{ "name": "KTPMatchHandler", "path": "../KTPMatchHandler" },
+		{ "name": "KTPHLTVRecorder", "path": "../KTPHLTVRecorder" },
+		{ "name": "KTPCvarChecker", "path": "../KTPCvarChecker" },
+		{ "name": "KTPFileChecker", "path": "../KTPFileChecker" },
+		{ "name": "KTPAdminAudit", "path": "../KTPAdminAudit" },
+		{ "name": "KTPGrenades", "path": "../KTPGrenades" },
+		{ "name": "KTPPracticeMode", "path": "../KTPPracticeMode" }
 	],
 	"settings": {}
 }

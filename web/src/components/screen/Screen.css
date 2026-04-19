@@ -277,6 +277,125 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+   FLAG FEED (top-left, below flags bar)
+   ═══════════════════════════════════════════════════════════════════ */
+.flagfeed-container {
+  position: absolute;
+  top: 78px;
+  left: 16px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.flagfeed-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.flagfeed-item {
+  display: flex;
+  align-items: stretch;
+  background-color: rgba(30, 33, 58, 0.92);
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  border-left: 4px solid transparent;
+  animation: flagfeed-slide-in 0.25s ease-out;
+}
+
+.flagfeed-item.flagfeed-allies {
+  border-left-color: #8FA847;
+  background: linear-gradient(to right, rgba(65, 85, 30, 0.55), rgba(30, 33, 58, 0.92) 60%);
+}
+
+.flagfeed-item.flagfeed-axis {
+  border-left-color: #C43030;
+  background: linear-gradient(to right, rgba(130, 28, 28, 0.55), rgba(30, 33, 58, 0.92) 60%);
+}
+
+.flagfeed-item.flagfeed-break {
+  border-left-color: #FFD700;
+  background: linear-gradient(to right, rgba(120, 95, 0, 0.55), rgba(30, 33, 58, 0.92) 60%);
+}
+
+.flagfeed-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 900;
+  width: 30px;
+  color: #fff;
+  text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.7);
+  background-color: rgba(0, 0, 0, 0.18);
+}
+
+.flagfeed-item.flagfeed-allies .flagfeed-icon { color: #c8e090; }
+.flagfeed-item.flagfeed-axis   .flagfeed-icon { color: #ffb8b8; }
+.flagfeed-item.flagfeed-break  .flagfeed-icon { color: #FFD700; }
+
+.flagfeed-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 8px;
+}
+
+.flagfeed-tag {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  padding: 2px 6px;
+  border-radius: 2px;
+  text-transform: uppercase;
+}
+
+.flagfeed-tag-allies {
+  color: #1a1f0e;
+  background-color: #8FA847;
+}
+
+.flagfeed-tag-axis {
+  color: #2a0808;
+  background-color: #C43030;
+}
+
+.flagfeed-tag-break {
+  color: #2a2200;
+  background-color: #FFD700;
+}
+
+.flagfeed-flag {
+  font-size: 13px;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+  letter-spacing: 0.3px;
+}
+
+.flagfeed-team {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.flagfeed-captors {
+  font-size: 12px;
+  font-weight: 700;
+  font-style: italic;
+  opacity: 0.95;
+}
+
+.flagfeed-team-allies, .flagfeed-captors.flagfeed-team-allies { color: #c8e090; }
+.flagfeed-team-axis,   .flagfeed-captors.flagfeed-team-axis   { color: #ffb8b8; }
+
+@keyframes flagfeed-slide-in {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    KILL FEED (top-right absolute)
    ═══════════════════════════════════════════════════════════════════ */
 .box-right {
@@ -346,28 +465,6 @@
   margin: 0 2px;
   border-radius: 2px;
   background-color: rgba(160, 35, 35, 0.3);
-}
-
-/* ── Cap break in kill feed ───────────────────────────────────── */
-.box-right .kill.cap-break {
-  border: 1px solid rgba(255, 215, 0, 0.4);
-  gap: 6px;
-}
-
-.box-right .cap-break-label {
-  color: #FFD700;
-  font-size: 10px;
-  font-weight: 800;
-  padding: 1px 5px;
-  border-radius: 2px;
-  background-color: rgba(255, 215, 0, 0.15);
-}
-
-.box-right .cap-break-flag {
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 12px;
-  font-weight: 700;
-  padding: 0 4px;
 }
 
 /* ── Kill streak badge ────────────────────────────────────────── */

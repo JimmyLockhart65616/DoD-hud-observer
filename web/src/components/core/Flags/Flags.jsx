@@ -1,31 +1,12 @@
 import React from 'react';
-import { useHudStore } from '../Socket/Socket';
+import { humanizeFlagName } from './humanize';
 
-function humanizeFlagName(name) {
-    return name
-        .replace(/^POINT_/i, '')
-        .replace(/_/g, ' ')
-        .split(' ')
-        .map(w => w.length <= 3
-            ? w.toUpperCase()
-            : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
-        )
-        .join(' ');
-}
-
-function resolveNames(steamIds, allPlayers) {
-    if (!steamIds || steamIds.length === 0) return [];
-    return steamIds.map(id => {
-        const p = allPlayers.find(pl => pl.user_id === id);
-        return p ? p.name : null;
-    }).filter(Boolean);
-}
-
-const FlagItem = ({ flag, allPlayers }) => {
+const FlagItem = ({ flag }) => {
     const {
-        flag_name, owner, capping_team, captor_ids,
+        flag_name, owner, capping_team,
         contested, progress,
-        allies_in_zone, axis_in_zone,
+        allies_count, axis_count,
+        allies_numcap, axis_numcap,
     } = flag;
 
     let ownerClass = 'flag-neutral';
@@ -34,16 +15,12 @@ const FlagItem = ({ flag, allPlayers }) => {
 
     const isContested = contested && capping_team;
     const isCapping = capping_team && !contested;
+    const ac = allies_count || 0;
+    const xc = axis_count || 0;
+    const an = allies_numcap || 1;
+    const xn = axis_numcap || 1;
+    const hasZonePlayers = ac > 0 || xc > 0;
 
-    // Resolve zone player names
-    const alliesOnCap = resolveNames(allies_in_zone, allPlayers);
-    const axisOnCap   = resolveNames(axis_in_zone, allPlayers);
-    const hasZonePlayers = alliesOnCap.length > 0 || axisOnCap.length > 0;
-
-    // Resolve captor names (who gets credit for the cap)
-    const captorNames = resolveNames(captor_ids, allPlayers);
-
-    // Progress percentage (0-100 from plugin)
     const progressPct = progress || 0;
 
     return (
@@ -61,22 +38,15 @@ const FlagItem = ({ flag, allPlayers }) => {
                 )}
             </div>
 
-            {/* Captor names (who is credited) */}
-            {captorNames.length > 0 && isCapping && (
-                <div className={`flag-captors flag-captors-${capping_team}`}>
-                    {captorNames.join(', ')}
-                </div>
-            )}
-
-            {/* Zone occupancy (who is physically on the point) */}
+            {/* Zone occupancy counts (per-player names not available in extension mode) */}
             {hasZonePlayers && (
                 <div className="flag-zone-players">
-                    {alliesOnCap.map(name => (
-                        <span key={name} className="flag-zone-name allies-zone">{name}</span>
-                    ))}
-                    {axisOnCap.map(name => (
-                        <span key={name} className="flag-zone-name axis-zone">{name}</span>
-                    ))}
+                    {ac > 0 && (
+                        <span className="flag-zone-name allies-zone">Allies {ac}/{an}</span>
+                    )}
+                    {xc > 0 && (
+                        <span className="flag-zone-name axis-zone">Axis {xc}/{xn}</span>
+                    )}
                 </div>
             )}
 
@@ -94,17 +64,12 @@ const FlagItem = ({ flag, allPlayers }) => {
 };
 
 const Flags = React.memo(({ flags }) => {
-    const alliesPlayers = useHudStore(s => s.allies_players);
-    const axisPlayers   = useHudStore(s => s.axis_players);
-
     if (!flags || flags.length === 0) return null;
-
-    const allPlayers = [...alliesPlayers, ...axisPlayers];
 
     return (
         <div className="flags-container">
             {flags.map(flag =>
-                <FlagItem key={flag.flag_id} flag={flag} allPlayers={allPlayers} />
+                <FlagItem key={flag.flag_id} flag={flag} />
             )}
         </div>
     );

@@ -1,44 +1,38 @@
-services:
-  hlds:
-    image: jives/hlds:dod
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - "./dod-server/config:/temp/config"
-      - "./dod-server/mods:/temp/mods"
-    ports:
-      - "27016:27015/udp"
-      - "27016:27015/tcp"
-      - "26900:26900/udp"
-    healthcheck:
-      test: ["CMD-SHELL", "ps -e | grep -q hlds_linux"]
-      interval: 2s
-      timeout: 2s
-      retries: 2
-      start_period: 8s
-    # +maxplayers: 12 players + 1 HLTV proxy + 1 spectator slot
-    command: >
-      +log on
-      +rcon_password "changeme"
-      +maxplayers 14
-      +map dod_anzio
-      +localinfo mm_gamedll marinebot/marinebot.so
+# DoD HUD Observer — Standalone Data Server
+#
+# Runs the HUD Observer backend + frontend in Docker (for CI or isolated testing).
+# For a full KTP stack (game servers + data server + HLTV proxies), use:
+#   KTPInfrastructure/docker-compose.local.yml
+#
+# Usage:
+#   docker compose up -d        # start data server
+#   docker compose down         # stop
+#   docker compose logs -f      # tail logs
+#
+# Ports:
+#   3000 — React frontend (OBS browser source / watch page)
+#   3001 — REST API
+#   4000 — Socket.IO
+#   8088 — HTTP ingest (AMXX plugin POSTs here)
 
-  hltv:
-    image: jives/hlds:dod
-    depends_on:
-      hlds:
-        condition: service_healthy
-    volumes:
-      - "./dod-server/hltv.cfg:/opt/steam/hlds/hltv.cfg:ro"
+services:
+  data:
+    build:
+      context: .
+      dockerfile: data-server/Dockerfile
     ports:
+      - "3000:3000"
+      - "3001:3001"
+      - "4000:4000"
+      - "8088:8088"
       - "27020:27020/udp"
-    entrypoint: ""
-    command:
-      - sh
-      - -c
-      - |
-        sleep 5
-        cd /opt/steam/hlds
-        export LD_LIBRARY_PATH=.
-        exec ./hltv -port 27020
+      - "27021:27021/udp"
+      - "27500:27500/udp"
+      - "3306:3306"
+    volumes:
+      - "./config.yaml:/app/config.yaml:ro"
+      - "mysql-data:/var/lib/mysql"
+
+
+volumes:
+  mysql-data:

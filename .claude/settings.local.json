@@ -26,7 +26,23 @@
       "WebFetch(domain:dayofdefeat.fandom.com)",
       "WebFetch(domain:sourceforge.net)",
       "Bash(docker compose up -d hltv)",
-      "Bash(npx react-scripts build --no-color)"
+      "Bash(npx react-scripts build --no-color)",
+      "Read(//d/Git/KTPInfrastructure/**)",
+      "Bash(make build:*)",
+      "Bash(docker info:*)",
+      "Bash(VERSION=localtest KTP_PROJECT_ROOT=d:/Git docker compose -f build/docker-compose.yml build ktp-amxx ktp-reapi ktp-curl)",
+      "Bash(VERSION=localtest KTP_PROJECT_ROOT=d:/Git docker compose -f build/docker-compose.yml build ktp-plugins)",
+      "Bash(docker run:*)",
+      "Bash(docker compose:*)",
+      "Bash(mv docker-compose.yml docker-compose.legacy.yml)",
+      "Bash(ls docker-compose*.yml)",
+      "Bash(docker exec:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(npx jest:*)",
+      "Bash(curl -s http://localhost:3001/metrics)",
+      "Bash(VERSION=$\\(date +%Y%m%d\\) KTP_PROJECT_ROOT=/d/Git docker compose -f docker-compose.local.yml up -d --force-recreate ktp-game-1 ktp-game-2)"
     ]
   }
 }
