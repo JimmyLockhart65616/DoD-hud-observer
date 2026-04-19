@@ -109,21 +109,6 @@ new g_flag_last_progress[MAX_FLAGS];     // last-emitted progress %, to avoid sp
 new g_flag_prev_allies_count[MAX_FLAGS];
 new g_flag_prev_axis_count[MAX_FLAGS];
 
-// Debounce: CA_is_capturing and CA_num_allies/axis occasionally pulse non-zero
-// for a single tick when nobody is on the point (observed on dod_anzio at map
-// start — Bridge + Plaza both read is_capping=1, num_allies=1, num_axis=1).
-// Require the raw state to persist for CAP_DEBOUNCE_TICKS polls before we
-// believe it and emit cap_started/stopped/contested.
-#define CAP_DEBOUNCE_TICKS 3
-new g_flag_pending_capper[MAX_FLAGS];
-new g_flag_pending_ticks[MAX_FLAGS];
-
-// Settling window: suppress all cap-state emissions for N seconds after map
-// load so the game-side entity state can stabilize. flag_zone_players counts
-// still flow for display, but we don't emit started/stopped/contested.
-#define CAP_SETTLE_SECONDS 5.0
-new Float:g_cap_settle_until;
-
 // Pending captor batch — populated by dod_score_event during a successful cap,
 // drained on the next dod_control_point_captured for that CP. Mirrors KTPScoreTracker.
 new g_flag_pending_captor_ids[MAX_FLAGS][MAX_CAPTORS];
@@ -171,13 +156,8 @@ public plugin_cfg() {
     // Reset flag state
     for (new i = 0; i < MAX_FLAGS; i++) {
         g_flag_owner[i] = -1;
-        g_flag_pending_capper[i] = 0;
-        g_flag_pending_ticks[i]  = 0;
     }
     g_flag_count = 0;
-
-    // Don't emit cap events for the first few seconds after map load
-    g_cap_settle_until = get_gametime() + CAP_SETTLE_SECONDS;
 
     // Clear any stragglers from the previous map, then re-arm.
     remove_task(TASK_ID_INIT_CONFIG);
@@ -756,59 +736,46 @@ public task_poll_zones() {
         add(zones_json, charsmax(zones_json), zbuf);
         first_zone = false;
 
-        // ── Cap state transitions (game-authoritative, with debounce) ──
-        // Raw read from the CAreaCapture entity. Can pulse at map start or
-        // when spawns cycle near a zone — require N consecutive identical
-        // polls before committing a state change.
-        new is_capping  = dodx_area_get_data(f, CA_is_capturing);
-        new raw_capper  = is_capping ? dodx_area_get_data(f, CA_capturing_team) : 0;
+        // ── Cap state transitions (game-authoritative) ──
+        new is_capping = dodx_area_get_data(f, CA_is_capturing);
+        new new_capper = is_capping ? dodx_area_get_data(f, CA_capturing_team) : 0;
 
-        new committed_capper = g_flag_capping_team[f];
-        if (raw_capper == g_flag_pending_capper[f]) {
-            if (g_flag_pending_ticks[f] < CAP_DEBOUNCE_TICKS) g_flag_pending_ticks[f]++;
-        } else {
-            g_flag_pending_capper[f] = raw_capper;
-            g_flag_pending_ticks[f]  = 1;
+        new prev_capper = g_flag_capping_team[f];
+        new bool:was_contested = g_flag_contested[f];
+
+        // Contested: a team is actively capping AND the opposing team is also in the zone.
+        new bool:now_contested = false;
+        if (new_capper == TEAM_ALLIES && xc > 0) now_contested = true;
+        if (new_capper == TEAM_AXIS   && ac > 0) now_contested = true;
+
+        if (prev_capper == 0 && new_capper != 0) {
+            g_flag_capping_team[f]   = new_capper;
+            g_flag_contested[f]      = now_contested;
+            g_flag_last_progress[f]  = -1;
+            emit_cap_started(f, new_capper);
+        }
+        else if (prev_capper != 0 && new_capper == 0) {
+            g_flag_capping_team[f]  = 0;
+            g_flag_contested[f]     = false;
+            g_flag_last_progress[f] = -1;
+            emit_cap_stopped(f, prev_capper);
+        }
+        else if (prev_capper != 0 && new_capper != 0 && prev_capper != new_capper) {
+            g_flag_capping_team[f]  = new_capper;
+            g_flag_contested[f]     = now_contested;
+            g_flag_last_progress[f] = -1;
+            emit_cap_stopped(f, prev_capper);
+            emit_cap_started(f, new_capper);
         }
 
-        new bool:settling     = (get_gametime() < g_cap_settle_until);
-        new bool:commit_ready = (g_flag_pending_ticks[f] >= CAP_DEBOUNCE_TICKS) && !settling;
-
-        if (commit_ready && raw_capper != committed_capper) {
-            new bool:was_contested = g_flag_contested[f];
-
-            new bool:now_contested = false;
-            if (raw_capper == TEAM_ALLIES && xc > 0) now_contested = true;
-            if (raw_capper == TEAM_AXIS   && ac > 0) now_contested = true;
-
-            if (committed_capper == 0 && raw_capper != 0) {
-                g_flag_capping_team[f]   = raw_capper;
-                g_flag_contested[f]      = now_contested;
-                g_flag_last_progress[f]  = -1;
-                emit_cap_started(f, raw_capper);
-            }
-            else if (committed_capper != 0 && raw_capper == 0) {
-                g_flag_capping_team[f]  = 0;
-                g_flag_contested[f]     = false;
-                g_flag_last_progress[f] = -1;
-                emit_cap_stopped(f, committed_capper);
-            }
-            else if (committed_capper != 0 && raw_capper != 0 && committed_capper != raw_capper) {
-                g_flag_capping_team[f]  = raw_capper;
-                g_flag_contested[f]     = now_contested;
-                g_flag_last_progress[f] = -1;
-                emit_cap_stopped(f, committed_capper);
-                emit_cap_started(f, raw_capper);
-            }
-
-            if (g_flag_capping_team[f] != 0 && now_contested && !was_contested) {
-                g_flag_contested[f] = true;
-                new contesting_team = (g_flag_capping_team[f] == TEAM_ALLIES) ? TEAM_AXIS : TEAM_ALLIES;
-                new contester_count = (contesting_team == TEAM_ALLIES) ? ac : xc;
-                emit_cap_contested(f, contesting_team, contester_count);
-            } else if (g_flag_capping_team[f] != 0 && !now_contested && was_contested) {
-                g_flag_contested[f] = false;
-            }
+        // Contested state toggles while capping
+        if (g_flag_capping_team[f] != 0 && now_contested && !was_contested) {
+            g_flag_contested[f] = true;
+            new contesting_team = (g_flag_capping_team[f] == TEAM_ALLIES) ? TEAM_AXIS : TEAM_ALLIES;
+            new contester_count = (contesting_team == TEAM_ALLIES) ? ac : xc;
+            emit_cap_contested(f, contesting_team, contester_count);
+        } else if (g_flag_capping_team[f] != 0 && !now_contested && was_contested) {
+            g_flag_contested[f] = false;
         }
 
         // Progress tick (derived from m_fTimeRemaining / m_nCapTime).
@@ -1020,9 +987,7 @@ stock build_pending_captor_list(cp_index, owning_team, out[], len) {
 public cmd_dump_zones(id, level, cid) {
     if (!cmd_access(id, ADMIN_RCON, cid, 1)) return PLUGIN_HANDLED;
 
-    server_print("[HUD] zone dump (count=%d, settling=%s)",
-        g_flag_count,
-        (get_gametime() < g_cap_settle_until) ? "yes" : "no");
+    server_print("[HUD] zone dump (count=%d)", g_flag_count);
 
     for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
         new ac = dodx_area_get_data(f, CA_num_allies);
@@ -1035,10 +1000,9 @@ public cmd_dump_zones(id, level, cid) {
         new Float:tr = Float:dodx_area_get_data(f, CA_time_remaining);
         new ct_total = dodx_area_get_data(f, CA_timetocap);
 
-        server_print("[HUD] CP[%d] '%s' own=%d cap=%d/team=%d  a=%d/%d x=%d/%d  t=%.1f/%d  committed=%d pending=%d/%d",
+        server_print("[HUD] CP[%d] '%s' own=%d cap=%d/team=%d  a=%d/%d x=%d/%d  t=%.1f/%d  committed=%d",
             f, g_flag_name_cache[f], ot, isc, ct, ac, an, xc, xn,
-            tr, ct_total, g_flag_capping_team[f],
-            g_flag_pending_capper[f], g_flag_pending_ticks[f]);
+            tr, ct_total, g_flag_capping_team[f]);
     }
     return PLUGIN_HANDLED;
 }
