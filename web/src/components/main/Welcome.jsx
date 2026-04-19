@@ -12,6 +12,7 @@ class Welcome extends React.Component {
                         </p>
                         <ul style={{ marginTop: '16px', lineHeight: '2' }}>
                             <li><a href="/watch">Watch / Replay</a> — pick a live or completed match</li>
+                            <li><a href="/help">Viewer Guide</a> — how to set up and use the HUD in OBS</li>
                         </ul>
                     </Col>
                 </Row>

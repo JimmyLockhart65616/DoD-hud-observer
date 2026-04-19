@@ -1,45 +1,68 @@
 # DoD HUD Observer
 
-Live broadcast overlay for **Day of Defeat 1.3** — built as an OBS browser source that displays real-time game state from a DoD server.
+Live broadcast overlay for **Day of Defeat 1.3** — an OBS browser source that renders real-time game state (scores, flag captures, player classes, kill feed, prone-shame timer) streamed from a DoD server.
 
-![DoD HUD Observer](e2e/snapshots/04-observed-player.png)
+![DoD HUD Observer](web/public/help/hud-overview.png)
+
+Originally retrofit from the CS 1.6 HUD Observer project and adapted to run on the [KTP League](https://github.com/afraznein) server stack.
+
+## Viewer Guide
+
+If you just want to know what the overlay is showing on stream, see **[docs/VIEWER_GUIDE.md](docs/VIEWER_GUIDE.md)** — annotated screenshots of each panel. The same guide is available in the running web app at `/help`.
 
 ## Features
 
-- **Live scoreboard** — per-player kills, deaths, score, and class/weapon info for both teams
-- **Flag status bar** — real-time capture progress with capping/owned indicators
-- **Match timer** — synced countdown from the game server with drift correction
-- **Kill feed** — scrolling kill notifications with weapon icons
-- **Observed player** — highlights the player the caster is spectating
-- **Prone shame timer** — visible elapsed timer when a player goes prone
+- **Live scoreboard** — per-player kills, deaths, class, and current weapon for both teams
+- **Flag bar** — territorial cap points with live capping / owned state
+- **Match timer** — server-synced countdown with drift correction (`time_sync` every 30s)
+- **Kill feed** — scrolling notifications with weapon icons and team colors
+- **Observed player** — highlights whoever the caster is spectating
+- **Prone shame timer** — elapsed timer pinned to any player who goes prone
+- **Flag feed** — recent captures and cap breaks, adjacent to the kill feed
+- **Match replay** — events are persisted per `matchId`, so completed matches can be replayed
 
-## How It Works
+## Architecture
 
 ```text
-DoD Game Server (HLDS + Metamod-P + AMXX)
-  └─ AMXX plugin (TCP client)
-       └─ streams JSON events to Node.js backend
-
-Observer PC
-  └─ Node.js backend (TCP server on port 9000)
-       ├─ receives game events from plugin
-       ├─ relays via Socket.IO to frontend
-       └─ serves REST API (teams, players, matches)
-  └─ React frontend (port 3000)
-       └─ OBS browser source at http://localhost:3000/screen
+KTP-ReHLDS game server  (extension-mode AMXX — no Metamod)
+  └─ KTPHudObserver.amxx
+       ├─ uses DODX forwards (spawn, death, prone, cap, team events)
+       ├─ hooks ktp_match_start / ktp_match_end from KTPMatchHandler
+       └─ POSTs JSON events via KTPAmxxCurl  ──┐
+                                                │ HTTP + X-Auth-Key
+Data server  ──────────────────────────────────┘
+  └─ Node.js backend
+       ├─ Express ingest on :8088
+       ├─ MatchRecorder  → events.jsonl + metadata.json per match
+       ├─ Socket.IO on :4000 (rooms keyed by matchId)
+       └─ REST API on :3001 (teams, players, matches)
+  └─ React frontend
+       └─ OBS browser source at http://<host>:3000/screen
 ```
+
+**Extension-mode constraint:** the plugin must not depend on Metamod, fakemeta, hamsandwich, or the engine module. The KTP stack loads only `dodx_ktp`, `reapi_ktp`, and `amxxcurl_ktp`. Use HL SDK directly (`edict->v.*`, `g_engfuncs`) or existing dodx natives when adding functionality.
+
+### Ports
+
+| Port | Service                              |
+| ---- | ------------------------------------ |
+| 3000 | React frontend (OBS browser source)  |
+| 3001 | REST API                             |
+| 4000 | Socket.IO (backend ↔ frontend)       |
+| 8088 | HTTP ingest (plugin → backend)       |
 
 ## Quick Start
 
 ```bash
-# 1. Copy and edit config
-cp config.example.json config.json
-
-# 2. Install dependencies
+# 1. Install dependencies (root + web workspace)
 npm install
+cd web && npm install && cd ..
 
-# 3. Start backend + frontend
-npm run backend   # Node.js backend with hot reload
+# 2. Configure
+cp config.example.yaml config.yaml    # set auth key, ports, storage dir
+
+# 3. Run locally
+npm run backend   # Node backend with hot reload
 npm run web       # React dev server
 
 # 4. Point OBS browser source at http://localhost:3000/screen
@@ -47,38 +70,59 @@ npm run web       # React dev server
 
 ## Testing Without a Game Server
 
-The mocker simulates a full 6v6 match with scripted events — no HLDS needed.
+The mocker replays a 55-second scripted 6v6 match — no HLDS required.
 
 ```bash
-npm run mocker        # start event simulator
-npm run web:mocker    # React pointed at mocker
-
-# Or run automated E2E tests (starts mocker + React, takes screenshots)
-npm run e2e
+npm run mocker        # event simulator
+npm run web:mocker    # React pointed at the mocker
 ```
 
-## Game Server Setup
-
-Requires HLDS with Metamod-P and AMX Mod X. A Docker Compose setup is included:
+Or run the full Playwright suite that walks the mocker timeline and captures 10 screenshots:
 
 ```bash
-docker compose up     # start DoD HLDS with Metamod-P + AMXX
+npm run e2e           # headless
+npm run e2e:headed    # visible browser
 ```
 
-See [CLAUDE.md](CLAUDE.md) for full architecture details, event schema, and plugin compilation instructions.
+Snapshots land in `e2e/snapshots/` (gitignored) — the same ones used throughout the viewer guide.
+
+## Running the Full Stack
+
+Game servers and the data container are orchestrated from [KTPInfrastructure](https://github.com/afraznein/KTPInfrastructure):
+
+```bash
+cd ../KTPInfrastructure
+make local-up     # ktp-game-1, ktp-game-2, data (all three containers)
+make local-logs   # tail all logs
+make local-down
+```
+
+For frontend-only dev with no game servers, this repo's own `docker-compose.yml` spins up just the data container (backend + frontend).
+
+## Compiling the AMXX Plugin
+
+Source: [`KTPHudObserver.sma`](KTPHudObserver.sma). The compile command (run inside the `jives/hlds:dod` image, because the Linux AMXX compiler needs to resolve includes relative to itself) is documented in [CLAUDE.md](CLAUDE.md#compiling-the-amxx-plugin).
+
+Expected output is ~14.7 KB with one harmless `client_disconnect` deprecation warning.
 
 ## Tech Stack
 
-- **Backend**: Node.js, TypeScript, Express, Socket.IO, LowDB
-- **Frontend**: React, Zustand, Socket.IO client
-- **Plugin**: AMX Mod X (Pawn) on Metamod-P 1.21p38
-- **Testing**: Playwright + mocker for E2E screenshots
+- **Backend** — Node.js, TypeScript, Express, Socket.IO, LowDB
+- **Frontend** — React 16, Zustand, Socket.IO client, react-router
+- **Plugin** — AMX Mod X (Pawn) targeting KTPAMXX extension mode
+- **Testing** — Playwright + headless Chromium, driven by the mocker
 
 ## Match Format
 
 - 6v6, Allies vs Axis
 - Two halves on the same map — teams swap sides at halftime
-- Stats reset each half
+- Stats reset on `half_start`; roster is preserved
+
+## Further Reading
+
+- [docs/VIEWER_GUIDE.md](docs/VIEWER_GUIDE.md) — what each panel on the overlay means
+- [CLAUDE.md](CLAUDE.md) — full event schema, class IDs, weapon names, compile recipe, architecture notes
+- [docs/KTP_PUSH_WORKFLOW.md](docs/KTP_PUSH_WORKFLOW.md) — safety playbook for pushing to `KTPAMXX` / `KTPInfrastructure`
 
 ## License
 

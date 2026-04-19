@@ -9,7 +9,8 @@ import PlayersLeft from '../core/PlayersLeft/PlayersLeft';
 import PlayersRight from '../core/PlayersRight/PlayersRight';
 import Flags from '../core/Flags/Flags';
 import FlagFeed from '../core/FlagFeed/FlagFeed';
-import PlayerObserved from '../core/PlayerObserved/PlayerObserved';
+// PlayerObserved disabled: no HLTV signal yet to know which player the caster is watching.
+// import PlayerObserved from '../core/PlayerObserved/PlayerObserved';
 
 import hudconfig from './hud.json';
 
@@ -74,9 +75,9 @@ function Example() {
 
             <div className="hud-middle" />
 
-            <div className="observed-bar">
+            {/* <div className="observed-bar">
                 <PlayerObserved players={[...alliesPlayers, ...axisPlayers]} />
-            </div>
+            </div> */}
 
             <div className="bottom-bar">
                 <div className="team-cards">

@@ -15,6 +15,7 @@ import Welcome from './components/main/Welcome';
 import Stream from './components/stream/Stream';
 import Screen from './components/screen/Example';
 import MatchPicker from './components/matchPicker/MatchPicker';
+import Help from './components/help/Help';
 
 
 function App() {
@@ -28,6 +29,7 @@ function App() {
           <Route path="/watch" component={MatchPicker} />
           <Route path="/stream/:id" component={Stream} />
           <Route path="/screen" component={Screen} />
+          <Route path="/help" component={Help} />
           <Route path="/" component={Welcome} />
         </Switch>
       </Router>

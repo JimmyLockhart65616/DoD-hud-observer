@@ -552,12 +552,13 @@ export const SocketStoreComponent = () => {
 
 
         // ── Caster observed ───────────────────────────────────────────────────
-
-        gameEvents.on('caster_observed_player', (raw) => {
-            const e = JSON.parse(raw);
-            setAlliesPlayers(prev => prev.map(p => ({ ...p, spectate: p.user_id === e.user_id })));
-            setAxisPlayers(prev => prev.map(p => ({ ...p, spectate: p.user_id === e.user_id })));
-        });
+        // Disabled: no HLTV signal yet to tell us which player the caster is spectating.
+        // See docs/VIEWER_GUIDE.md → Future Features.
+        // gameEvents.on('caster_observed_player', (raw) => {
+        //     const e = JSON.parse(raw);
+        //     setAlliesPlayers(prev => prev.map(p => ({ ...p, spectate: p.user_id === e.user_id })));
+        //     setAxisPlayers(prev => prev.map(p => ({ ...p, spectate: p.user_id === e.user_id })));
+        // });
 
 
         return () => gameEvents.removeAllListeners();

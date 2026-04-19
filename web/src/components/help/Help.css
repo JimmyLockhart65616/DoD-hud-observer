@@ -1,0 +1,102 @@
+.help-container {
+    margin-top: 40px;
+    margin-bottom: 80px;
+    max-width: 900px;
+}
+
+.help-container h1 {
+    margin-bottom: 16px;
+}
+
+.help-lead {
+    font-size: 1.1rem;
+    color: #555;
+    margin-bottom: 24px;
+}
+
+.help-toc {
+    background: #f6f8fa;
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin-bottom: 32px;
+}
+
+.help-toc ul {
+    margin-bottom: 0;
+    margin-top: 8px;
+    columns: 2;
+    -webkit-columns: 2;
+    -moz-columns: 2;
+}
+
+.help-section {
+    margin-top: 40px;
+    scroll-margin-top: 80px;
+}
+
+.help-section h2 {
+    border-bottom: 1px solid #e1e4e8;
+    padding-bottom: 8px;
+    margin-bottom: 16px;
+}
+
+.help-screenshot {
+    width: 100%;
+    max-width: 100%;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    background: #0f1629;
+}
+
+.help-section ul,
+.help-section ol {
+    line-height: 1.8;
+}
+
+.help-section code {
+    background: #f3f4f6;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.9em;
+    color: #24292f;
+}
+
+.team-allies {
+    color: #4e9a06;
+    font-weight: 600;
+}
+
+.team-axis {
+    color: #cc0000;
+    font-weight: 600;
+}
+
+.help-section h3 {
+    margin-top: 24px;
+    margin-bottom: 10px;
+    font-size: 1.15rem;
+    color: #24292f;
+}
+
+.help-url {
+    background: #0f1629;
+    color: #d1e1ff;
+    padding: 10px 14px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    margin-top: 8px;
+    margin-bottom: 8px;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.help-callout {
+    border-left: 4px solid #0969da;
+    background: #ddf4ff;
+    color: #0a3069;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 0 4px 4px 0;
+}
