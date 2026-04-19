@@ -54,9 +54,17 @@ run() {
 echo "==> Deploy target: $HOST:$REMOTE_DIR"
 echo "==> Services: backend=$SERVICE, web=$WEB_SERVICE"
 
+# Frontend env vars are injected inline so they win over any web/.env.local
+# file (CRA loads .env.local in every mode except test — it silently overrides
+# .env.production during build and bakes localhost URLs into the bundle).
+WEB_API_URL="${REACT_APP_API_URL:-http://74.91.112.242:3001}"
+WEB_SOCKET_URL="${REACT_APP_SOCKET_URL:-http://74.91.112.242:4000}"
+
 if [[ "$DO_FRONTEND" == 1 && "$DO_BUILD" == 1 ]]; then
     echo "==> Building frontend (web/build)"
-    run bash -c "cd web && npm ci && npm run build"
+    echo "    REACT_APP_API_URL=$WEB_API_URL"
+    echo "    REACT_APP_SOCKET_URL=$WEB_SOCKET_URL"
+    run bash -c "cd web && npm ci && REACT_APP_API_URL='$WEB_API_URL' REACT_APP_SOCKET_URL='$WEB_SOCKET_URL' npm run build"
 fi
 
 run ssh "$HOST" "mkdir -p $REMOTE_DIR/web"

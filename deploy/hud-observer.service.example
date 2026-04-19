@@ -13,6 +13,8 @@ Environment=NODE_ENV=production
 Environment=HUD_AUTH_KEY=REPLACE_WITH_SECRET
 # Data server already has a KTP service on 8088 — move ingest to 9000.
 Environment=HUD_INGEST_PORT=9000
+# CORS origin for Socket.IO — must match the browser-visible frontend URL.
+Environment=HUD_FRONTEND_ORIGIN=http://74.91.112.242:3000
 StandardOutput=append:/var/log/hud-observer/backend.log
 StandardError=append:/var/log/hud-observer/backend-err.log
 
