@@ -4,7 +4,7 @@ Live broadcast overlay for **Day of Defeat 1.3** — an OBS browser source that 
 
 ![DoD HUD Observer](web/public/help/hud-overview.png)
 
-Originally retrofit from the CS 1.6 HUD Observer project and adapted to run on the [KTP League](https://github.com/afraznein) server stack.
+Part of the [KTP League](https://github.com/afraznein) competitive infrastructure, originally retrofit from the CS 1.6 HUD Observer project. See [KTP Stack Dependencies](#ktp-stack-dependencies) for the repos this depends on.
 
 ## Viewer Guide
 
@@ -30,15 +30,22 @@ KTP-ReHLDS game server  (extension-mode AMXX — no Metamod)
        ├─ hooks ktp_match_start / ktp_match_end from KTPMatchHandler
        └─ POSTs JSON events via KTPAmxxCurl  ──┐
                                                 │ HTTP + X-Auth-Key
-Data server  ──────────────────────────────────┘
+Web server  ───────────────────────────────────┘
   └─ Node.js backend
        ├─ Express ingest on :8088
        ├─ MatchRecorder  → events.jsonl + metadata.json per match
        ├─ Socket.IO on :4000 (rooms keyed by matchId)
        └─ REST API on :3001 (teams, players, matches)
-  └─ React frontend
-       └─ OBS browser source at http://<host>:3000/screen
+  └─ React frontend (served on :3000)
+       │
+       │ HTTP + WebSocket
+       ▼
+Caster / observer PC
+  └─ OBS Studio
+       └─ Browser Source pointed at http://<web-server>:3000/screen?server=...
 ```
+
+The caster's PC does not run any part of this stack — it only opens the published URL in an OBS Browser Source, composited over an HLTV capture of the match. Everything else (ingest, storage, Socket.IO, REST, static frontend) lives on the web server.
 
 **Extension-mode constraint:** the plugin must not depend on Metamod, fakemeta, hamsandwich, or the engine module. The KTP stack loads only `dodx_ktp`, `reapi_ktp`, and `amxxcurl_ktp`. Use HL SDK directly (`edict->v.*`, `g_engfuncs`) or existing dodx natives when adding functionality.
 
@@ -86,9 +93,9 @@ npm run e2e:headed    # visible browser
 
 Snapshots land in `e2e/snapshots/` (gitignored) — the same ones used throughout the viewer guide.
 
-## Running the Full Stack
+## Running the Full Stack Locally
 
-Game servers and the data container are orchestrated from [KTPInfrastructure](https://github.com/afraznein/KTPInfrastructure):
+End-to-end testing with real game servers is orchestrated from [KTPInfrastructure](https://github.com/afraznein/KTPInfrastructure) — it builds the KTP-ReHLDS + KTPAMXX game server images and the web server (this repo) as a single compose stack:
 
 ```bash
 cd ../KTPInfrastructure
@@ -97,7 +104,22 @@ make local-logs   # tail all logs
 make local-down
 ```
 
-For frontend-only dev with no game servers, this repo's own `docker-compose.yml` spins up just the data container (backend + frontend).
+Two DoD servers come up on `localhost:27016` and `localhost:27017`, posting ingest events to the co-hosted web server on `:8088`. Browser source URL: `http://localhost:3000/screen?server=<server-hostname>`.
+
+For frontend-only iteration with no game servers, this repo's own `docker-compose.yml` spins up just the web-server container (backend + frontend + mocker-ready).
+
+## KTP Stack Dependencies
+
+This project is part of the [KTP League](https://github.com/afraznein) competitive infrastructure. Runtime dependencies:
+
+| Repo | Role |
+| --- | --- |
+| [KTPInfrastructure](https://github.com/afraznein/KTPInfrastructure) | Docker orchestration, deploy tooling, server inventory — builds this repo's web-server image |
+| [KTP-ReHLDS](https://github.com/afraznein/KTP-ReHLDS) | Game server — extension loader that hosts AMXX without Metamod |
+| [KTPAMXX](https://github.com/afraznein/KTPAMXX) | AMX Mod X fork providing `dodx_ktp` and `reapi_ktp` modules used by the plugin |
+| [KTPAmxxCurl](https://github.com/afraznein/KTPAmxxCurl) | Async HTTP module — the plugin uses it to POST ingest events |
+| [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler) | Emits the `ktp_match_start` / `ktp_match_end` forwards this plugin hooks to bracket a match |
+| [KTPhlsdk](https://github.com/afraznein/KTPhlsdk) | Modified HL1 SDK headers — required when building the native modules above |
 
 ## Compiling the AMXX Plugin
 
