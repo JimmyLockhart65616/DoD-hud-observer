@@ -7,6 +7,12 @@ import { MetricsCollector } from './metrics';
 // Tracks the latest game state per server so late-joining frontends get a
 // snapshot on connect. State is keyed by server hostname (X-Server-Hostname).
 
+// Evict cached players whose lastSeen is older than this from snapshot replay.
+// Covers missed player_disconnect events (crashes, changelevel, rcon restart).
+// During live play every player gets refreshed by spawn/score/kill/prone/etc.,
+// so only genuine ghosts age out.
+const PLAYER_STALE_MS = 3 * 60 * 1000;
+
 interface ServerState {
     players: Map<string, any>;    // user_id → latest player_connect/spawn/score state
     team_score: any | null;       // latest team_score event
@@ -30,14 +36,23 @@ function getOrCreateState(server: string): ServerState {
 
 function updateServerState(server: string, event: any): void {
     const state = getOrCreateState(server);
+    const now = Date.now();
 
     switch (event.event) {
+        case 'ktp_match_start':
+        case 'ktp_match_end':
+            // Hard reset between matches — any stale ghosts from the previous
+            // session can't survive a new match boundary.
+            state.players.clear();
+            state.team_score = null;
+            break;
         case 'player_connect':
             state.players.set(event.user_id, {
                 ...state.players.get(event.user_id),
                 user_id: event.user_id,
                 name: event.name,
                 team: event.team,
+                lastSeen: now,
             });
             break;
         case 'player_spawn':
@@ -50,6 +65,7 @@ function updateServerState(server: string, event: any): void {
                 weapon_primary: event.weapon_primary,
                 weapon_secondary: event.weapon_secondary,
                 alive: true,
+                lastSeen: now,
             });
             break;
         case 'player_team_change':
@@ -94,10 +110,19 @@ function updateServerState(server: string, event: any): void {
             state.players.forEach(p => {
                 p.kills = 0; p.deaths = 0; p.score = 0;
                 p.alive = true; p.class_id = null;
+                p.lastSeen = now;
             });
             state.team_score = null;
             state.timeleft = event;
             break;
+    }
+
+    // Refresh lastSeen for any event referencing an already-cached player.
+    // Catches prone_change, weapon_pickup, nade_throw, user_say, etc. without
+    // a per-event case — any sign of life keeps the player out of the stale bin.
+    const uid = event.user_id ?? event.killer_id;
+    if (uid && state.players.has(uid)) {
+        state.players.get(uid).lastSeen = now;
     }
 }
 
@@ -121,8 +146,11 @@ export function getServerSnapshot(server: string): string[] {
     if (state.timeleft) events.push(JSON.stringify(state.timeleft));
 
     // Replay players: emit player_connect then player_spawn for each
+    const now = Date.now();
     state.players.forEach((p) => {
         if (p.team === 'spectator' || p.team === 'unassigned') return;
+        // Drop stale entries — missed disconnects age out here
+        if (now - (p.lastSeen ?? 0) > PLAYER_STALE_MS) return;
         events.push(JSON.stringify({
             event: 'player_connect', user_id: p.user_id, name: p.name, team: p.team,
         }));
