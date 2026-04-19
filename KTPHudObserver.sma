@@ -37,6 +37,15 @@
 #define BUFFER_SIZE     2048
 #define CURL_TIMEOUT_MS 1000
 
+// Task IDs — used to clear stale tasks on map change before re-scheduling.
+// AMXX task persistence across changelevel is inconsistent in practice;
+// we reschedule in plugin_cfg and remove_task() defensively to avoid dupes.
+#define TASK_ID_INIT_CONFIG  9001
+#define TASK_ID_POLL_PRONE   9002
+#define TASK_ID_POLL_ZONES   9003
+#define TASK_ID_TIME_SYNC    9004
+#define TASK_ID_EMIT_FLAGS   9005
+
 // Team IDs (dodconst.inc: ALLIES=1, AXIS=2)
 #define TEAM_UNASSIGNED 0
 #define TEAM_ALLIES     1
@@ -79,6 +88,12 @@ new g_player_team[MAX_PLAYERS + 1];
 new g_player_prone[MAX_PLAYERS + 1];
 new g_player_alive[MAX_PLAYERS + 1];
 
+// Local kill counter — authoritative for the HUD. We can't rely on v.frags
+// at client_death time because DODX's Damage-hook path fires the forward
+// before the engine's CDODPlayer::Killed() has incremented frags. Reset on
+// connect, disconnect, and ktp_match_start (half reset).
+new g_player_kills[MAX_PLAYERS + 1];
+
 // Flag ownership cache
 new g_flag_owner[MAX_FLAGS];
 new g_flag_count;
@@ -93,6 +108,21 @@ new bool:g_flag_contested[MAX_FLAGS];
 new g_flag_last_progress[MAX_FLAGS];     // last-emitted progress %, to avoid spam
 new g_flag_prev_allies_count[MAX_FLAGS];
 new g_flag_prev_axis_count[MAX_FLAGS];
+
+// Debounce: CA_is_capturing and CA_num_allies/axis occasionally pulse non-zero
+// for a single tick when nobody is on the point (observed on dod_anzio at map
+// start — Bridge + Plaza both read is_capping=1, num_allies=1, num_axis=1).
+// Require the raw state to persist for CAP_DEBOUNCE_TICKS polls before we
+// believe it and emit cap_started/stopped/contested.
+#define CAP_DEBOUNCE_TICKS 3
+new g_flag_pending_capper[MAX_FLAGS];
+new g_flag_pending_ticks[MAX_FLAGS];
+
+// Settling window: suppress all cap-state emissions for N seconds after map
+// load so the game-side entity state can stabilize. flag_zone_players counts
+// still flow for display, but we don't emit started/stopped/contested.
+#define CAP_SETTLE_SECONDS 5.0
+new Float:g_cap_settle_until;
 
 // Pending captor batch — populated by dod_score_event during a successful cap,
 // drained on the next dod_control_point_captured for that CP. Mirrors KTPScoreTracker.
@@ -125,15 +155,12 @@ public plugin_init() {
     // Admin command: caster observe
     register_concmd("amx_dod_observe", "cmd_observe", ADMIN_RCON, "<steamid> — caster observe");
 
-    // Periodic tasks
-    set_task(PRONE_POLL_INTERVAL, "task_poll_prone",  _, _, _, "b");
-    set_task(ZONE_POLL_INTERVAL,  "task_poll_zones",  _, _, _, "b");
-    set_task(TIME_SYNC_DELAY,     "task_time_sync",   _, _, _, "b");
+    // Diagnostic: dump raw CAreaCapture values for every CP (server console only)
+    register_concmd("amx_hud_dump_zones", "cmd_dump_zones", ADMIN_RCON, "dump raw zone state");
 
-    // Re-emit flags_init periodically so the backend cache stays populated
-    // across data-server restarts (DoD has no World/Round_Start log event,
-    // so the cap-area state would otherwise only be sent once at map start).
-    set_task(30.0, "task_emit_flags", _, _, _, "b");
+    // Periodic tasks are scheduled in plugin_cfg (see below) so they get
+    // re-armed on every map change — repeating tasks set here in plugin_init
+    // did not survive changelevel on Denver 5.
 }
 
 public task_emit_flags() {
@@ -144,12 +171,28 @@ public plugin_cfg() {
     // Reset flag state
     for (new i = 0; i < MAX_FLAGS; i++) {
         g_flag_owner[i] = -1;
+        g_flag_pending_capper[i] = 0;
+        g_flag_pending_ticks[i]  = 0;
     }
     g_flag_count = 0;
 
-    // Defer CVAR + header init to ensure amxx.cfg has loaded
-    set_task(1.0, "task_init_config");
+    // Don't emit cap events for the first few seconds after map load
+    g_cap_settle_until = get_gametime() + CAP_SETTLE_SECONDS;
 
+    // Clear any stragglers from the previous map, then re-arm.
+    remove_task(TASK_ID_INIT_CONFIG);
+    remove_task(TASK_ID_POLL_PRONE);
+    remove_task(TASK_ID_POLL_ZONES);
+    remove_task(TASK_ID_TIME_SYNC);
+    remove_task(TASK_ID_EMIT_FLAGS);
+
+    // Defer CVAR + header init to ensure amxx.cfg has loaded
+    set_task(1.0, "task_init_config", TASK_ID_INIT_CONFIG);
+
+    set_task(PRONE_POLL_INTERVAL, "task_poll_prone", TASK_ID_POLL_PRONE, _, _, "b");
+    set_task(ZONE_POLL_INTERVAL,  "task_poll_zones", TASK_ID_POLL_ZONES, _, _, "b");
+    set_task(TIME_SYNC_DELAY,     "task_time_sync",  TASK_ID_TIME_SYNC,  _, _, "b");
+    set_task(30.0,                "task_emit_flags", TASK_ID_EMIT_FLAGS, _, _, "b");
 }
 
 public task_init_config() {
@@ -302,6 +345,9 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
     g_matchType = _:matchType;
     g_matchHalf = half;
 
+    // Reset per-player kill counters — stats wipe on half start.
+    for (new i = 1; i <= MAX_PLAYERS; i++) g_player_kills[i] = 0;
+
     server_print("[HUD] Match started: %s (map=%s type=%d half=%d)", matchId, map, _:matchType, half);
 
     // Send half_start event
@@ -428,6 +474,7 @@ public client_authorized(id) {
     g_player_team[id]  = TEAM_UNASSIGNED;
     g_player_prone[id] = PRONE_STANDING;
     g_player_alive[id] = 0;
+    g_player_kills[id] = 0;
 
     new json[256];
     formatex(json, charsmax(json),
@@ -450,6 +497,7 @@ public client_disconnect(id) {
     g_player_team[id]  = 0;
     g_player_prone[id] = PRONE_STANDING;
     g_player_alive[id] = 0;
+    g_player_kills[id] = 0;
 }
 
 // DODX forward: player spawned
@@ -556,6 +604,35 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
         victim_prone ? "true" : "false",
         killer_prone ? "true" : "false");
     post_event(json);
+
+    // DoD's engine fires ScoreShort when death count changes (via set_user_deaths)
+    // but not on frag increments — the HL scoreboard reads v.frags directly, so no
+    // message is needed for kills. Emit player_score for the killer explicitly so
+    // the HUD backend sees the new kill count.
+    //
+    // Track kills locally: reading v.frags here is off-by-one because DODX's
+    // Damage-hook path fires client_death BEFORE the engine's Killed() has
+    // incremented frags. Mirror DoD frag semantics: +1 normal, -1 teamkill, 0 suicide.
+    if (killer != victim && is_user_connected(killer)) {
+        if (TK) g_player_kills[killer]--;
+        else    g_player_kills[killer]++;
+        emit_player_score(killer);
+    }
+}
+
+stock emit_player_score(id) {
+    new steamid[32];
+    get_steamid(id, steamid, charsmax(steamid));
+
+    new kills  = g_player_kills[id];
+    new deaths = get_user_deaths(id);
+    new score  = dod_get_user_score(id);
+
+    new json[256];
+    formatex(json, charsmax(json),
+        "{^"event^":^"player_score^",^"user_id^":^"%s^",^"kills^":%d,^"deaths^":%d,^"score^":%d}",
+        steamid, kills, deaths, score);
+    post_event(json);
 }
 
 // DODX forward: prone state change
@@ -600,6 +677,9 @@ public task_poll_prone() {
 }
 
 // ScoreShort: read_data(1)=id, read_data(2)=score, read_data(3)=kills, read_data(4)=deaths
+// DoD fires ScoreShort on death-count changes only. Use g_player_kills (locally
+// tracked from client_death) as the authoritative kills value to avoid clobbering
+// with the stale v.frags in the ScoreShort payload.
 public ev_player_score() {
     new id = read_data(1);
     if (!is_user_connected(id)) return;
@@ -608,7 +688,7 @@ public ev_player_score() {
     get_steamid(id, steamid, charsmax(steamid));
 
     new score  = read_data(2);
-    new kills  = read_data(3);
+    new kills  = g_player_kills[id];
     new deaths = read_data(4);
 
     new json[256];
@@ -676,46 +756,59 @@ public task_poll_zones() {
         add(zones_json, charsmax(zones_json), zbuf);
         first_zone = false;
 
-        // ── Cap state transitions (game-authoritative) ──
-        new is_capping = dodx_area_get_data(f, CA_is_capturing);
-        new new_capper = is_capping ? dodx_area_get_data(f, CA_capturing_team) : 0;
+        // ── Cap state transitions (game-authoritative, with debounce) ──
+        // Raw read from the CAreaCapture entity. Can pulse at map start or
+        // when spawns cycle near a zone — require N consecutive identical
+        // polls before committing a state change.
+        new is_capping  = dodx_area_get_data(f, CA_is_capturing);
+        new raw_capper  = is_capping ? dodx_area_get_data(f, CA_capturing_team) : 0;
 
-        new prev_capper = g_flag_capping_team[f];
-        new bool:was_contested = g_flag_contested[f];
-
-        // Contested: a team is actively capping AND the opposing team is also in the zone.
-        new bool:now_contested = false;
-        if (new_capper == TEAM_ALLIES && xc > 0) now_contested = true;
-        if (new_capper == TEAM_AXIS   && ac > 0) now_contested = true;
-
-        if (prev_capper == 0 && new_capper != 0) {
-            g_flag_capping_team[f]   = new_capper;
-            g_flag_contested[f]      = now_contested;
-            g_flag_last_progress[f]  = -1;
-            emit_cap_started(f, new_capper);
-        }
-        else if (prev_capper != 0 && new_capper == 0) {
-            g_flag_capping_team[f]  = 0;
-            g_flag_contested[f]     = false;
-            g_flag_last_progress[f] = -1;
-            emit_cap_stopped(f, prev_capper);
-        }
-        else if (prev_capper != 0 && new_capper != 0 && prev_capper != new_capper) {
-            g_flag_capping_team[f]  = new_capper;
-            g_flag_contested[f]     = now_contested;
-            g_flag_last_progress[f] = -1;
-            emit_cap_stopped(f, prev_capper);
-            emit_cap_started(f, new_capper);
+        new committed_capper = g_flag_capping_team[f];
+        if (raw_capper == g_flag_pending_capper[f]) {
+            if (g_flag_pending_ticks[f] < CAP_DEBOUNCE_TICKS) g_flag_pending_ticks[f]++;
+        } else {
+            g_flag_pending_capper[f] = raw_capper;
+            g_flag_pending_ticks[f]  = 1;
         }
 
-        // Contested state toggles while capping
-        if (g_flag_capping_team[f] != 0 && now_contested && !was_contested) {
-            g_flag_contested[f] = true;
-            new contesting_team = (g_flag_capping_team[f] == TEAM_ALLIES) ? TEAM_AXIS : TEAM_ALLIES;
-            new contester_count = (contesting_team == TEAM_ALLIES) ? ac : xc;
-            emit_cap_contested(f, contesting_team, contester_count);
-        } else if (g_flag_capping_team[f] != 0 && !now_contested && was_contested) {
-            g_flag_contested[f] = false;
+        new bool:settling     = (get_gametime() < g_cap_settle_until);
+        new bool:commit_ready = (g_flag_pending_ticks[f] >= CAP_DEBOUNCE_TICKS) && !settling;
+
+        if (commit_ready && raw_capper != committed_capper) {
+            new bool:was_contested = g_flag_contested[f];
+
+            new bool:now_contested = false;
+            if (raw_capper == TEAM_ALLIES && xc > 0) now_contested = true;
+            if (raw_capper == TEAM_AXIS   && ac > 0) now_contested = true;
+
+            if (committed_capper == 0 && raw_capper != 0) {
+                g_flag_capping_team[f]   = raw_capper;
+                g_flag_contested[f]      = now_contested;
+                g_flag_last_progress[f]  = -1;
+                emit_cap_started(f, raw_capper);
+            }
+            else if (committed_capper != 0 && raw_capper == 0) {
+                g_flag_capping_team[f]  = 0;
+                g_flag_contested[f]     = false;
+                g_flag_last_progress[f] = -1;
+                emit_cap_stopped(f, committed_capper);
+            }
+            else if (committed_capper != 0 && raw_capper != 0 && committed_capper != raw_capper) {
+                g_flag_capping_team[f]  = raw_capper;
+                g_flag_contested[f]     = now_contested;
+                g_flag_last_progress[f] = -1;
+                emit_cap_stopped(f, committed_capper);
+                emit_cap_started(f, raw_capper);
+            }
+
+            if (g_flag_capping_team[f] != 0 && now_contested && !was_contested) {
+                g_flag_contested[f] = true;
+                new contesting_team = (g_flag_capping_team[f] == TEAM_ALLIES) ? TEAM_AXIS : TEAM_ALLIES;
+                new contester_count = (contesting_team == TEAM_ALLIES) ? ac : xc;
+                emit_cap_contested(f, contesting_team, contester_count);
+            } else if (g_flag_capping_team[f] != 0 && !now_contested && was_contested) {
+                g_flag_contested[f] = false;
+            }
         }
 
         // Progress tick (derived from m_fTimeRemaining / m_nCapTime).
@@ -856,6 +949,11 @@ public dod_score_event(id, score_delta, total_score, cp_index) {
     if (cp_index < 0 || cp_index >= MAX_FLAGS) return;
     if (!is_user_connected(id)) return;
 
+    // Ignore zero/negative deltas — only actual point gains count as a cap credit.
+    // DODX's Client_ObjScore can fire with savedScore drift after scoreboard resets,
+    // producing spurious events for non-capping players on the opposing team.
+    if (score_delta <= 0) return;
+
     new n = g_flag_pending_captor_count[cp_index];
     if (n >= MAX_CAPTORS) return;
 
@@ -883,7 +981,7 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
 
     // Captors collected via dod_score_event during this cap.
     new captor_json[256];
-    build_pending_captor_list(cp_index, captor_json, charsmax(captor_json));
+    build_pending_captor_list(cp_index, new_owner, captor_json, charsmax(captor_json));
 
     new json[512];
     formatex(json, charsmax(json),
@@ -898,21 +996,52 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
     g_flag_pending_captor_count[cp_index] = 0;
 }
 
-stock build_pending_captor_list(cp_index, out[], len) {
+stock build_pending_captor_list(cp_index, owning_team, out[], len) {
     out[0] = '^0';
     new n = g_flag_pending_captor_count[cp_index];
     new tmp[48];
+    new written = 0;
     for (new i = 0; i < n; i++) {
         new id = g_flag_pending_captor_ids[cp_index][i];
         if (!is_user_connected(id)) continue;
+        // Defensive: only credit players on the team that actually owns the CP now.
+        // DODX score events for drifted savedScore can bleed across teams.
+        if (get_user_team(id) != owning_team) continue;
         new steamid[32];
         get_steamid(id, steamid, charsmax(steamid));
-        formatex(tmp, charsmax(tmp), "%s^"%s^"", i > 0 ? "," : "", steamid);
+        formatex(tmp, charsmax(tmp), "%s^"%s^"", written > 0 ? "," : "", steamid);
         add(out, len, tmp);
+        written++;
     }
 }
 
 // ─── Caster Observed Player ──────────────────────────────────────────────────
+
+public cmd_dump_zones(id, level, cid) {
+    if (!cmd_access(id, ADMIN_RCON, cid, 1)) return PLUGIN_HANDLED;
+
+    server_print("[HUD] zone dump (count=%d, settling=%s)",
+        g_flag_count,
+        (get_gametime() < g_cap_settle_until) ? "yes" : "no");
+
+    for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
+        new ac = dodx_area_get_data(f, CA_num_allies);
+        new xc = dodx_area_get_data(f, CA_num_axis);
+        new an = dodx_area_get_data(f, CA_allies_numcap);
+        new xn = dodx_area_get_data(f, CA_axis_numcap);
+        new isc = dodx_area_get_data(f, CA_is_capturing);
+        new ct  = dodx_area_get_data(f, CA_capturing_team);
+        new ot  = dodx_area_get_data(f, CA_owning_team);
+        new Float:tr = Float:dodx_area_get_data(f, CA_time_remaining);
+        new ct_total = dodx_area_get_data(f, CA_timetocap);
+
+        server_print("[HUD] CP[%d] '%s' own=%d cap=%d/team=%d  a=%d/%d x=%d/%d  t=%.1f/%d  committed=%d pending=%d/%d",
+            f, g_flag_name_cache[f], ot, isc, ct, ac, an, xc, xn,
+            tr, ct_total, g_flag_capping_team[f],
+            g_flag_pending_capper[f], g_flag_pending_ticks[f]);
+    }
+    return PLUGIN_HANDLED;
+}
 
 public cmd_observe(id, level, cid) {
     if (!cmd_access(id, ADMIN_RCON, cid, 2)) return PLUGIN_HANDLED;
