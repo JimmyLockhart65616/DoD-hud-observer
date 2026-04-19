@@ -45,8 +45,6 @@ Caster / observer PC
        └─ Browser Source pointed at http://<web-server>:3000/screen?server=...
 ```
 
-The caster's PC does not run any part of this stack — it only opens the published URL in an OBS Browser Source, composited over an HLTV capture of the match. Everything else (ingest, storage, Socket.IO, REST, static frontend) lives on the web server.
-
 **Extension-mode constraint:** the plugin must not depend on Metamod, fakemeta, hamsandwich, or the engine module. The KTP stack loads only `dodx_ktp`, `reapi_ktp`, and `amxxcurl_ktp`. Use HL SDK directly (`edict->v.*`, `g_engfuncs`) or existing dodx natives when adding functionality.
 
 ### Ports
@@ -123,7 +121,7 @@ This project is part of the [KTP League](https://github.com/afraznein) competiti
 
 ## Compiling the AMXX Plugin
 
-Source: [`KTPHudObserver.sma`](KTPHudObserver.sma). The compile command (run inside the `jives/hlds:dod` image, because the Linux AMXX compiler needs to resolve includes relative to itself) is documented in [CLAUDE.md](CLAUDE.md#compiling-the-amxx-plugin).
+Source: [`KTPHudObserver.sma`](KTPHudObserver.sma). The compile command is documented in [CLAUDE.md](CLAUDE.md#compiling-the-amxx-plugin) — it uses the `amxxpc` compiler and includes from KTPInfrastructure's latest `ktpamx` artifacts, run inside a disposable 32-bit Linux container.
 
 Expected output is ~14.7 KB with one harmless `client_disconnect` deprecation warning.
 
