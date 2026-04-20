@@ -44,6 +44,21 @@ sudo systemctl enable --now hud-observer hud-observer-web
 2. SSH in and do the one-time setup above.
 3. Re-run `./deploy/deploy.sh` — should be clean.
 
+## Firewall (UFW)
+
+The data server exposes four HUD ports. Three are public (OBS needs them); the ingest port is locked to the game server.
+
+| Port | Purpose | UFW rule |
+| --- | --- | --- |
+| 3000 | Frontend (OBS browser source) | open to world |
+| 3001 | Backend REST API | open to world |
+| 4000 | Socket.IO (frontend ↔ backend) | open to world |
+| 9000 | Plugin HTTP ingest (`POST /ingest`) | restricted to Denver 5 (`66.163.114.109`) |
+
+Only Denver 5 posts events right now, so 9000 stays pinhole-only. When another game server starts sending, add its IP with `sudo ufw allow from <ip> to any port 9000 proto tcp`. Never open 9000 to the world — the auth key is the only other gate.
+
+Port 9000 (not 8088) because 8088 was already bound by an unrelated "KTP AC API" on the box. Override lives in `Environment=HUD_INGEST_PORT=9000` in the systemd unit.
+
 ## Config
 
 `/opt/hud-observer/config.yaml` is overwritten by every deploy. If you need per-environment values (auth key, ports), set them in the systemd unit via `Environment=` lines (see `HUD_AUTH_KEY`, `HUD_INGEST_PORT`, etc. in `config.yaml`'s header).

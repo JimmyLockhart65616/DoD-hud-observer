@@ -142,7 +142,6 @@ Expected output is ~14.7 KB with one harmless `client_disconnect` deprecation wa
 
 - [docs/VIEWER_GUIDE.md](docs/VIEWER_GUIDE.md) — what each panel on the overlay means
 - [CLAUDE.md](CLAUDE.md) — full event schema, class IDs, weapon names, compile recipe, architecture notes
-- [docs/KTP_PUSH_WORKFLOW.md](docs/KTP_PUSH_WORKFLOW.md) — safety playbook for pushing to `KTPAMXX` / `KTPInfrastructure`
 
 ## License
 

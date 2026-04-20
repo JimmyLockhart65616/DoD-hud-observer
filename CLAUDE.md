@@ -276,6 +276,12 @@ Expected output size: ~14.7 KB.
 - **All 25 production servers (fan-out)**: drop the `.amxx` into `/home/dod/distribute/` on the data server (74.91.112.242). KTPFileDistributor (.NET 8 systemd worker) SFTPs it to every server and notifies Discord.
 - **Single production server (targeted, e.g. Denver 5 only)**: `scp` directly into `cadaver@<server-ip>:/home/dodserver/dod-<port>/serverfiles/dod/addons/ktpamx/plugins/KTPHudObserver.amxx` and skip KTPFileDistributor. Add `KTPHudObserver.amxx debug` under the "Custom - Add 3rd party plugins" section of `configs/plugins.ini` if not already present. Reload via `rcon restart` or `changelevel`.
 
+### Deploying the backend/frontend
+
+Our Node.js backend + React frontend ship to the data server (`cadaver@74.91.112.242`) via `./deploy/deploy.sh`. See [deploy/README.md](deploy/README.md) for commands, one-time setup, firewall rules, and systemd unit layout.
+
+Game-server/plugin fan-out to the 25-server fleet is handled by Tony's tooling in `KTPInfrastructure` (`make deploy-denver` / `make deploy-plugins` → `deploy/deploy.py`); see [KTPInfrastructure/docs/DEPLOYING.md](../KTPInfrastructure/docs/DEPLOYING.md) for the authoritative playbook.
+
 ### Pawn language notes
 
 - Escape character is `^`, not `\` (no `#pragma ctrlchar` set)
@@ -342,12 +348,9 @@ Do not use for active development.
 
 ## Pushing to KTP Dependency Repos
 
-Breaking `KTPAMXX` or `KTPInfrastructure` corrupts every downstream plugin,
-including our own. Before pushing to either repo, see
-[docs/KTP_PUSH_WORKFLOW.md](docs/KTP_PUSH_WORKFLOW.md) — covers the pre-push
-hook, GitHub Actions, and the Denver-before-prod deploy sequence.
+Breaking `KTPAMXX` or `KTPInfrastructure` corrupts every downstream plugin, including our own. The authoritative deploy playbook is [KTPInfrastructure/docs/DEPLOYING.md](../KTPInfrastructure/docs/DEPLOYING.md).
 
-Install the pre-push hooks once:
+Install the pre-push hooks once per machine (they run a full Docker build before push — this is the CI, there is no GH Actions pipeline):
 
 ```bash
 cd ../KTPInfrastructure && bash scripts/install-hooks.sh
@@ -370,4 +373,3 @@ cd ../KTPAMXX           && bash scripts/install-hooks.sh
 - `config.yaml` — backend configuration (ports, auth key, storage)
 - `data-server/Dockerfile` — build source for the KTPInfrastructure data container
 - `dod_hud_observer.sma` — legacy plugin (vanilla Metamod version, kept for reference)
-- `docs/KTP_PUSH_WORKFLOW.md` — safety playbook for pushing to KTPAMXX / KTPInfrastructure
