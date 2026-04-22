@@ -37,3 +37,6 @@ deploy/hud_observer.cfg
 
 # Build artifacts from local HLDS/AMXX Docker builds
 /.build-output/
+
+# Claude Code per-machine tool-permission settings — not for commit
+.claude/settings.local.json
