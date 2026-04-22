@@ -200,12 +200,43 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 npm run backend   # backend with hot reload
 npm run web       # React dev server
 npm run mocker    # simulate events without a real server
+npm run test      # Jest — backend unit + integration tests
 ```
+
+## Mocker
+
+`npm run mocker` replays a scripted 6v6 scrim against the backend. Events are
+wrapped in the same envelope `KTPHudObserver.amxx` emits (tick, plugin_sent_at,
+match_id, map, match_type, half) so ingest, recorder, and frontend see an
+identical shape. The sequence is ~75s long, then the mocker POSTs a final
+`ktp_match_end` and exits — the match on disk is closed cleanly every run.
+
+Env-var overrides (useful for testing HUD behavior per match type):
+
+- `MOCKER_MATCH_TYPE` — 0=COMPETITIVE, 1=SCRIM (default), 2=12MAN, 3=DRAFT, 4=KTP_OT, 5=DRAFT_OT
+- `MOCKER_HALF` — 1/2 for regulation, 101+ for OT
+- `MOCKER_INGEST_URL` — defaults to `http://localhost:8088/ingest`
+- `MOCKER_AUTH_KEY` — defaults to `changeme` (must match backend `config.yaml`)
+
+`npm run mocker -- --socket` is a legacy path that bypasses the backend and
+emits directly over Socket.IO; only used by the Playwright config.
+
+## Backend Testing (Jest)
+
+`npm run test` runs the full backend suite (~2s, 41 tests). Exercises ingest
+→ MatchRecorder → disk → REST read-back in-process, no servers needed:
+
+- [backend/src/\_\_tests\_\_/ingest.test.ts](backend/src/__tests__/ingest.test.ts) — `POST /ingest` auth, validation, all 6 match types, back-to-back matches, duplicate-start behavior
+- [backend/src/\_\_tests\_\_/matchRecorder.test.ts](backend/src/__tests__/matchRecorder.test.ts) — `MatchRecorder` startMatch/recordEvent/endMatch + multi-match isolation
+- [backend/src/\_\_tests\_\_/matchesApi.test.ts](backend/src/__tests__/matchesApi.test.ts) — `/api/matches/live|stored|:id/events` read-back after ingest
+- [backend/src/\_\_tests\_\_/mockerLifecycle.test.ts](backend/src/__tests__/mockerLifecycle.test.ts) — drives `MockerClass` in-process with fake timers; asserts the whole scripted match round-trips through ingest → disk in order
+
+Run a single suite: `npm run test -- <pattern>` (e.g. `npm run test -- mockerLifecycle`).
 
 ## E2E Testing (Playwright)
 
 Uses Playwright with headless Chromium to visually verify the HUD overlay.
-The mocker provides a 55-second scripted 6v6 match sequence — no game server needed.
+The mocker provides a ~75-second scripted 6v6 match sequence — no game server needed.
 
 ### Commands
 

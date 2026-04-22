@@ -19,6 +19,12 @@ const mode = process.argv.includes('--socket') ? 'socket' : 'http';
 const MATCH_ID = `KTP-${Date.now()}-dod_anzio-test`;
 const MOCKER_START = Date.now();
 
+// Match type + half parameterization. KTPMatchHandler enum (KTPMatchHandler.sma:84):
+// 0=COMPETITIVE, 1=SCRIM, 2=12MAN, 3=DRAFT, 4=KTP_OT, 5=DRAFT_OT.
+// Half: 1 or 2 for regulation, 101+ for OT rounds.
+const MATCH_TYPE = Number(process.env.MOCKER_MATCH_TYPE ?? '1');
+const HALF       = Number(process.env.MOCKER_HALF       ?? '1');
+
 // Last-known zone state, mirrored from any flag_zone_players we author in data.ts.
 // Re-emitted on a 1s tick so the frontend stays under realistic event pressure.
 let lastZones: unknown[] | null = null;
@@ -41,8 +47,8 @@ function wrapEnvelope(eventName: string, payload: Record<string, unknown>): Reco
         tick: Number(tick.toFixed(2)),
         match_id: MATCH_ID,
         map: 'dod_anzio',
-        match_type: 1,
-        half: 1,
+        match_type: MATCH_TYPE,
+        half: HALF,
         plugin_sent_at: Date.now(),
         event: eventName,
         ...payload,
@@ -56,7 +62,7 @@ async function startHttpMode() {
     const AUTH_KEY   = process.env.MOCKER_AUTH_KEY   ?? 'changeme';
 
     console.log(`[mocker] HTTP mode — posting to ${INGEST_URL}`);
-    console.log(`[mocker] Match ID: ${MATCH_ID}`);
+    console.log(`[mocker] Match ID: ${MATCH_ID} (match_type=${MATCH_TYPE}, half=${HALF})`);
 
     // ktp_match_start opens the recorder. This is the KTPMatchHandler forward, not a
     // plugin-emitted event, so it skips the standard envelope.
@@ -64,8 +70,8 @@ async function startHttpMode() {
         event: 'ktp_match_start',
         match_id: MATCH_ID,
         map: 'dod_anzio',
-        match_type: 1,
-        half: 1,
+        match_type: MATCH_TYPE,
+        half: HALF,
     }, INGEST_URL, AUTH_KEY);
 
     mocker.on('action', async (info: [string | string[], Record<string, unknown>]) => {
@@ -84,11 +90,31 @@ async function startHttpMode() {
     });
 
     // Mimic plugin's task_poll_zones() (10Hz live; 1Hz here is plenty for visual testing).
-    setInterval(() => {
+    const zonePoll = setInterval(() => {
         if (!lastZones) return;
         postRaw(wrapEnvelope('flag_zone_players', { zones: lastZones }), INGEST_URL, AUTH_KEY)
             .catch(err => console.error(`[mocker] zone re-poll failed: ${(err as Error).message}`));
     }, 1000);
+
+    // When the scripted sequence completes, close the match cleanly with a
+    // ktp_match_end (mirroring what KTPMatchHandler fires in production), then
+    // exit. Without this the process loops forever with only zone re-polls,
+    // and the recorded match on disk never gets its endedAt timestamp.
+    mocker.on('done', async () => {
+        clearInterval(zonePoll);
+        try {
+            await postRaw({
+                event: 'ktp_match_end',
+                match_id: MATCH_ID,
+                allies_score: 0,
+                axis_score: 0,
+            }, INGEST_URL, AUTH_KEY);
+            console.log('[mocker] sequence complete — match closed');
+        } catch (err) {
+            console.error(`[mocker] match-end POST failed: ${(err as Error).message}`);
+        }
+        process.exit(0);
+    });
 
     console.log('[mocker] Starting event sequence...');
     mocker.start();

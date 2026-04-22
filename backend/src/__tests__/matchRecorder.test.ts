@@ -139,4 +139,85 @@ describe('MatchRecorder', () => {
             expect(emptyRecorder.listStoredMatches()).toEqual([]);
         });
     });
+
+    // KTPMatchHandler MATCH_TYPE enum (KTPMatchHandler.sma:84):
+    //   0=COMPETITIVE, 1=SCRIM, 2=12MAN, 3=DRAFT, 4=KTP_OT, 5=DRAFT_OT.
+    // OT matches carry half >= 101.
+    describe('match type + half parametrization', () => {
+        it.each([
+            { name: 'competitive', matchType: 0, half: 1   },
+            { name: 'scrim',       matchType: 1, half: 1   },
+            { name: '12man',       matchType: 2, half: 1   },
+            { name: 'draft',       matchType: 3, half: 1   },
+            { name: 'ktpOT',       matchType: 4, half: 101 },
+            { name: 'draftOT',     matchType: 5, half: 103 },
+        ])('round-trips $name through metadata.json (type=$matchType, half=$half)',
+            ({ matchType, half }) => {
+                const matchId = `KTP-rt-${matchType}-${half}`;
+                recorder.startMatch(matchId, 'dod_anzio', matchType, half, 'localhost');
+                recorder.recordEvent(matchId, { event: 'kill' }, 'localhost');
+                recorder.endMatch(matchId);
+
+                const meta = JSON.parse(
+                    fs.readFileSync(path.join(tmpDir, matchId, 'metadata.json'), 'utf-8')
+                );
+                expect(meta.matchType).toBe(matchType);
+                expect(meta.half).toBe(half);
+                expect(meta.endedAt).not.toBeNull();
+                expect(meta.eventCount).toBe(1);
+            }
+        );
+    });
+
+    describe('multi-match isolation', () => {
+        it('keeps back-to-back matches in separate directories with separate event logs', () => {
+            recorder.startMatch('KTP-iso-A', 'dod_anzio', 1, 1, 'localhost');
+            recorder.recordEvent('KTP-iso-A', { event: 'kill', weapon: 'garand' }, 'localhost');
+            recorder.recordEvent('KTP-iso-A', { event: 'flag_captured', flag_id: 0 }, 'localhost');
+            recorder.endMatch('KTP-iso-A');
+
+            recorder.startMatch('KTP-iso-B', 'dod_flash', 3, 1, 'localhost');
+            recorder.recordEvent('KTP-iso-B', { event: 'kill', weapon: 'mp40' }, 'localhost');
+            recorder.endMatch('KTP-iso-B');
+
+            const metaA = JSON.parse(
+                fs.readFileSync(path.join(tmpDir, 'KTP-iso-A', 'metadata.json'), 'utf-8')
+            );
+            const metaB = JSON.parse(
+                fs.readFileSync(path.join(tmpDir, 'KTP-iso-B', 'metadata.json'), 'utf-8')
+            );
+
+            expect(metaA.map).toBe('dod_anzio');
+            expect(metaA.matchType).toBe(1);
+            expect(metaA.eventCount).toBe(2);
+
+            expect(metaB.map).toBe('dod_flash');
+            expect(metaB.matchType).toBe(3);
+            expect(metaB.eventCount).toBe(1);
+
+            const eventsA = recorder.getEvents('KTP-iso-A')!;
+            const eventsB = recorder.getEvents('KTP-iso-B')!;
+
+            expect(eventsA.map(e => e.event)).toEqual(['kill', 'flag_captured']);
+            expect(eventsB.map(e => e.event)).toEqual(['kill']);
+            // Weapon-level spot check — would fail if events bled across match dirs.
+            expect(eventsA[0].weapon).toBe('garand');
+            expect(eventsB[0].weapon).toBe('mp40');
+        });
+
+        it('allows two matches to be active simultaneously (multi-server scenario)', () => {
+            // Simulates two game servers posting events concurrently into one recorder.
+            recorder.startMatch('KTP-concurrent-1', 'dod_anzio', 1, 1, 'server-a');
+            recorder.startMatch('KTP-concurrent-2', 'dod_flash', 2, 1, 'server-b');
+
+            recorder.recordEvent('KTP-concurrent-1', { event: 'e1a' }, 'server-a');
+            recorder.recordEvent('KTP-concurrent-2', { event: 'e1b' }, 'server-b');
+            recorder.recordEvent('KTP-concurrent-1', { event: 'e2a' }, 'server-a');
+
+            expect(recorder.getActiveMatchIds().sort())
+                .toEqual(['KTP-concurrent-1', 'KTP-concurrent-2']);
+            expect(recorder.getMetadata('KTP-concurrent-1')!.eventCount).toBe(2);
+            expect(recorder.getMetadata('KTP-concurrent-2')!.eventCount).toBe(1);
+        });
+    });
 });
