@@ -40,3 +40,4 @@ deploy/hud_observer.cfg
 
 # Claude Code per-machine tool-permission settings — not for commit
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
