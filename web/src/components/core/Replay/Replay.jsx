@@ -105,6 +105,16 @@ function Replay({ matchId }) {
     // Cleanup on unmount
     useEffect(() => () => clearTimers(), [clearTimers]);
 
+    // setTimeout delays are computed from speedRef.current at schedule time,
+    // so a speed change mid-play doesn't retroactively adjust pending timers.
+    // Re-run play() on speed change to reschedule from the current progress.
+    useEffect(() => {
+        if (playing) play();
+        // play is intentionally excluded — it changes reference every progress
+        // update, which would cause a reschedule on every event.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [speed]);
+
     if (loading) return <div className="replay-bar">Loading replay...</div>;
     if (error) return <div className="replay-bar">Replay error: {error}</div>;
     if (!events || events.length === 0) return <div className="replay-bar">No events to replay.</div>;
