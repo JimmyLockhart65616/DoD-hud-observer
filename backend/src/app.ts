@@ -49,9 +49,11 @@ app.get('/api/servers', (_req, res) => {
 });
 
 app.get('/api/matches/live', (_req, res) => {
+    const active = recorder.getActiveMatchIds();
+    const activeSet = new Set(active);
     res.json({
-        active: recorder.getActiveMatchIds(),
-        matches: recorder.getAllMetadata(),
+        active,
+        matches: recorder.getAllMetadata().filter(m => activeSet.has(m.matchId)),
     });
 });
 

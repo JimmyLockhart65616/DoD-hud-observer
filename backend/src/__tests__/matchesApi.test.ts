@@ -38,9 +38,11 @@ function makeApp(authKey: string, recorder: MatchRecorder, io: SocketServer): Ap
     app.use('/ingest', createIngestRouter(authKey, recorder, io, metrics));
 
     app.get('/api/matches/live', (_req, res) => {
+        const active = recorder.getActiveMatchIds();
+        const activeSet = new Set(active);
         res.json({
-            active: recorder.getActiveMatchIds(),
-            matches: recorder.getAllMetadata(),
+            active,
+            matches: recorder.getAllMetadata().filter(m => activeSet.has(m.matchId)),
         });
     });
     app.get('/api/matches/stored', (_req, res) => {
@@ -108,6 +110,7 @@ describe('GET /api/matches/* — REST read-back after ingest', () => {
 
         const live = await request(app).get('/api/matches/live');
         expect(live.body.active).not.toContain(matchId);
+        expect(live.body.matches.find((m: { matchId: string }) => m.matchId === matchId)).toBeUndefined();
 
         const stored = await request(app).get('/api/matches/stored');
         const meta = stored.body.matches.find((m: { matchId: string }) => m.matchId === matchId);
