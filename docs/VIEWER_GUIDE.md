@@ -11,6 +11,8 @@ This guide is also available inside the running web app at `/help`.
 The overlay runs as a **Browser Source** in OBS, layered over your HLTV capture.
 
 > **This overlay is designed to sit on top of a live HLTV view of the match** — it does not provide the game footage itself. Your OBS scene should already have a capture source (Window Capture, Game Capture, or Display Capture) pointed at an HLTV client connected to the same match. The Browser Source described below is added **above** that capture source so the HUD renders over the live feed.
+>
+> **Hide the HLTV client's in-game HUD** before capturing it — otherwise flag cap and kill feed elements will bleed through under our overlay. In the HLTV client console, run `hud_draw 0`
 
 ### 1. Get the overlay URL for the server
 

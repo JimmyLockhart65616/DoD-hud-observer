@@ -54,6 +54,12 @@ class Help extends React.Component {
                                 added <strong>above</strong> that capture source so the HUD renders
                                 over the live feed.
                             </blockquote>
+                            <blockquote className="help-callout">
+                                <strong>Hide the HLTV client's in-game HUD</strong> before capturing
+                                it — otherwise flags and killfeed elements will bleed through under
+                                our overlay. In the HLTV client console, run{' '}
+                                <code>hud_draw 0</code>
+                            </blockquote>
 
                             <h3>1. Get the overlay URL for the server</h3>
                             <ol>
