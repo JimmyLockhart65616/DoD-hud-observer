@@ -25,7 +25,6 @@ RUN npm ci --legacy-peer-deps
 
 # Backend source
 COPY backend/ ./backend/
-COPY config/local/config.yaml ./config/local/config.yaml
 
 # Web deps (separate layer for caching)
 COPY web/package.json web/package-lock.json ./web/
@@ -37,6 +36,9 @@ RUN cd web && npm run build
 
 # Install 'serve' for static file serving
 RUN npm install -g serve
+
+# config last — changes more often than source, must not bust web/backend cache
+COPY config/local/config.yaml ./config/local/config.yaml
 
 # ---- Stage 3: Data server ----
 FROM ubuntu:22.04
