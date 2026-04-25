@@ -140,12 +140,12 @@ export const useHudStore = create(set => ({
         timeleft_at: null,
         allies_players: state.allies_players.map(p => ({
             ...p, health: 100, dead: false, prone_state: 'standing', prone_since: null,
-            kills: 0, deaths: 0, score: 0,
+            kills: 0, deaths: 0, score: 0, obj_score: 0,
             weapon_primary: null, weapon_secondary: null, class_id: null,
         })),
         axis_players: state.axis_players.map(p => ({
             ...p, health: 100, dead: false, prone_state: 'standing', prone_since: null,
-            kills: 0, deaths: 0, score: 0,
+            kills: 0, deaths: 0, score: 0, obj_score: 0,
             weapon_primary: null, weapon_secondary: null, class_id: null,
         })),
     })),
@@ -169,6 +169,7 @@ function makeDefaultPlayer(user_id, name, team) {
         kills:            0,
         deaths:           0,
         score:            0,
+        obj_score:        0,
         spectate:         false,
     };
 }
@@ -387,7 +388,10 @@ export const SocketStoreComponent = () => {
 
         gameEvents.on('player_score', (raw) => {
             const e = JSON.parse(raw);
-            const scoreUpdate = () => ({ kills: e.kills, deaths: e.deaths, score: e.score });
+            const scoreUpdate = () => ({
+                kills: e.kills, deaths: e.deaths,
+                score: e.score, obj_score: e.obj_score ?? 0,
+            });
             setAlliesPlayers(prev => updatePlayer(prev, e.user_id, scoreUpdate));
             setAxisPlayers(prev => updatePlayer(prev, e.user_id, scoreUpdate));
         });
@@ -552,8 +556,9 @@ export const SocketStoreComponent = () => {
 
 
         // ── Caster observed ───────────────────────────────────────────────────
-        // Disabled: no HLTV signal yet to tell us which player the caster is spectating.
-        // See docs/VIEWER_GUIDE.md → Future Features.
+        // Disabled: the plugin's amx_dod_observe rcon emits caster_observed_player,
+        // but nothing in prod calls it — no auto-detection of the caster's HLTV
+        // spectate target exists yet. Re-enable when an automatic source is wired up.
         // gameEvents.on('caster_observed_player', (raw) => {
         //     const e = JSON.parse(raw);
         //     setAlliesPlayers(prev => prev.map(p => ({ ...p, spectate: p.user_id === e.user_id })));

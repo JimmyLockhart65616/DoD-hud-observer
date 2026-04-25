@@ -154,4 +154,36 @@ describe('GET /api/matches/* — REST read-back after ingest', () => {
         expect(res.status).toBe(404);
         expect(res.body.error).toMatch(/not found/i);
     });
+
+    describe('reaper interaction', () => {
+        beforeEach(() => {
+            jest.useFakeTimers({ doNotFake: ['performance'] });
+            jest.setSystemTime(new Date('2026-04-24T12:00:00Z'));
+        });
+
+        afterEach(() => {
+            jest.useRealTimers();
+        });
+
+        it('drops stale matches off /api/matches/live after reapStaleMatches runs', async () => {
+            const matchId = 'KTP-ghost-1';
+            await post({ event: 'ktp_match_start', match_id: matchId, map: 'dod_anzio', match_type: 0, half: 1 });
+            await post({ event: 'kill', match_id: matchId, killer_id: 'STEAM_0:0:1', victim_id: 'STEAM_0:0:2', weapon: 'garand' });
+
+            // Ghost: plugin never sends ktp_match_end. Jump 25 min forward.
+            jest.setSystemTime(new Date('2026-04-24T12:25:00Z'));
+            const reaped = recorder.reapStaleMatches(20 * 60 * 1000);
+            expect(reaped).toContain(matchId);
+
+            const live = await request(app).get('/api/matches/live');
+            expect(live.body.active).not.toContain(matchId);
+            expect(live.body.matches.find((m: { matchId: string }) => m.matchId === matchId)).toBeUndefined();
+
+            // The reaped match still lives in /stored with an endedAt timestamp.
+            const stored = await request(app).get('/api/matches/stored');
+            const meta = stored.body.matches.find((m: { matchId: string }) => m.matchId === matchId);
+            expect(meta).toBeDefined();
+            expect(meta.endedAt).not.toBeNull();
+        });
+    });
 });

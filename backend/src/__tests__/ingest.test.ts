@@ -6,7 +6,7 @@
  */
 import express, { Application } from 'express';
 import request from 'supertest';
-import { createIngestRouter } from '../handler/ingest';
+import { createIngestRouter, getServerPlayerCount, getServerSnapshot } from '../handler/ingest';
 import { MatchRecorder } from '../handler/matchRecorder';
 import { MetricsCollector } from '../handler/metrics';
 import { Server as SocketServer } from 'socket.io';
@@ -295,5 +295,141 @@ describe('POST /ingest — match isolation & edge cases', () => {
         expect(events[1].event).toBe('kill');
         expect(events[2].event).toBe('ktp_match_start');
         expect(events[2].map).toBe('dod_flash');  // dup body preserved in log
+    });
+});
+
+describe('player_score obj_score round-trip', () => {
+    let tmpDir: string;
+    let recorder: MatchRecorder;
+    let io: SocketServer;
+    let app: Application;
+
+    beforeEach(() => {
+        tmpDir = makeTmpDir();
+        recorder = new MatchRecorder(tmpDir);
+        io = new SocketServer(createServer());
+        app = makeApp('key', recorder, io);
+    });
+
+    afterEach(() => {
+        recorder.close();
+        io.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    async function post(body: Record<string, unknown>, hostname: string): Promise<void> {
+        await request(app)
+            .post('/ingest')
+            .set('X-Auth-Key', 'key')
+            .set('X-Server-Hostname', hostname)
+            .send(body);
+    }
+
+    it('persists obj_score from player_score and replays it in the snapshot', async () => {
+        const host = 'KTP - Obj Test';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:1', name: 'Captor', team: 'allies' }, host);
+        await post({
+            event: 'player_score',
+            user_id: 'STEAM_0:0:1',
+            kills: 2, deaths: 1, score: 7, obj_score: 5,
+        }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const replayed = snapshot.find(e => e.event === 'player_score' && e.user_id === 'STEAM_0:0:1');
+        expect(replayed).toMatchObject({
+            event: 'player_score',
+            user_id: 'STEAM_0:0:1',
+            kills: 2, deaths: 1, score: 7, obj_score: 5,
+        });
+    });
+
+    it('defaults obj_score to 0 when the field is absent (backward compat)', async () => {
+        const host = 'KTP - Obj Compat';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:2', name: 'Old', team: 'axis' }, host);
+        await post({
+            event: 'player_score',
+            user_id: 'STEAM_0:0:2',
+            kills: 1, deaths: 0, score: 1,
+        }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const replayed = snapshot.find(e => e.event === 'player_score' && e.user_id === 'STEAM_0:0:2');
+        expect(replayed).toMatchObject({
+            user_id: 'STEAM_0:0:2',
+            kills: 1, deaths: 0, score: 1, obj_score: 0,
+        });
+    });
+
+    it('resets obj_score to 0 on half_start', async () => {
+        const host = 'KTP - Obj HalfReset';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:3', name: 'Halfer', team: 'allies' }, host);
+        await post({
+            event: 'player_score',
+            user_id: 'STEAM_0:0:3',
+            kills: 4, deaths: 2, score: 14, obj_score: 10,
+        }, host);
+        await post({ event: 'half_start', half: 2, timeleft: 1200 }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const replayed = snapshot.find(e => e.event === 'player_score' && e.user_id === 'STEAM_0:0:3');
+        expect(replayed).toMatchObject({
+            user_id: 'STEAM_0:0:3',
+            kills: 0, deaths: 0, score: 0, obj_score: 0,
+        });
+    });
+});
+
+describe('getServerPlayerCount', () => {
+    let tmpDir: string;
+    let recorder: MatchRecorder;
+    let io: SocketServer;
+    let app: Application;
+
+    beforeEach(() => {
+        tmpDir = makeTmpDir();
+        recorder = new MatchRecorder(tmpDir);
+        io = new SocketServer(createServer());
+        app = makeApp('key', recorder, io);
+    });
+
+    afterEach(() => {
+        recorder.close();
+        io.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        jest.useRealTimers();
+    });
+
+    async function post(body: Record<string, unknown>, hostname: string): Promise<void> {
+        await request(app)
+            .post('/ingest')
+            .set('X-Auth-Key', 'key')
+            .set('X-Server-Hostname', hostname)
+            .send(body);
+    }
+
+    it('counts only allies + axis, excludes spectator/unassigned and stale players', async () => {
+        jest.useFakeTimers({ doNotFake: ['performance'] });
+        jest.setSystemTime(new Date('2026-04-24T12:00:00Z'));
+
+        const host = 'KTP - Count Test';
+        // 3 allies
+        await post({ event: 'player_connect', user_id: 'a1', name: 'A1', team: 'allies' }, host);
+        await post({ event: 'player_connect', user_id: 'a2', name: 'A2', team: 'allies' }, host);
+        await post({ event: 'player_connect', user_id: 'a3', name: 'A3', team: 'allies' }, host);
+        // 2 axis
+        await post({ event: 'player_connect', user_id: 'x1', name: 'X1', team: 'axis' }, host);
+        await post({ event: 'player_connect', user_id: 'x2', name: 'X2', team: 'axis' }, host);
+        // 1 spectator (HLTV bot shape)
+        await post({ event: 'player_connect', user_id: 'spec1', name: 'HLTV', team: 'spectator' }, host);
+
+        expect(getServerPlayerCount(host)).toBe(5);
+
+        // Advance past PLAYER_STALE_MS (5 min); no further events refresh them.
+        jest.setSystemTime(new Date('2026-04-24T12:06:00Z'));
+        expect(getServerPlayerCount(host)).toBe(0);
+    });
+
+    it('returns 0 for an unknown server', () => {
+        expect(getServerPlayerCount('never-seen-this-host')).toBe(0);
     });
 });

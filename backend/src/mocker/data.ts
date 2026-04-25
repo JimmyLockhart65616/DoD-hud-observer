@@ -178,12 +178,15 @@ export default [
     ]}},
 
     // Per-player score updates (ScoreShort event in plugin)
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2001", "kills": 1, "deaths": 0, "score": 1 } },
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1001", "kills": 1, "deaths": 0, "score": 2 } },
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1004", "kills": 1, "deaths": 0, "score": 1 } },
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1003", "kills": 0, "deaths": 1, "score": 0 } },
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2002", "kills": 0, "deaths": 1, "score": 0 } },
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2006", "kills": 0, "deaths": 1, "score": 0 } },
+    // Captors of the Street cap (1001, 1002) get +5 obj_score, mirroring the
+    // dod_score_event score_delta the live plugin accumulates.
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2001", "kills": 1, "deaths": 0, "score": 1, "obj_score": 0 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1001", "kills": 1, "deaths": 0, "score": 7, "obj_score": 5 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1002", "kills": 0, "deaths": 0, "score": 5, "obj_score": 5 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1004", "kills": 1, "deaths": 0, "score": 1, "obj_score": 0 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1003", "kills": 0, "deaths": 1, "score": 0, "obj_score": 0 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2002", "kills": 0, "deaths": 1, "score": 0, "obj_score": 0 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2006", "kills": 0, "deaths": 1, "score": 0, "obj_score": 0 } },
 
     // More fighting
     { "damage": { "time": 17800, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "damage": 35, "weapon": "mp44", "hitplace": 2, "victim_health": 65 } },
@@ -272,6 +275,10 @@ export default [
     { "flag_cap_progress": { "time": 47500, "flag_id": 1, "progress": 95, "capping_team": "axis" } },
     { "flag_captured":     { "time": 48000, "flag_id": 1, "flag_name": "POINT_ANZIO_STREET", "new_owner": "axis", "captor_ids": ["STEAM_0:0:2001", "STEAM_0:0:2004"] } },
     { "team_score":        { "time": 48000, "allies_score": 1, "axis_score": 1 } },
+
+    // Captors of the Street recap (2001, 2004) get +5 obj_score from dod_score_event.
+    { "player_score": { "time": 48200, "user_id": "STEAM_0:0:2001", "kills": 2, "deaths": 0, "score": 7, "obj_score": 5 } },
+    { "player_score": { "time": 48200, "user_id": "STEAM_0:0:2004", "kills": 2, "deaths": 0, "score": 7, "obj_score": 5 } },
 
     // Round 2 ends — Axis win
     { "round_end": { "time": 55000, "winner": "axis", "end_type": "objectives", "allies_score": 1, "axis_score": 1 } },

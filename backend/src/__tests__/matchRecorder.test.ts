@@ -169,6 +169,55 @@ describe('MatchRecorder', () => {
         );
     });
 
+    describe('reapStaleMatches', () => {
+        beforeEach(() => {
+            jest.useFakeTimers({ doNotFake: ['performance'] });
+            jest.setSystemTime(new Date('2026-04-24T12:00:00Z'));
+        });
+
+        afterEach(() => {
+            jest.useRealTimers();
+        });
+
+        it('ends matches with no recent events and leaves active matches alone', () => {
+            recorder.startMatch('KTP-reap-A', 'dod_anzio', 1, 1, 'server-a');
+            recorder.startMatch('KTP-reap-B', 'dod_flash', 1, 1, 'server-b');
+
+            // Match A keeps receiving events; match B goes silent after start.
+            recorder.recordEvent('KTP-reap-A', { event: 'kill' }, 'server-a');
+            recorder.recordEvent('KTP-reap-B', { event: 'kill' }, 'server-b');
+
+            // Advance 10 min — both still fresh.
+            jest.setSystemTime(new Date('2026-04-24T12:10:00Z'));
+            recorder.recordEvent('KTP-reap-A', { event: 'kill' }, 'server-a');
+
+            // Advance to 25 min past start — A's last event is 15 min old (still fresh),
+            // B's is 25 min old (stale).
+            jest.setSystemTime(new Date('2026-04-24T12:25:00Z'));
+            const reaped = recorder.reapStaleMatches(20 * 60 * 1000);
+
+            expect(reaped).toEqual(['KTP-reap-B']);
+            expect(recorder.getActiveMatchIds()).toEqual(['KTP-reap-A']);
+
+            const metaB = JSON.parse(
+                fs.readFileSync(path.join(tmpDir, 'KTP-reap-B', 'metadata.json'), 'utf-8')
+            );
+            expect(metaB.endedAt).not.toBeNull();
+        });
+
+        it('is idempotent — second call reaps nothing', () => {
+            recorder.startMatch('KTP-reap-idem', 'dod_anzio', 1, 1, 'server-a');
+            jest.setSystemTime(new Date('2026-04-24T12:30:00Z'));
+
+            const first = recorder.reapStaleMatches(20 * 60 * 1000);
+            const second = recorder.reapStaleMatches(20 * 60 * 1000);
+
+            expect(first).toEqual(['KTP-reap-idem']);
+            expect(second).toEqual([]);
+            expect(recorder.getActiveMatchIds()).toEqual([]);
+        });
+    });
+
     describe('multi-match isolation', () => {
         it('keeps back-to-back matches in separate directories with separate event logs', () => {
             recorder.startMatch('KTP-iso-A', 'dod_anzio', 1, 1, 'localhost');

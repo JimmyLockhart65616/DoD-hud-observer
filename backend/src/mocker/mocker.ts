@@ -150,7 +150,8 @@ function startSocketMode() {
     const httpServer = createServer();
     const io = new Server(httpServer, {
         cors: {
-            origin: 'http://localhost:3000',
+            // 3000 = npm run web:mocker, 3010 = e2e dev server
+            origin: ['http://localhost:3000', 'http://localhost:3010'],
             methods: ['GET', 'POST'],
             credentials: true,
         },

@@ -140,7 +140,7 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 { "event": "player_team_change", "user_id": "STEAM_0:0:123", "team": "allies|axis" }
 { "event": "player_spawn", "user_id": "STEAM_0:0:123", "team": "allies|axis",
   "class_id": 0, "weapon_primary": "garand", "weapon_secondary": "colt" }
-{ "event": "player_score", "user_id": "STEAM_0:0:123", "kills": 0, "deaths": 0, "score": 0 }
+{ "event": "player_score", "user_id": "STEAM_0:0:123", "kills": 0, "deaths": 0, "score": 0, "obj_score": 0 }
 { "event": "kill", "killer_id": "STEAM_0:0:123", "victim_id": "STEAM_0:0:456",
   "weapon": "garand", "kill_type": "normal|suicide|teamkill", "victim_prone": false }
 { "event": "prone_change", "user_id": "STEAM_0:0:123",
@@ -238,10 +238,15 @@ Run a single suite: `npm run test -- <pattern>` (e.g. `npm run test -- mockerLif
 Uses Playwright with headless Chromium to visually verify the HUD overlay.
 The mocker provides a ~75-second scripted 6v6 match sequence — no game server needed.
 
+**Ports:** e2e runs the React dev server on **:3010** and the mocker on **:8000**
+so it never collides with the Docker `data` container's production-bundle React on
+:3000. `reuseExistingServer` is OFF on both — a stale process fails the run fast
+instead of silently testing the wrong stack.
+
 ### Commands
 
 ```bash
-npm run e2e            # automated: starts mocker + React, walks timeline, takes 10 screenshots
+npm run e2e            # automated: starts mocker + React (on :3010), walks timeline, takes 9 screenshots
 npm run e2e:headed     # same but with visible browser window
 npm run e2e:screenshot # ad-hoc: take a single screenshot (servers must be running)
 ```

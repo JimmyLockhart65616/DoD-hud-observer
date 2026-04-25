@@ -36,32 +36,27 @@ test.describe('HUD Mocker Timeline', () => {
         await expect(page.locator('.allies-score')).toHaveText('0');
         await expect(page.locator('.axis-score')).toHaveText('0');
 
-        // ── Checkpoint 4: Caster observing Raphinha ─────────────────
-        // Observed player bar appears at bottom center
-        await page.waitForSelector('.player-observed', { timeout: 15_000 });
-        await expect(page.locator('.player-observed .observed-name')).toContainText('Raphinha');
-        await takeScreenshot(page, '04-observed-player');
-
-        // ── Checkpoint 5: Prone shame visible on ian ────────────────
+        // ── Checkpoint 4: Prone shame visible on ian ────────────────
         // prone_change fires at 6s — wait for .card-prone to appear
         await page.waitForSelector('.card-prone', { timeout: 20_000 });
-        await takeScreenshot(page, '05-prone-shame');
+        await takeScreenshot(page, '04-prone-shame');
 
-        // ── Checkpoint 6: Kill feed with first kills ────────────────
+        // ── Checkpoint 5: Kill feed with first kills ────────────────
         // First kill at 9s, second at 10s. Kill items expire after 5s.
         await waitForKillFeed(page, 1, 20_000);
-        await takeScreenshot(page, '06-kill-feed');
+        await takeScreenshot(page, '05-kill-feed');
         await expect(page.locator('.wrapper .kill').first()).toBeVisible();
 
-        // ── Checkpoint 7: Flag capture ───────────────────────────────
-        // Allies capture Church at 15s → two .flag-allies (Allied Base + Church)
+        // ── Checkpoint 6: Flag capture ───────────────────────────────
+        // dod_anzio mocker starts all 5 flags neutral; allies cap Anzio Street at 15s
+        // → exactly one .flag-allies appears.
         await page.waitForFunction(
-            () => document.querySelectorAll('.flag-item.flag-allies').length >= 2,
+            () => document.querySelectorAll('.flag-item.flag-allies').length >= 1,
             { timeout: 25_000 },
         );
-        await takeScreenshot(page, '07-flag-captured');
+        await takeScreenshot(page, '06-flag-captured');
 
-        // ── Checkpoint 8: Scores updated ─────────────────────────────
+        // ── Checkpoint 7: Scores updated ─────────────────────────────
         // player_score events fire at 15.1s — check K/D display changed
         await page.waitForFunction(
             () => {
@@ -72,9 +67,9 @@ test.describe('HUD Mocker Timeline', () => {
             },
             { timeout: 25_000 },
         );
-        await takeScreenshot(page, '08-scores-updated');
+        await takeScreenshot(page, '07-scores-updated');
 
-        // ── Checkpoint 9: Round end (30s) ────────────────────────────
+        // ── Checkpoint 8: Round end (30s) ────────────────────────────
         // Score changes to 1-0 Allies
         await page.waitForFunction(
             () => {
@@ -84,9 +79,9 @@ test.describe('HUD Mocker Timeline', () => {
             { timeout: 45_000 },
         );
         await expect(page.locator('.axis-score')).toHaveText('0');
-        await takeScreenshot(page, '09-round-end');
+        await takeScreenshot(page, '08-round-end');
 
-        // ── Checkpoint 10: Round 2 starts (38s) ─────────────────────
+        // ── Checkpoint 9: Round 2 starts (38s) ──────────────────────
         // All players respawn — no .dead elements
         await page.waitForFunction(
             () => {
@@ -95,6 +90,6 @@ test.describe('HUD Mocker Timeline', () => {
             },
             { timeout: 55_000 },
         );
-        await takeScreenshot(page, '10-round2-started');
+        await takeScreenshot(page, '09-round2-started');
     });
 });

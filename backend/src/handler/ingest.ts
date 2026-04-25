@@ -10,8 +10,9 @@ import { MetricsCollector } from './metrics';
 // Evict cached players whose lastSeen is older than this from snapshot replay.
 // Covers missed player_disconnect events (crashes, changelevel, rcon restart).
 // During live play every player gets refreshed by spawn/score/kill/prone/etc.,
-// so only genuine ghosts age out.
-const PLAYER_STALE_MS = 3 * 60 * 1000;
+// so only genuine ghosts age out. 5 min is generous enough for pre-match
+// lobbies where players can sit idle without emitting per-player events.
+const PLAYER_STALE_MS = 5 * 60 * 1000;
 
 interface ServerState {
     players: Map<string, any>;    // user_id → latest player_connect/spawn/score state
@@ -79,6 +80,7 @@ function updateServerState(server: string, event: any): void {
                 p.kills = event.kills;
                 p.deaths = event.deaths;
                 p.score = event.score;
+                p.obj_score = event.obj_score ?? 0;
             }
             break;
         case 'kill':
@@ -108,7 +110,7 @@ function updateServerState(server: string, event: any): void {
         case 'half_start':
             // Reset player stats on half start
             state.players.forEach(p => {
-                p.kills = 0; p.deaths = 0; p.score = 0;
+                p.kills = 0; p.deaths = 0; p.score = 0; p.obj_score = 0;
                 p.alive = true; p.class_id = null;
                 p.lastSeen = now;
             });
@@ -124,6 +126,25 @@ function updateServerState(server: string, event: any): void {
     if (uid && state.players.has(uid)) {
         state.players.get(uid).lastSeen = now;
     }
+}
+
+/**
+ * Returns the number of human players currently on Allies or Axis for a given
+ * server. Applies the same PLAYER_STALE_MS filter used by getServerSnapshot so
+ * ghost players from missed disconnects don't inflate the count. HLTV bots sit
+ * on `spectator` / `unassigned` and are naturally excluded.
+ */
+export function getServerPlayerCount(server: string): number {
+    const state = serverStates.get(server);
+    if (!state) return 0;
+    const now = Date.now();
+    let count = 0;
+    state.players.forEach((p) => {
+        if (p.team !== 'allies' && p.team !== 'axis') return;
+        if (now - (p.lastSeen ?? 0) > PLAYER_STALE_MS) return;
+        count++;
+    });
+    return count;
 }
 
 /**
@@ -163,7 +184,8 @@ export function getServerSnapshot(server: string): string[] {
         if (p.kills != null || p.deaths != null) {
             events.push(JSON.stringify({
                 event: 'player_score', user_id: p.user_id,
-                kills: p.kills ?? 0, deaths: p.deaths ?? 0, score: p.score ?? 0,
+                kills: p.kills ?? 0, deaths: p.deaths ?? 0,
+                score: p.score ?? 0, obj_score: p.obj_score ?? 0,
             }));
         }
     });

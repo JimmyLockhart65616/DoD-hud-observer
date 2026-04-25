@@ -75,6 +75,9 @@ const PlayerCard = React.memo(({ player }) => {
             <div className="card-bottom">
                 <div className="card-name">{player.name}</div>
                 <div className="card-stats">
+                    <span className="card-objscore" title="Objective score (flag caps)">
+                        <span className="card-stat-icon">&#9873;</span>{player.obj_score ?? 0}
+                    </span>
                     <span className="card-kills">{player.kills}</span>
                     <span className="card-kd-sep">/</span>
                     <span className="card-deaths">{player.deaths}</span>

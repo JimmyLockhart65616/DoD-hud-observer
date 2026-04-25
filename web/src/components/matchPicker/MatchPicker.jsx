@@ -11,14 +11,28 @@ function MatchPicker() {
     const [error, setError] = useState(null);
 
     useEffect(() => {
-        Promise.all([
+        let cancelled = false;
+
+        const refreshLive = () => Promise.all([
             fetch(`${API_URL}/api/servers`).then(r => r.json()),
             fetch(`${API_URL}/api/matches/live`).then(r => r.json()),
-            fetch(`${API_URL}/api/matches/stored`).then(r => r.json()),
         ])
-            .then(([serverData, live, stored]) => {
+            .then(([serverData, live]) => {
+                if (cancelled) return live;
                 setServers(serverData.servers || []);
                 setLiveMatches(live.matches || []);
+                return live;
+            });
+
+        // Initial load fetches stored matches too; polling refreshes only the
+        // live side (servers + active matches) since /stored is expensive and
+        // changes slowly.
+        Promise.all([
+            refreshLive(),
+            fetch(`${API_URL}/api/matches/stored`).then(r => r.json()),
+        ])
+            .then(([live, stored]) => {
+                if (cancelled) return;
                 const liveIds = new Set((live.active || []).map(String));
                 setStoredMatches(
                     (stored.matches || []).filter(m => !liveIds.has(m.matchId))
@@ -26,10 +40,20 @@ function MatchPicker() {
                 setLoading(false);
             })
             .catch(err => {
+                if (cancelled) return;
                 console.error('[MatchPicker] fetch error:', err);
                 setError(err.message);
                 setLoading(false);
             });
+
+        const interval = setInterval(() => {
+            refreshLive().catch(err => console.error('[MatchPicker] poll error:', err));
+        }, 5000);
+
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
     }, []);
 
     if (loading) return <Container style={{ marginTop: 40 }}><p>Loading...</p></Container>;
@@ -38,14 +62,6 @@ function MatchPicker() {
     const formatDate = (iso) => {
         if (!iso) return '\u2014';
         return new Date(iso).toLocaleString();
-    };
-
-    const timeAgo = (ms) => {
-        if (!ms) return '\u2014';
-        const sec = Math.floor((Date.now() - ms) / 1000);
-        if (sec < 60) return `${sec}s ago`;
-        if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
-        return `${Math.floor(sec / 3600)}h ago`;
     };
 
     const activeMatchesByServer = new Map();
@@ -76,10 +92,9 @@ function MatchPicker() {
                             <thead>
                                 <tr>
                                     <th>Server</th>
-                                    <th>Status</th>
-                                    <th>Activity</th>
+                                    <th>Server Status</th>
                                     <th>Current Match</th>
-                                    <th>Last Event</th>
+                                    <th>Players</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
@@ -96,22 +111,22 @@ function MatchPicker() {
                                             </td>
                                             <td>
                                                 {match ? (
-                                                    <Badge bg="success">Match live</Badge>
-                                                ) : (
-                                                    <Badge bg="secondary">Idle</Badge>
-                                                )}
-                                            </td>
-                                            <td>
-                                                {match ? (
                                                     <>
+                                                        <Badge bg="success" style={{ marginRight: 8 }}>Live</Badge>
                                                         <code>{match.matchId}</code>
                                                         {match.map ? <> &middot; {match.map}</> : null}
                                                     </>
                                                 ) : (
-                                                    <span className="text-muted">&mdash;</span>
+                                                    <span className="text-muted">Not live</span>
                                                 )}
                                             </td>
-                                            <td>{timeAgo(s.last_seen)}</td>
+                                            <td>
+                                                {s.players > 0 ? (
+                                                    s.players
+                                                ) : (
+                                                    <span className="text-muted">0</span>
+                                                )}
+                                            </td>
                                             <td>
                                                 <a href={`/screen?server=${encodeURIComponent(s.hostname)}`}>
                                                     {match ? 'Watch Live' : 'Watch'}

@@ -32,6 +32,9 @@ export class MatchRecorder {
     private matchesDir: string;
     private activeMatches: Set<string> = new Set();
     private metadata: Map<string, MatchMetadata> = new Map();
+    // In-memory only — tracks wall-clock of last recorded event per active match,
+    // used by reapStaleMatches. Not persisted to metadata.json.
+    private lastEventAt: Map<string, number> = new Map();
 
     constructor(matchesDir: string) {
         this.matchesDir = path.resolve(matchesDir);
@@ -70,6 +73,7 @@ export class MatchRecorder {
         }
 
         this.activeMatches.add(matchId);
+        this.lastEventAt.set(matchId, Date.now());
         console.log(`[recorder] Started match ${matchId} (${map}, half ${half})`);
     }
 
@@ -91,6 +95,7 @@ export class MatchRecorder {
 
         const meta = this.metadata.get(matchId)!;
         meta.eventCount++;
+        this.lastEventAt.set(matchId, Date.now());
     }
 
     /**
@@ -106,8 +111,32 @@ export class MatchRecorder {
         meta.endedAt = new Date().toISOString();
         this.writeMetadata(matchId, meta);
         this.activeMatches.delete(matchId);
+        this.lastEventAt.delete(matchId);
 
         console.log(`[recorder] Ended match ${matchId} (${meta.eventCount} events)`);
+    }
+
+    /**
+     * End any active match whose most recent event is older than `staleMs`.
+     * Safety net for matches that never get a clean `ktp_match_end` — plugin
+     * reloads, changelevels, crashes, or rcon restarts all leave ghosts in
+     * `activeMatches` that would otherwise sit forever.
+     *
+     * Returns the list of reaped match ids (for logging / observability).
+     */
+    reapStaleMatches(staleMs: number): string[] {
+        const now = Date.now();
+        const reaped: string[] = [];
+        for (const id of this.activeMatches) {
+            const last = this.lastEventAt.get(id) ?? 0;
+            const idle = now - last;
+            if (idle > staleMs) {
+                console.log(`[recorder] Reaping stale match ${id} (idle ${Math.round(idle / 1000)}s)`);
+                this.endMatch(id);
+                reaped.push(id);
+            }
+        }
+        return reaped;
     }
 
     getMetadata(matchId: string): MatchMetadata | undefined {

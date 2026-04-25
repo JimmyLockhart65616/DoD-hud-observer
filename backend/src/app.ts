@@ -4,13 +4,22 @@ import cors from 'cors';
 import config from './config';
 import { MatchRecorder } from './handler/matchRecorder';
 import { MetricsCollector } from './handler/metrics';
-import { createIngestRouter } from './handler/ingest';
+import { createIngestRouter, getServerPlayerCount } from './handler/ingest';
 import { createSocketServer } from './socket/socket';
 
 // ─── Core services ───────────────────────────────────────────────────────────
 
 const recorder = new MatchRecorder(config.storage.matches_dir);
 const metrics  = new MetricsCollector();
+
+// Active-match reaper — matches that never get a clean ktp_match_end (plugin
+// reload, changelevel, crash, rcon restart) would otherwise sit in
+// activeMatches forever and show as "live" on /watch. A full competitive half
+// is 20 min; any live match emits events continuously within that window, so
+// 20 min of silence on a match_id is unambiguously abandoned.
+const MATCH_STALE_MS = 20 * 60 * 1000;
+const REAPER_TICK_MS = 60_000;
+setInterval(() => recorder.reapStaleMatches(MATCH_STALE_MS), REAPER_TICK_MS);
 
 // ─── Socket.IO (match-based rooms) ──────────────────────────────────────────
 
@@ -45,7 +54,11 @@ app.get('/metrics', (_req, res) => {
 
 // Server list — game servers that have sent events
 app.get('/api/servers', (_req, res) => {
-    res.json({ servers: metrics.getServers() });
+    const servers = metrics.getServers().map(({ last_seen: _last, ...rest }) => ({
+        ...rest,
+        players: getServerPlayerCount(rest.hostname),
+    }));
+    res.json({ servers });
 });
 
 app.get('/api/matches/live', (_req, res) => {

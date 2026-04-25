@@ -94,6 +94,18 @@ new g_player_alive[MAX_PLAYERS + 1];
 // connect, disconnect, and ktp_match_start (half reset).
 new g_player_kills[MAX_PLAYERS + 1];
 
+// Local objective-score counter — sum of positive score_delta from
+// dod_score_event with cp_index >= 0. Mirrors the in-game scoreboard's
+// ObjScore column. Reset alongside g_player_kills.
+new g_player_objscore[MAX_PLAYERS + 1];
+
+// Local death counter — authoritative for the HUD. The engine's ScoreShort
+// broadcast on death is unreliable in extension mode (KTPAMXX + ReHLDS +
+// dproto), which left pure-victim players (no kills) showing deaths=0 on
+// late-join snapshots in prod. Track locally alongside g_player_kills so
+// emit_player_score is self-sufficient. Reset alongside g_player_kills.
+new g_player_deaths[MAX_PLAYERS + 1];
+
 // Flag ownership cache
 new g_flag_owner[MAX_FLAGS];
 new g_flag_count;
@@ -131,7 +143,9 @@ public plugin_init() {
 
     // Game events
     register_event("TeamScore",  "ev_team_score",   "a");
-    register_event("ScoreShort", "ev_player_score", "a");
+    // No ScoreShort hook: client_death emits player_score for both killer and
+    // victim explicitly, using locally tracked g_player_kills/g_player_deaths.
+    // The engine's ScoreShort broadcast was unreliable in extension mode.
 
     // Chat
     register_clcmd("say",      "ev_say");
@@ -325,8 +339,12 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
     g_matchType = _:matchType;
     g_matchHalf = half;
 
-    // Reset per-player kill counters — stats wipe on half start.
-    for (new i = 1; i <= MAX_PLAYERS; i++) g_player_kills[i] = 0;
+    // Reset per-player kill/death/objscore counters — stats wipe on half start.
+    for (new i = 1; i <= MAX_PLAYERS; i++) {
+        g_player_kills[i]    = 0;
+        g_player_deaths[i]   = 0;
+        g_player_objscore[i] = 0;
+    }
 
     server_print("[HUD] Match started: %s (map=%s type=%d half=%d)", matchId, map, _:matchType, half);
 
@@ -451,10 +469,12 @@ public client_authorized(id) {
     // Player isn't fully in-game yet — always starts unassigned
     get_team_str(TEAM_UNASSIGNED, team_str, charsmax(team_str));
 
-    g_player_team[id]  = TEAM_UNASSIGNED;
-    g_player_prone[id] = PRONE_STANDING;
-    g_player_alive[id] = 0;
-    g_player_kills[id] = 0;
+    g_player_team[id]   = TEAM_UNASSIGNED;
+    g_player_prone[id]  = PRONE_STANDING;
+    g_player_alive[id]  = 0;
+    g_player_kills[id]    = 0;
+    g_player_deaths[id]   = 0;
+    g_player_objscore[id] = 0;
 
     new json[256];
     formatex(json, charsmax(json),
@@ -474,10 +494,12 @@ public client_disconnect(id) {
         "{^"event^":^"player_disconnect^",^"user_id^":^"%s^"}", steamid);
     post_event(json);
 
-    g_player_team[id]  = 0;
-    g_player_prone[id] = PRONE_STANDING;
-    g_player_alive[id] = 0;
-    g_player_kills[id] = 0;
+    g_player_team[id]   = 0;
+    g_player_prone[id]  = PRONE_STANDING;
+    g_player_alive[id]  = 0;
+    g_player_kills[id]    = 0;
+    g_player_deaths[id]   = 0;
+    g_player_objscore[id] = 0;
 }
 
 // DODX forward: player spawned
@@ -585,18 +607,24 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
         killer_prone ? "true" : "false");
     post_event(json);
 
-    // DoD's engine fires ScoreShort when death count changes (via set_user_deaths)
-    // but not on frag increments — the HL scoreboard reads v.frags directly, so no
-    // message is needed for kills. Emit player_score for the killer explicitly so
-    // the HUD backend sees the new kill count.
+    // Track kill/death counts locally and emit player_score for both players.
+    // The engine's ScoreShort broadcast on death is unreliable in extension mode
+    // (KTPAMXX + ReHLDS + dproto) — pure-victim players ended up with deaths=0
+    // on late-join snapshots in prod. v.frags is also off-by-one here because
+    // DODX's Damage-hook path fires client_death BEFORE CDODPlayer::Killed()
+    // increments frags / deaths. So track both locally and emit explicitly.
     //
-    // Track kills locally: reading v.frags here is off-by-one because DODX's
-    // Damage-hook path fires client_death BEFORE the engine's Killed() has
-    // incremented frags. Mirror DoD frag semantics: +1 normal, -1 teamkill, 0 suicide.
+    // Killer: +1 normal, -1 teamkill, 0 suicide (mirrors DoD frag semantics).
     if (killer != victim && is_user_connected(killer)) {
         if (TK) g_player_kills[killer]--;
         else    g_player_kills[killer]++;
         emit_player_score(killer);
+    }
+
+    // Victim: count every death (suicides included — DoD scoreboard does too).
+    if (is_user_connected(victim)) {
+        g_player_deaths[victim]++;
+        emit_player_score(victim);
     }
 }
 
@@ -604,14 +632,15 @@ stock emit_player_score(id) {
     new steamid[32];
     get_steamid(id, steamid, charsmax(steamid));
 
-    new kills  = g_player_kills[id];
-    new deaths = get_user_deaths(id);
-    new score  = dod_get_user_score(id);
+    new kills    = g_player_kills[id];
+    new deaths   = g_player_deaths[id];
+    new score    = dod_get_user_score(id);
+    new objscore = g_player_objscore[id];
 
     new json[256];
     formatex(json, charsmax(json),
-        "{^"event^":^"player_score^",^"user_id^":^"%s^",^"kills^":%d,^"deaths^":%d,^"score^":%d}",
-        steamid, kills, deaths, score);
+        "{^"event^":^"player_score^",^"user_id^":^"%s^",^"kills^":%d,^"deaths^":%d,^"score^":%d,^"obj_score^":%d}",
+        steamid, kills, deaths, score, objscore);
     post_event(json);
 }
 
@@ -654,28 +683,6 @@ public task_poll_prone() {
             do_prone_change(id, prone_state);
         }
     }
-}
-
-// ScoreShort: read_data(1)=id, read_data(2)=score, read_data(3)=kills, read_data(4)=deaths
-// DoD fires ScoreShort on death-count changes only. Use g_player_kills (locally
-// tracked from client_death) as the authoritative kills value to avoid clobbering
-// with the stale v.frags in the ScoreShort payload.
-public ev_player_score() {
-    new id = read_data(1);
-    if (!is_user_connected(id)) return;
-
-    new steamid[32];
-    get_steamid(id, steamid, charsmax(steamid));
-
-    new score  = read_data(2);
-    new kills  = g_player_kills[id];
-    new deaths = read_data(4);
-
-    new json[256];
-    formatex(json, charsmax(json),
-        "{^"event^":^"player_score^",^"user_id^":^"%s^",^"kills^":%d,^"deaths^":%d,^"score^":%d}",
-        steamid, kills, deaths, score);
-    post_event(json);
 }
 
 public ev_team_score() {
@@ -931,6 +938,11 @@ public dod_score_event(id, score_delta, total_score, cp_index) {
 
     g_flag_pending_captor_ids[cp_index][n] = id;
     g_flag_pending_captor_count[cp_index]  = n + 1;
+
+    // Credit the captor's objective score and push an updated player_score
+    // immediately so the HUD doesn't have to wait for the next kill.
+    g_player_objscore[id] += score_delta;
+    emit_player_score(id);
 }
 
 // DODX forward: control point captured
