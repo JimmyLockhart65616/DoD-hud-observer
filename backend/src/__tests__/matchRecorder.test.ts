@@ -169,6 +169,76 @@ describe('MatchRecorder', () => {
         );
     });
 
+    describe('rehydrateActiveMatches (constructor)', () => {
+        it('rehydrates a match whose metadata.json has endedAt:null', () => {
+            // Simulate a backend that started a match, recorded events, then died
+            // without a clean endMatch — so metadata.json sits at endedAt:null.
+            const old = new MatchRecorder(tmpDir);
+            old.startMatch('KTP-rehy-1', 'dod_anzio', 1, 1, 'localhost');
+            old.recordEvent('KTP-rehy-1', { event: 'kill' }, 'localhost');
+            old.recordEvent('KTP-rehy-1', { event: 'kill' }, 'localhost');
+            old.recordEvent('KTP-rehy-1', { event: 'kill' }, 'localhost');
+            // Deliberately no endMatch — leaves endedAt:null on disk.
+
+            // New recorder over the same dir — simulates backend restart.
+            const fresh = new MatchRecorder(tmpDir);
+            expect(fresh.getActiveMatchIds()).toContain('KTP-rehy-1');
+            // eventCount recovered from events.jsonl line count, not the
+            // stale `0` in metadata.json.
+            expect(fresh.getMetadata('KTP-rehy-1')!.eventCount).toBe(3);
+        });
+
+        it('does not rehydrate matches that ended cleanly', () => {
+            const old = new MatchRecorder(tmpDir);
+            old.startMatch('KTP-rehy-2', 'dod_anzio', 1, 1, 'localhost');
+            old.recordEvent('KTP-rehy-2', { event: 'kill' }, 'localhost');
+            old.endMatch('KTP-rehy-2');
+
+            const fresh = new MatchRecorder(tmpDir);
+            expect(fresh.getActiveMatchIds()).not.toContain('KTP-rehy-2');
+        });
+
+        it('seeds lastEventAt from events.jsonl mtime so stale orphans get reaped', () => {
+            const old = new MatchRecorder(tmpDir);
+            old.startMatch('KTP-rehy-stale', 'dod_anzio', 1, 1, 'localhost');
+            old.recordEvent('KTP-rehy-stale', { event: 'kill' }, 'localhost');
+
+            // Backdate the events.jsonl mtime to 1 hour ago.
+            const jsonlPath = path.join(tmpDir, 'KTP-rehy-stale', 'events.jsonl');
+            const oneHourAgo = (Date.now() - 60 * 60 * 1000) / 1000;
+            fs.utimesSync(jsonlPath, oneHourAgo, oneHourAgo);
+
+            const fresh = new MatchRecorder(tmpDir);
+            const reaped = fresh.reapStaleMatches(20 * 60 * 1000);
+            expect(reaped).toEqual(['KTP-rehy-stale']);
+        });
+    });
+
+    describe('eventCount flush during recordEvent', () => {
+        it('persists eventCount to metadata.json every 100 events', () => {
+            recorder.startMatch('KTP-flush', 'dod_anzio', 1, 1, 'localhost');
+            const metaPath = path.join(tmpDir, 'KTP-flush', 'metadata.json');
+
+            // After 99 events, metadata.json is still at the startMatch value (0).
+            for (let i = 0; i < 99; i++) {
+                recorder.recordEvent('KTP-flush', { event: 'tick' }, 'localhost');
+            }
+            expect(JSON.parse(fs.readFileSync(metaPath, 'utf-8')).eventCount).toBe(0);
+
+            // The 100th event triggers a flush.
+            recorder.recordEvent('KTP-flush', { event: 'tick' }, 'localhost');
+            expect(JSON.parse(fs.readFileSync(metaPath, 'utf-8')).eventCount).toBe(100);
+
+            // Subsequent events (101..199) are buffered again until the next flush at 200.
+            for (let i = 0; i < 99; i++) {
+                recorder.recordEvent('KTP-flush', { event: 'tick' }, 'localhost');
+            }
+            expect(JSON.parse(fs.readFileSync(metaPath, 'utf-8')).eventCount).toBe(100);
+            recorder.recordEvent('KTP-flush', { event: 'tick' }, 'localhost');
+            expect(JSON.parse(fs.readFileSync(metaPath, 'utf-8')).eventCount).toBe(200);
+        });
+    });
+
     describe('reapStaleMatches', () => {
         beforeEach(() => {
             jest.useFakeTimers({ doNotFake: ['performance'] });
