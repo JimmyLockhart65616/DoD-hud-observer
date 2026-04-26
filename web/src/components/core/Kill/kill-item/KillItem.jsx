@@ -1,21 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 
 // Pre-build weapon image map at compile time
 const weaponImages = {};
 const weaponCtx = require.context('../../../screen/resources/images/weapons', false, /\.png$/);
 weaponCtx.keys().forEach(key => { weaponImages[key.replace('./', '').replace('.png', '')] = weaponCtx(key); });
 
-const KillItem = ({ killinfo, killer, victim, delay }) => {
-
-    const [visible, setVisible] = useState(true);
-
-    useEffect(() => {
-        const t = setTimeout(() => setVisible(false), delay);
-        return () => clearTimeout(t);
-    }, [delay]);
-
-    if (!visible) return <div />;
-
+// Visibility/TTL is handled by the parent (Kill.jsx) — this component just
+// renders. The previous useState/setTimeout self-hide broke under browser
+// background-tab throttling.
+const KillItem = ({ killinfo, killer, victim }) => {
     const isSuicide  = killinfo.kill_type === 'suicide';
     const isTeamkill = killinfo.kill_type === 'teamkill';
 

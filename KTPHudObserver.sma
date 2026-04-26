@@ -1044,6 +1044,21 @@ public dod_score_event(id, score_delta, total_score, cp_index) {
 public dod_control_point_captured(cp_index, new_owner, old_owner) {
     if (cp_index < 0 || cp_index >= MAX_FLAGS) return;
 
+    // Suppress two classes of spurious events observed in prod (1.3-5828-NY1):
+    //   1. Same-owner duplicates — DODX's usermsg.cpp:639 owner-change guard
+    //      doesn't always hold; we saw same-flag/same-owner events 540ms apart.
+    //   2. Round-restart resets — on objective end, the engine flips every flag
+    //      back to its initial state. DODX fires this forward for each, with
+    //      new_owner=TEAM_SPECTATOR. Five simultaneous "neutral" captures per
+    //      restart polluted the HUD feed with phantom events. Real caps always
+    //      transition straight from one team to the other; an in-game flag
+    //      never goes neutral mid-round.
+    if (g_flag_owner[cp_index] == new_owner) return;
+    if (new_owner != TEAM_ALLIES && new_owner != TEAM_AXIS) {
+        g_flag_owner[cp_index] = new_owner;
+        return;
+    }
+
     new owner_str[16];
     if      (new_owner == TEAM_ALLIES) copy(owner_str, charsmax(owner_str), "allies");
     else if (new_owner == TEAM_AXIS)   copy(owner_str, charsmax(owner_str), "axis");
