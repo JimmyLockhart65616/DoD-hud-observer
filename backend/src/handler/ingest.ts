@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { Server as SocketServer } from 'socket.io';
 import { MatchRecorder } from './matchRecorder';
 import { MetricsCollector } from './metrics';
+import { HltvDelayBuffer } from './hltvDelayBuffer';
+import { HltvSyncService } from './hltvSync';
 
 // ─── Per-Server State Cache ──────────────────────────────────────────────────
 // Tracks the latest game state per server so late-joining frontends get a
@@ -19,6 +21,8 @@ interface ServerState {
     team_score: any | null;       // latest team_score event
     flags: any | null;            // latest flags_init event
     timeleft: any | null;         // latest time_sync event
+    half: number | null;          // current half (1, 2, 101+) from latest half_start
+    round_phase: 'freeze' | 'live' | 'end' | null;  // latest round_start_freeze/round_start/round_end
 }
 
 const serverStates = new Map<string, ServerState>();
@@ -30,6 +34,8 @@ function getOrCreateState(server: string): ServerState {
             team_score: null,
             flags: null,
             timeleft: null,
+            half: null,
+            round_phase: null,
         });
     }
     return serverStates.get(server)!;
@@ -46,6 +52,10 @@ function updateServerState(server: string, event: any): void {
             // session can't survive a new match boundary.
             state.players.clear();
             state.team_score = null;
+            state.round_phase = null;
+            if (event.event === 'ktp_match_start' && event.half != null) {
+                state.half = event.half;
+            }
             break;
         case 'player_connect':
             state.players.set(event.user_id, {
@@ -65,9 +75,40 @@ function updateServerState(server: string, event: any): void {
                 class_id: event.class_id,
                 weapon_primary: event.weapon_primary,
                 weapon_secondary: event.weapon_secondary,
+                health: event.health ?? 100,
                 alive: true,
                 lastSeen: now,
             });
+            break;
+        case 'roster_player':
+            // Snapshot row from the plugin's match-start roster dump. Carries
+            // alive/dead, class, weapons, and current health for every connected
+            // player. The frontend uses this to seed the HUD without lying about
+            // a "spawn" for a currently-dead player.
+            state.players.set(event.user_id, {
+                ...state.players.get(event.user_id),
+                user_id: event.user_id,
+                name: event.name ?? state.players.get(event.user_id)?.name ?? event.user_id,
+                team: event.team,
+                class_id: event.alive ? event.class_id : null,
+                weapon_primary: event.alive ? event.weapon_primary : null,
+                weapon_secondary: event.alive ? event.weapon_secondary : null,
+                health: event.health ?? (event.alive ? 100 : 0),
+                alive: !!event.alive,
+                lastSeen: now,
+            });
+            break;
+        case 'damage':
+            if (state.players.has(event.victim_id)) {
+                state.players.get(event.victim_id).health = Math.max(0, event.victim_health ?? 0);
+            }
+            break;
+        case 'prone_change':
+            if (state.players.has(event.user_id)) {
+                const p = state.players.get(event.user_id);
+                p.prone_state = event.state;
+                p.prone_since = event.state !== 'standing' ? event.timestamp : null;
+            }
             break;
         case 'player_team_change':
             if (state.players.has(event.user_id)) {
@@ -85,7 +126,11 @@ function updateServerState(server: string, event: any): void {
             break;
         case 'kill':
             if (state.players.has(event.victim_id)) {
-                state.players.get(event.victim_id).alive = false;
+                const v = state.players.get(event.victim_id);
+                v.alive = false;
+                v.health = 0;
+                v.prone_state = 'standing';
+                v.prone_since = null;
             }
             break;
         case 'player_disconnect':
@@ -107,14 +152,27 @@ function updateServerState(server: string, event: any): void {
         case 'time_sync':
             state.timeleft = event;
             break;
+        case 'round_start_freeze':
+            state.round_phase = 'freeze';
+            break;
+        case 'round_start':
+            state.round_phase = 'live';
+            break;
+        case 'round_end':
+            state.round_phase = 'end';
+            break;
         case 'half_start':
-            // Reset player stats on half start
+            // Per-player stat reset, but keep the cached team_score: until the
+            // plugin's post-half_start team_score event arrives, the half-1
+            // total is still the correct thing to show a late-joining client.
             state.players.forEach(p => {
                 p.kills = 0; p.deaths = 0; p.score = 0; p.obj_score = 0;
-                p.alive = true; p.class_id = null;
+                p.alive = true; p.class_id = null; p.health = 100;
+                p.prone_state = 'standing'; p.prone_since = null;
                 p.lastSeen = now;
             });
-            state.team_score = null;
+            if (event.half != null) state.half = event.half;
+            state.round_phase = null;
             state.timeleft = event;
             break;
     }
@@ -157,7 +215,12 @@ export function getServerSnapshot(server: string): string[] {
 
     const events: string[] = [];
 
-    // Replay flags first
+    // Replay half number first so the HUD's top-of-screen renders the right half.
+    if (state.half != null) {
+        events.push(JSON.stringify({ event: 'half_start', half: state.half }));
+    }
+
+    // Replay flags
     if (state.flags) events.push(JSON.stringify(state.flags));
 
     // Replay team score
@@ -166,7 +229,17 @@ export function getServerSnapshot(server: string): string[] {
     // Replay timeleft
     if (state.timeleft) events.push(JSON.stringify(state.timeleft));
 
-    // Replay players: emit player_connect then player_spawn for each
+    // Replay round phase so a late joiner knows whether a round is live/freeze/end.
+    if (state.round_phase === 'freeze') {
+        events.push(JSON.stringify({ event: 'round_start_freeze' }));
+    } else if (state.round_phase === 'live') {
+        const tl = state.timeleft?.timeleft;
+        events.push(JSON.stringify({ event: 'round_start', ...(tl != null ? { timeleft: tl } : {}) }));
+    }
+    // 'end' is intentionally omitted — replaying it would trigger the frontend's
+    // 5s revive timer for an already-completed round; harmless but visually odd.
+
+    // Replay players: emit roster_player (state-of-the-world) for each.
     const now = Date.now();
     state.players.forEach((p) => {
         if (p.team === 'spectator' || p.team === 'unassigned') return;
@@ -175,12 +248,19 @@ export function getServerSnapshot(server: string): string[] {
         events.push(JSON.stringify({
             event: 'player_connect', user_id: p.user_id, name: p.name, team: p.team,
         }));
-        if (p.class_id != null) {
-            events.push(JSON.stringify({
-                event: 'player_spawn', user_id: p.user_id, name: p.name, team: p.team,
-                class_id: p.class_id, weapon_primary: p.weapon_primary, weapon_secondary: p.weapon_secondary,
-            }));
-        }
+        // Use roster_player for the snapshot row — it carries health/alive/prone
+        // and doesn't lie about a fresh spawn for a currently-dead player.
+        events.push(JSON.stringify({
+            event: 'roster_player',
+            user_id: p.user_id, name: p.name, team: p.team,
+            alive: p.alive ?? (p.class_id != null),
+            class_id: p.class_id ?? -1,
+            weapon_primary: p.weapon_primary ?? 'none',
+            weapon_secondary: p.weapon_secondary ?? 'none',
+            health: p.health ?? (p.alive === false ? 0 : 100),
+            prone_state: p.prone_state ?? 'standing',
+            prone_since: p.prone_since ?? null,
+        }));
         if (p.kills != null || p.deaths != null) {
             events.push(JSON.stringify({
                 event: 'player_score', user_id: p.user_id,
@@ -208,13 +288,33 @@ export function getServerSnapshot(server: string): string[] {
  *   3. Emits to the Socket.IO room for that matchId
  *   4. Returns 200 OK
  */
+/**
+ * The deferred fire path: applied to each event after the HLTV delay window.
+ * Updates the per-server state cache (so late-joiner snapshots reflect what
+ * HLTV is currently broadcasting, not real-time state) and emits to all
+ * socket rooms. Exported so app.ts can wire it as the buffer's onFire
+ * callback exactly once at startup, rather than per ingest router.
+ */
+export function makeFireToSockets(io: SocketServer) {
+    return (server: string, matchId: string | undefined, event: any) => {
+        updateServerState(server, event);
+        if (matchId) io.to(matchId).emit(event.event, JSON.stringify(event));
+        io.to(`server:${server}`).emit(event.event, JSON.stringify(event));
+        io.to('all').emit(event.event, JSON.stringify(event));
+        io.to('hud_socket').emit(event.event, JSON.stringify(event));
+    };
+}
+
 export function createIngestRouter(
     authKey: string,
     recorder: MatchRecorder,
     io: SocketServer,
     metrics: MetricsCollector,
+    delayBuffer?: HltvDelayBuffer,
+    hltvSync?: HltvSyncService,
 ): Router {
     const router = Router();
+    const fireToSockets = makeFireToSockets(io);
 
     router.post('/', (req: Request, res: Response) => {
         // Auth check
@@ -235,7 +335,11 @@ export function createIngestRouter(
             ?? req.socket.remoteAddress
             ?? 'unknown';
 
-        // Handle match lifecycle events
+        // ─── IMMEDIATE phase ───────────────────────────────────────────────
+        // Disk write (ground truth), metrics, match-lifecycle bookkeeping.
+        // Runs synchronously regardless of HLTV-sync state — replays read
+        // from events.jsonl and must see real-time-ordered events.
+
         if (event.event === 'ktp_match_start' && matchId) {
             recorder.startMatch(
                 matchId,
@@ -244,42 +348,44 @@ export function createIngestRouter(
                 event.half ?? 0,
                 sourceServer,
             );
+            // Force a fresh HLTV sample at match start so the buffer has an
+            // accurate clock for the upcoming match's events.
+            if (hltvSync?.isActive(sourceServer)) {
+                void hltvSync.sample(sourceServer, 'ktp_match_start');
+            }
         }
 
-        // Update per-server state cache (for late-joining frontends)
-        updateServerState(sourceServer, event);
-
-        // Only record events that belong to a real match (started via ktp_match_start).
-        // Pre-match warmup / casual events are still emitted to server-room observers
-        // for live HUD use, but don't create a phantom "unknown" match record.
         if (matchId) {
             recorder.recordEvent(matchId, event, sourceServer);
-            io.to(matchId).emit(event.event, JSON.stringify(event));
         }
 
-        // Emit to server-based room (observers connected before match starts)
-        io.to(`server:${sourceServer}`).emit(event.event, JSON.stringify(event));
-
-        // Also emit to a global "all" room for dashboards monitoring all matches
-        io.to('all').emit(event.event, JSON.stringify(event));
-
-        // Legacy: also emit to 'hud_socket' room for frontends without ?match= param
-        io.to('hud_socket').emit(event.event, JSON.stringify(event));
-
-        // Handle match end
         if (event.event === 'ktp_match_end' && matchId) {
             recorder.endMatch(matchId);
         }
 
-        // Track metrics
         metrics.recordEvent(sourceServer);
 
-        // Plugin-side latency measurement: if the plugin sends X-Plugin-Sent-At
-        // (unix ms), calculate end-to-end latency
         const sentAt = req.headers['x-plugin-sent-at'];
         if (sentAt) {
             const latency = Date.now() - parseInt(sentAt as string, 10);
             metrics.recordLatency(sourceServer, latency);
+        }
+
+        // ─── Lazy init / map-change detection ──────────────────────────────
+        // Triggers a sample on first event from a server, and on detected
+        // map change (event.map differs from cached map). No-op when the
+        // server isn't configured for HLTV sync.
+        hltvSync?.onIngestEvent(sourceServer, event);
+
+        // ─── DEFERRED phase ────────────────────────────────────────────────
+        // If HLTV sync is active for this server, enqueue for later release;
+        // otherwise emit immediately (back-compat for unconfigured servers
+        // and for the feature flag being off).
+
+        if (delayBuffer?.isActive(sourceServer)) {
+            delayBuffer.enqueue({ server: sourceServer, matchId, event, enqueuedAt: Date.now() });
+        } else {
+            fireToSockets(sourceServer, matchId, event);
         }
 
         res.status(200).json({ ok: true });
