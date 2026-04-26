@@ -220,6 +220,14 @@ public task_init_config() {
         g_cvar_key[0] ? "(set)" : "(none)",
         g_hostname);
 
+    // Surface a loud warning if gamerules access isn't wired up. If this returns
+    // 0, dodx_get_team_score silently falls back to DODX's message-tracked
+    // globals — which sit at 0 in extension mode — and the HUD shows zeros for
+    // team score. This canary tells us we'd never know without a redeploy.
+    if (!dodx_has_gamerules()) {
+        server_print("[HUD] WARNING: dodx_has_gamerules()=0 — team_score will be 0 (gamerules signature lookup failed in DODX)");
+    }
+
     // Send flags snapshot now that URL is set (controlpoints_init fires before CVARs load)
     do_flags_init();
 }
@@ -348,12 +356,31 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
 
     server_print("[HUD] Match started: %s (map=%s type=%d half=%d)", matchId, map, _:matchType, half);
 
+    // Emit explicit ktp_match_start event so the backend's recorder.startMatch
+    // captures match_type/half in metadata.json (auto-start from recordEvent
+    // would default both to 0), and the frontend's match-reset handler fires.
+    // post_event injects match_id/map/match_type/half into the envelope.
+    new json[256];
+    formatex(json, charsmax(json),
+        "{^"event^":^"ktp_match_start^"}");
+    post_event(json);
+
     // Send half_start event
     new timeleft = get_timeleft();
-    new json[128];
     formatex(json, charsmax(json),
         "{^"event^":^"half_start^",^"half^":%d,^"timeleft^":%d}",
         half, timeleft);
+    post_event(json);
+
+    // Seed cumulative team score for the new half. KTPMatchHandler restores
+    // 1st-half scores into gamerules via dodx_set_team_score before firing
+    // this forward (see KTPMatchHandler.sma:6891), so dodx_get_team_score
+    // reads the correct value (0/0 on half 1, carryover on half 2/OT).
+    new allies_seed = dodx_get_team_score(TEAM_ALLIES);
+    new axis_seed   = dodx_get_team_score(TEAM_AXIS);
+    formatex(json, charsmax(json),
+        "{^"event^":^"team_score^",^"allies_score^":%d,^"axis_score^":%d}",
+        allies_seed, axis_seed);
     post_event(json);
 
     // Refresh flag state and send roster dump
@@ -379,49 +406,57 @@ public ktp_match_end(const matchId[], const map[], MatchType:matchType, team1Sco
 
 // ─── Roster Dump ─────────────────────────────────────────────────────────────
 
-// Send player_connect + player_spawn for every connected player.
-// Called on match start so the HUD gets a full snapshot.
+// Send player_connect + roster_player + player_score for every connected
+// on-team player. roster_player carries alive/dead/health/class/weapons —
+// distinct from player_spawn (which means "just respawned at 100 HP"), so
+// the HUD doesn't lie about a fresh spawn for a currently-dead player.
 stock do_roster_dump() {
     new maxp = get_maxplayers();
-    new count = 0;
 
     for (new id = 1; id <= maxp; id++) {
         if (!is_user_connected(id)) continue;
         if (is_user_hltv(id)) continue;
 
+        new team = get_user_team(id);
+        if (team != TEAM_ALLIES && team != TEAM_AXIS) continue;
+
         new steamid[32], name[64], name_esc[128], team_str[16];
         get_steamid(id, steamid, charsmax(steamid));
         get_user_name(id, name, charsmax(name));
         escape_json(name, name_esc, charsmax(name_esc));
-
-        new team = get_user_team(id);
         get_team_str(team, team_str, charsmax(team_str));
 
         g_player_team[id] = team;
 
-        new json[256];
+        new json[384];
         formatex(json, charsmax(json),
             "{^"event^":^"player_connect^",^"user_id^":^"%s^",^"name^":^"%s^",^"team^":^"%s^"}",
             steamid, name_esc, team_str);
         post_event(json);
 
-        // If alive and on a real team, also send spawn state
-        if (is_user_alive(id) && (team == TEAM_ALLIES || team == TEAM_AXIS)) {
-            new class_id = dod_get_user_class(id);
-            new wpn_primary[32], wpn_secondary[32];
+        new bool:alive = is_user_alive(id) ? true : false;
+        new class_id = alive ? dod_get_user_class(id) : -1;
+        new wpn_primary[32], wpn_secondary[32];
+        if (alive) {
             get_wpn_name_for_slot(id, DODWT_PRIMARY,   wpn_primary,   charsmax(wpn_primary));
             get_wpn_name_for_slot(id, DODWT_SECONDARY, wpn_secondary, charsmax(wpn_secondary));
-
-            g_player_prone[id] = PRONE_STANDING;
-            g_player_alive[id] = 1;
-
-            formatex(json, charsmax(json),
-                "{^"event^":^"player_spawn^",^"user_id^":^"%s^",^"team^":^"%s^",^"class_id^":%d,^"weapon_primary^":^"%s^",^"weapon_secondary^":^"%s^"}",
-                steamid, team_str, class_id, wpn_primary, wpn_secondary);
-            post_event(json);
+        } else {
+            copy(wpn_primary,   charsmax(wpn_primary),   "none");
+            copy(wpn_secondary, charsmax(wpn_secondary), "none");
         }
+        new health = alive ? get_user_health(id) : 0;
 
-        count++;
+        g_player_prone[id] = PRONE_STANDING;
+        g_player_alive[id] = alive ? 1 : 0;
+
+        formatex(json, charsmax(json),
+            "{^"event^":^"roster_player^",^"user_id^":^"%s^",^"name^":^"%s^",^"team^":^"%s^",^"alive^":%s,^"class_id^":%d,^"weapon_primary^":^"%s^",^"weapon_secondary^":^"%s^",^"health^":%d}",
+            steamid, name_esc, team_str, alive ? "true" : "false", class_id, wpn_primary, wpn_secondary, health);
+        post_event(json);
+
+        // Push a zeroed player_score so the HUD scoreboard reads 0/0/0/0 from
+        // the moment the match starts, instead of waiting for the first kill.
+        emit_player_score(id);
     }
 }
 
@@ -440,19 +475,75 @@ public ev_round_start() {
 }
 
 public ev_round_end() {
-    new allies = dod_get_team_score(TEAM_ALLIES);
-    new axis   = dod_get_team_score(TEAM_AXIS);
+    // dodx_get_team_score reads gamerules directly. The legacy dod_get_team_score
+    // reads DODX's message-tracked globals, which sit at 0 in extension mode
+    // because Client_TeamScore broadcasts don't reach DODX. See
+    // KTPMatchHandler/Technical_Guide.md:1286 + dodx.inc:275-282.
+    new allies = dodx_get_team_score(TEAM_ALLIES);
+    new axis   = dodx_get_team_score(TEAM_AXIS);
 
     new winner[16];
     if (allies > axis)      copy(winner, charsmax(winner), "allies");
     else if (axis > allies) copy(winner, charsmax(winner), "axis");
     else                    copy(winner, charsmax(winner), "draw");
 
+    // Classify how the round ended. Schema: objectives | time_limit |
+    // allies_eliminated | axis_eliminated. Read from state we already cache —
+    // no new DODX calls.
+    new end_type[20];
+    classify_round_end(end_type, charsmax(end_type));
+
     new json[256];
     formatex(json, charsmax(json),
-        "{^"event^":^"round_end^",^"winner^":^"%s^",^"end_type^":^"objectives^",^"allies_score^":%d,^"axis_score^":%d}",
-        winner, allies, axis);
+        "{^"event^":^"round_end^",^"winner^":^"%s^",^"end_type^":^"%s^",^"allies_score^":%d,^"axis_score^":%d}",
+        winner, end_type, allies, axis);
     post_event(json);
+}
+
+stock classify_round_end(out[], len) {
+    // Capout: every flag owned by one team. Check before time_limit because
+    // a team can capout exactly as the timer hits 0.
+    if (g_flag_count > 0) {
+        new bool:all_allies = true;
+        new bool:all_axis   = true;
+        for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
+            if (g_flag_owner[f] != TEAM_ALLIES) all_allies = false;
+            if (g_flag_owner[f] != TEAM_AXIS)   all_axis   = false;
+        }
+        if (all_allies || all_axis) {
+            copy(out, len, "objectives");
+            return;
+        }
+    }
+
+    // Elimination: every alive on-team player has been killed. We track alive
+    // state via DODX client_spawn / client_death — count survivors per team.
+    new allies_alive = 0, axis_alive = 0;
+    for (new id = 1; id <= MAX_PLAYERS; id++) {
+        if (!g_player_alive[id]) continue;
+        if (g_player_team[id] == TEAM_ALLIES) allies_alive++;
+        else if (g_player_team[id] == TEAM_AXIS) axis_alive++;
+    }
+    // Only treat as elimination if the *other* team had players to begin with —
+    // a half that starts with one team unfilled isn't a wipe.
+    if (allies_alive == 0 && axis_alive > 0) {
+        copy(out, len, "allies_eliminated");
+        return;
+    }
+    if (axis_alive == 0 && allies_alive > 0) {
+        copy(out, len, "axis_eliminated");
+        return;
+    }
+
+    // Time limit if the half clock has run out.
+    if (get_timeleft() <= 0) {
+        copy(out, len, "time_limit");
+        return;
+    }
+
+    // Default — covers mp_pointlimit hits and anything we don't classify.
+    // All score-driven, fold into the same bucket as capouts.
+    copy(out, len, "objectives");
 }
 
 // ─── Player Events ───────────────────────────────────────────────────────────
@@ -525,7 +616,7 @@ public dod_client_spawn(id) {
 
     new json[384];
     formatex(json, charsmax(json),
-        "{^"event^":^"player_spawn^",^"user_id^":^"%s^",^"name^":^"%s^",^"team^":^"%s^",^"class_id^":%d,^"weapon_primary^":^"%s^",^"weapon_secondary^":^"%s^"}",
+        "{^"event^":^"player_spawn^",^"user_id^":^"%s^",^"name^":^"%s^",^"team^":^"%s^",^"class_id^":%d,^"weapon_primary^":^"%s^",^"weapon_secondary^":^"%s^",^"health^":100}",
         steamid, name_esc, team_str, class_id, wpn_primary, wpn_secondary);
     post_event(json);
 
@@ -686,8 +777,12 @@ public task_poll_prone() {
 }
 
 public ev_team_score() {
-    new allies = dod_get_team_score(TEAM_ALLIES);
-    new axis   = dod_get_team_score(TEAM_AXIS);
+    // Read from gamerules (dodx_get_team_score), not from DODX message-tracked
+    // globals (dod_get_team_score). In extension mode the DODX Client_TeamScore
+    // handler doesn't see broadcasts, so the legacy native returns stale 0s —
+    // which silently dropped tick-scoring increments and per-cap updates.
+    new allies = dodx_get_team_score(TEAM_ALLIES);
+    new axis   = dodx_get_team_score(TEAM_AXIS);
 
     new json[128];
     formatex(json, charsmax(json),

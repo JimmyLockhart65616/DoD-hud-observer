@@ -128,14 +128,15 @@ export const useHudStore = create(set => ({
     // Reset kill streaks (on round start)
     resetStreaks: () => set({ kill_streaks: {} }),
 
-    // Wipe per-player game state at half time (keep roster, reset stats)
+    // Wipe per-player game state at half time (keep roster, reset stats).
+    // Team scores deliberately preserved — the match score carries across halves;
+    // the plugin re-emits team_score immediately after half_start to seed the
+    // correct cumulative value (carryover for half 2/OT, 0/0 for half 1).
     resetHalf: () => set(state => ({
         kills: [],
         flag_feed: [],
         chat: [],
         kill_streaks: {},
-        allies_score: 0,
-        axis_score: 0,
         timeleft: null,
         timeleft_at: null,
         allies_players: state.allies_players.map(p => ({
@@ -148,6 +149,23 @@ export const useHudStore = create(set => ({
             kills: 0, deaths: 0, score: 0, obj_score: 0,
             weapon_primary: null, weapon_secondary: null, class_id: null,
         })),
+    })),
+
+    // Hard reset on a brand-new match. Clears player arrays so the plugin's
+    // roster dump rebuilds them from scratch — kills any stale ghosts left
+    // over from the previous match. Scores zero only on half=1 (fresh match);
+    // half=2 / OT preserve carryover.
+    resetMatch: (half) => set(() => ({
+        kills: [],
+        flag_feed: [],
+        chat: [],
+        kill_streaks: {},
+        allies_players: [],
+        axis_players: [],
+        timeleft: null,
+        timeleft_at: null,
+        round_state: { round_end: false, round_freeze: false, round_start: false },
+        ...(half === 1 ? { allies_score: 0, axis_score: 0 } : {}),
     })),
 }));
 
@@ -198,6 +216,7 @@ export const SocketStoreComponent = () => {
     const setRoundState    = useHudStore(s => s.setRoundState);
     const setTimeleft      = useHudStore(s => s.setTimeleft);
     const resetHalf        = useHudStore(s => s.resetHalf);
+    const resetMatch       = useHudStore(s => s.resetMatch);
     const resetStreaks     = useHudStore(s => s.resetStreaks);
 
     // Use refs via store getState() for event handlers to avoid stale closures
@@ -261,7 +280,7 @@ export const SocketStoreComponent = () => {
                 class_id:         e.class_id,
                 weapon_primary:   e.weapon_primary,
                 weapon_secondary: e.weapon_secondary,
-                health:           100,
+                health:           e.health ?? 100,
                 dead:             false,
 
                 prone_state:      'standing',
@@ -439,6 +458,56 @@ export const SocketStoreComponent = () => {
             resetHalf();
             if (e.timeleft != null) setTimeleft(e.timeleft);
             setRoundState({ round_end: false, round_freeze: false, round_start: false });
+        });
+
+        // Fired by KTPMatchHandler when a match begins (incl. half 2 and OT).
+        // Clears player arrays so the plugin's roster dump rebuilds them with
+        // current alive/dead/health state — eliminates stale ghosts and the
+        // race where do_roster_dump runs while a player is still spawn-pending.
+        gameEvents.on('ktp_match_start', (raw) => {
+            const e = typeof raw === 'string' ? JSON.parse(raw) : (raw ?? {});
+            resetMatch(e.half);
+            if (e.half != null) setHalf(e.half);
+        });
+
+        // Snapshot row from the plugin's do_roster_dump or backend snapshot
+        // replay. Carries alive/dead, class, weapons, current health, prone.
+        // Distinct from player_spawn (which means "just respawned at 100 HP").
+        gameEvents.on('roster_player', (raw) => {
+            const e = JSON.parse(raw);
+            const dir = playerDirectory[e.user_id];
+            if (dir) {
+                dir.team = e.team;
+                if (e.name) dir.name = e.name;
+            } else {
+                playerDirectory[e.user_id] = { name: e.name ?? e.user_id, team: e.team };
+            }
+
+            const rosterState = {
+                class_id:         e.alive ? e.class_id : null,
+                weapon_primary:   e.alive ? e.weapon_primary : null,
+                weapon_secondary: e.alive ? e.weapon_secondary : null,
+                health:           e.health ?? (e.alive ? 100 : 0),
+                dead:             !e.alive,
+                prone_state:      e.prone_state ?? 'standing',
+                prone_since:      e.prone_since ?? null,
+                disconnected:     false,
+            };
+
+            const applyRoster = (prev, team) => {
+                const exists = prev.find(p => p.user_id === e.user_id);
+                if (exists) return updatePlayer(prev, e.user_id, () => rosterState);
+                const knownName = playerDirectory[e.user_id]?.name ?? e.user_id;
+                return [...prev, { ...makeDefaultPlayer(e.user_id, knownName, team), ...rosterState }];
+            };
+
+            if (e.team === 'allies') {
+                setAxisPlayers(prev => prev.filter(p => p.user_id !== e.user_id));
+                setAlliesPlayers(prev => applyRoster(prev, 'allies'));
+            } else if (e.team === 'axis') {
+                setAlliesPlayers(prev => prev.filter(p => p.user_id !== e.user_id));
+                setAxisPlayers(prev => applyRoster(prev, 'axis'));
+            }
         });
 
 
