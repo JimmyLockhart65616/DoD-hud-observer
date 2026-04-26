@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 
+const METADATA_FLUSH_INTERVAL = 100;
+
 export interface MatchMetadata {
     matchId: string;
     map: string;
@@ -39,6 +41,60 @@ export class MatchRecorder {
     constructor(matchesDir: string) {
         this.matchesDir = path.resolve(matchesDir);
         fs.mkdirSync(this.matchesDir, { recursive: true });
+        this.rehydrateActiveMatches();
+    }
+
+    /**
+     * On startup, scan the matches dir for any match whose metadata.json has
+     * `endedAt: null` and pull it back into `activeMatches` / `metadata` /
+     * `lastEventAt`. Without this, a backend restart strands every match that
+     * was active at restart time — `recordEvent`'s eventCount increments live
+     * in memory only, so its metadata.json is frozen at the value `startMatch`
+     * wrote (`0`), and the reaper can't see it because activeMatches is empty.
+     *
+     * `eventCount` is recovered by counting lines in events.jsonl (cheap — a
+     * full match is a few thousand lines). `lastEventAt` is seeded from the
+     * jsonl's mtime, so already-stale orphans get reaped on the next tick.
+     */
+    private rehydrateActiveMatches(): void {
+        if (!fs.existsSync(this.matchesDir)) return;
+
+        const dirs = fs.readdirSync(this.matchesDir, { withFileTypes: true })
+            .filter(d => d.isDirectory());
+
+        let count = 0;
+        for (const dir of dirs) {
+            const matchId = dir.name;
+            const metaPath = path.join(this.matchesDir, matchId, 'metadata.json');
+            if (!fs.existsSync(metaPath)) continue;
+
+            let meta: MatchMetadata;
+            try {
+                meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+            } catch {
+                continue;
+            }
+            if (meta.endedAt !== null) continue;
+
+            const jsonlPath = path.join(this.matchesDir, matchId, 'events.jsonl');
+            let eventCount = 0;
+            let lastEventAt = Date.now();
+            if (fs.existsSync(jsonlPath)) {
+                const raw = fs.readFileSync(jsonlPath, 'utf-8');
+                eventCount = raw.split('\n').filter(l => l.trim()).length;
+                lastEventAt = fs.statSync(jsonlPath).mtimeMs;
+            }
+            meta.eventCount = eventCount;
+
+            this.metadata.set(matchId, meta);
+            this.activeMatches.add(matchId);
+            this.lastEventAt.set(matchId, lastEventAt);
+            count++;
+        }
+
+        if (count > 0) {
+            console.log(`[recorder] Rehydrated ${count} active match(es) from disk`);
+        }
     }
 
     /**
@@ -96,6 +152,14 @@ export class MatchRecorder {
         const meta = this.metadata.get(matchId)!;
         meta.eventCount++;
         this.lastEventAt.set(matchId, Date.now());
+
+        // Flush eventCount to metadata.json every 100 events so a hard crash
+        // (or a backend restart that races the reaper) doesn't leave the file
+        // frozen at 0. Cheap — metadata.json is <1KB and writeFileSync is
+        // already used on startMatch/endMatch.
+        if (meta.eventCount % METADATA_FLUSH_INTERVAL === 0) {
+            this.writeMetadata(matchId, meta);
+        }
     }
 
     /**

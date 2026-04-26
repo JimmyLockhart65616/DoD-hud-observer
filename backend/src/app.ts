@@ -4,13 +4,16 @@ import cors from 'cors';
 import config from './config';
 import { MatchRecorder } from './handler/matchRecorder';
 import { MetricsCollector } from './handler/metrics';
-import { createIngestRouter, getServerPlayerCount } from './handler/ingest';
+import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './handler/ingest';
 import { createSocketServer } from './socket/socket';
+import { HltvSyncService } from './handler/hltvSync';
+import { HltvDelayBuffer } from './handler/hltvDelayBuffer';
 
 // ─── Core services ───────────────────────────────────────────────────────────
 
 const recorder = new MatchRecorder(config.storage.matches_dir);
 const metrics  = new MetricsCollector();
+const hltvSync = new HltvSyncService(config.hltv_sync);
 
 // Active-match reaper — matches that never get a clean ktp_match_end (plugin
 // reload, changelevel, crash, rcon restart) would otherwise sit in
@@ -24,6 +27,31 @@ setInterval(() => recorder.reapStaleMatches(MATCH_STALE_MS), REAPER_TICK_MS);
 // ─── Socket.IO (match-based rooms) ──────────────────────────────────────────
 
 const { httpServer: socketHttp, io } = createSocketServer(config.frontend.origin, recorder);
+
+// Buffer needs `io` for its onFire callback, so it's constructed after the
+// socket server. The callback is required by the constructor — there's no
+// setter — so the buffer can't be assembled in a half-wired state.
+const fireToSockets = makeFireToSockets(io);
+const delayBuffer = new HltvDelayBuffer(hltvSync, ({ server, matchId, event }) =>
+    fireToSockets(server, matchId, event));
+
+// On a confirmed map change, release events stranded under the previous map's
+// activeTime (those have ticks > new activeTime and would otherwise sit forever).
+// Trigger only when the cached `map` field actually flips — not on every sample,
+// because activeTime samples are 30s old by definition and would mis-classify
+// fresh events (tick > stale activeTime) as stranded, firing them too early.
+const lastMaps = new Map<string, string | null>();
+hltvSync.on('clock', (clock) => {
+    if (!clock.online) return;
+    const prevMap = lastMaps.get(clock.server) ?? null;
+    if (prevMap && clock.map && prevMap !== clock.map) {
+        delayBuffer.releaseStrandedEvents(clock.server, clock.activeTime);
+    }
+    lastMaps.set(clock.server, clock.map);
+});
+
+hltvSync.start();
+delayBuffer.start();
 
 socketHttp.listen(config.socket.port, () => {
     console.log(`[socket] Socket.IO server listening on port ${config.socket.port}`);
@@ -86,15 +114,46 @@ app.get('/api/matches/:matchId/events', (req, res) => {
     res.json({ events });
 });
 
+// HLTV sync: status, manual resample, calibration, drift push from hltv-api.py.
+// Mutating endpoints are gated by the same X-Auth-Key as /ingest.
+app.get('/api/hltv/status', (_req, res) => {
+    const servers = hltvSync.getStatus().map((s: any) => ({
+        ...s,
+        queueDepth: delayBuffer.queueDepth(s.server),
+    }));
+    res.json({ enabled: config.hltv_sync.enabled, servers });
+});
+app.post('/api/hltv/resample/:server', async (req, res) => {
+    if (req.headers['x-auth-key'] !== config.ingest.auth_key) { res.status(401).json({ error: 'unauthorized' }); return; }
+    const server = req.params.server;
+    if (!hltvSync.isActive(server)) { res.status(404).json({ error: 'server not configured for hltv_sync' }); return; }
+    const clock = await hltvSync.sample(server, 'manual');
+    res.json({ ok: true, clock });
+});
+app.put('/api/hltv/calibration/:server', (req, res) => {
+    if (req.headers['x-auth-key'] !== config.ingest.auth_key) { res.status(401).json({ error: 'unauthorized' }); return; }
+    const offsetMs = Number(req.body?.offsetMs);
+    if (!Number.isFinite(offsetMs)) { res.status(400).json({ error: 'offsetMs (number) required' }); return; }
+    hltvSync.setCalibrationOffsetMs(req.params.server, offsetMs);
+    res.json({ ok: true, offsetMs });
+});
+app.post('/api/hltv/drift', async (req, res) => {
+    if (req.headers['x-auth-key'] !== config.ingest.auth_key) { res.status(401).json({ error: 'unauthorized' }); return; }
+    const server = req.body?.server;
+    if (!server || !hltvSync.isActive(server)) { res.status(404).json({ error: 'server not configured for hltv_sync' }); return; }
+    const clock = await hltvSync.sample(server, `drift:${req.body?.event ?? 'unknown'}`);
+    res.json({ ok: true, clock });
+});
+
 // Event ingest from AMXX plugin
-app.use('/ingest', createIngestRouter(config.ingest.auth_key, recorder, io, metrics));
+app.use('/ingest', createIngestRouter(config.ingest.auth_key, recorder, io, metrics, delayBuffer, hltvSync));
 
 // ─── Start HTTP servers ─────────────────────────────────────────────────────
 
 // Ingest server on its own port (8088 — firewalled to game server IPs in prod)
 const ingestApp = express();
 ingestApp.use(express.json({ limit: '1mb' }));
-ingestApp.use('/ingest', createIngestRouter(config.ingest.auth_key, recorder, io, metrics));
+ingestApp.use('/ingest', createIngestRouter(config.ingest.auth_key, recorder, io, metrics, delayBuffer, hltvSync));
 ingestApp.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 ingestApp.listen(config.ingest.port, () => {
