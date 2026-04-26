@@ -30,6 +30,9 @@ export default [
 
     { "half_start": { "time": 50, "half": 1, "timeleft": 1200 } },
 
+    // Plugin's post-half_start team_score seed — fresh match opens at 0/0.
+    { "team_score": { "time": 51, "allies_score": 0, "axis_score": 0 } },
+
     // ── Players connect ──────────────────────────────────────────────────────
     // Real plugin: clients connect as "spectator" then player_team_change moves them.
     // Mocker shortcut: connect straight onto a team — backend treats both shapes the same.
@@ -188,6 +191,11 @@ export default [
     { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2002", "kills": 0, "deaths": 1, "score": 0, "obj_score": 0 } },
     { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2006", "kills": 0, "deaths": 1, "score": 0, "obj_score": 0 } },
 
+    // Tick-scoring re-broadcast — DoD periodically re-emits TeamScore for a
+    // held flag with the same value, mostly as a sync nudge. The frontend
+    // should be idempotent (same value → no visible change).
+    { "team_score": { "time": 17000, "allies_score": 1, "axis_score": 0 } },
+
     // More fighting
     { "damage": { "time": 17800, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "damage": 35, "weapon": "mp44", "hitplace": 2, "victim_health": 65 } },
     { "damage": { "time": 17900, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "damage": 35, "weapon": "mp44", "hitplace": 3, "victim_health": 30 } },
@@ -216,6 +224,10 @@ export default [
     // Time sync (real plugin emits every ~30s)
     { "time_sync": { "time": 25000, "timeleft": 1175 } },
 
+    // Tick-scoring increment — DoD bumps team score every ~10-20s for held
+    // flags. Allies still hold Anzio Street, so they tick to 2.
+    { "team_score": { "time": 25500, "allies_score": 2, "axis_score": 0 } },
+
     // Raphinha drops the mp40, back to garand
     { "weapon_drop":   { "time": 26000, "user_id": "STEAM_0:0:1001", "weapon": "mp40" } },
     { "weapon_pickup": { "time": 26100, "user_id": "STEAM_0:0:1001", "weapon": "garand" } },
@@ -224,8 +236,8 @@ export default [
     { "player_disconnect": { "time": 27000, "user_id": "STEAM_0:0:2005" } },
     { "player_connect":    { "time": 29000, "user_id": "STEAM_0:0:2005", "name": "Polak", "team": "axis" } },
 
-    // Round 1 ends — Allies win
-    { "round_end": { "time": 30000, "winner": "allies", "end_type": "objectives", "allies_score": 1, "axis_score": 0 } },
+    // Round 1 ends — Allies win (1 cap + 1 tick = score 2-0)
+    { "round_end": { "time": 30000, "winner": "allies", "end_type": "objectives", "allies_score": 2, "axis_score": 0 } },
 
 
     // ── Round 2 ──────────────────────────────────────────────────────────────
@@ -245,7 +257,8 @@ export default [
     { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:2006", "name": "ian",      "team": "axis",   "class_id": 6, "weapon_primary": "mg42",     "weapon_secondary": "luger" } },
 
     { "round_start": { "time": 38000, "timeleft": 1163 } },
-    { "team_score":  { "time": 38100, "allies_score": 1, "axis_score": 0 } },
+    // Round 2 carryover — score continues from round 1's 2-0.
+    { "team_score":  { "time": 38100, "allies_score": 2, "axis_score": 0 } },
 
     // Axis push hard — quick kills
     { "damage": { "time": 41900, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "damage": 100, "weapon": "k98", "hitplace": 1, "victim_health": 0 } },
@@ -274,14 +287,15 @@ export default [
     { "flag_cap_progress": { "time": 47000, "flag_id": 1, "progress": 75, "capping_team": "axis" } },
     { "flag_cap_progress": { "time": 47500, "flag_id": 1, "progress": 95, "capping_team": "axis" } },
     { "flag_captured":     { "time": 48000, "flag_id": 1, "flag_name": "POINT_ANZIO_STREET", "new_owner": "axis", "captor_ids": ["STEAM_0:0:2001", "STEAM_0:0:2004"] } },
-    { "team_score":        { "time": 48000, "allies_score": 1, "axis_score": 1 } },
+    // Axis recap: their first +1 against allies' 2 (1 cap + 1 tick) = 2-1.
+    { "team_score":        { "time": 48000, "allies_score": 2, "axis_score": 1 } },
 
     // Captors of the Street recap (2001, 2004) get +5 obj_score from dod_score_event.
     { "player_score": { "time": 48200, "user_id": "STEAM_0:0:2001", "kills": 2, "deaths": 0, "score": 7, "obj_score": 5 } },
     { "player_score": { "time": 48200, "user_id": "STEAM_0:0:2004", "kills": 2, "deaths": 0, "score": 7, "obj_score": 5 } },
 
-    // Round 2 ends — Axis win
-    { "round_end": { "time": 55000, "winner": "axis", "end_type": "objectives", "allies_score": 1, "axis_score": 1 } },
+    // Round 2 ends — Axis recap counts as the round win, but cumulative still 2-1.
+    { "round_end": { "time": 55000, "winner": "axis", "end_type": "objectives", "allies_score": 2, "axis_score": 1 } },
 
     { "time_sync": { "time": 56000, "timeleft": 1145 } },
 
@@ -291,6 +305,10 @@ export default [
     // ══════════════════════════════════════════════════════════════════════════
 
     { "half_start": { "time": 62000, "half": 2, "timeleft": 1200 } },
+
+    // Plugin's post-half_start team_score seed — half 1 ended 2-1, score
+    // carries into half 2 immediately so the HUD doesn't flicker to 0-0.
+    { "team_score": { "time": 62050, "allies_score": 2, "axis_score": 1 } },
 
     // Team changes — each player moves to the opposite side
     { "player_team_change": { "time": 62100, "user_id": "STEAM_0:0:1001", "team": "axis" } },

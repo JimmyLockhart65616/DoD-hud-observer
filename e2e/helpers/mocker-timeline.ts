@@ -17,14 +17,20 @@ export const SECOND_KILL = 10000;           // Raphinha kills omenator with gara
 export const FLAG_CAP_STOPPED = 10500;      // Axis cap interrupted
 export const ALLIES_CAP_START = 13000;      // Allies start capping Church
 export const PRONE_KILL = 14000;            // storm kills ian while prone
-export const FLAG_CAPTURED = 15000;         // Allies capture Church
+export const FLAG_CAPTURED = 15000;         // Allies capture Church (score 1-0)
 export const SCORES_UPDATED = 15100;        // player_score events
+export const TICK_REBROADCAST = 17000;      // TeamScore re-emit, no value change
 export const TEAMKILL = 21000;              // Polak TKs bad
-export const ROUND_END = 30000;             // Allies win 1-0
+export const TICK_BUMP = 25500;             // tick scoring bumps allies to 2 (held flag)
+export const ROUND_END = 30000;             // Allies win round 1 — cumulative 2-0
 export const ROUND2_FREEZE = 35000;
 export const ROUND2_SPAWNED = 35500;
 export const ROUND2_START = 38000;
-export const TIMELINE_END = 55000;
+export const HALF1_END = 55000;              // round_end of round 2, allies/axis 1-1
+export const HALF2_START = 62000;            // half_start with half=2
+export const HALF2_TEAM_SCORE = 62050;       // post–half_start team_score 1-1 (carryover)
+export const HALF2_ROUND_START = 66000;
+export const TIMELINE_END = 75000;
 
 // Player names for assertions
 export const ALLIES_NAMES = ['Raphinha', 'bud', 'ORTIN', 'storm', 'MaT*', 'BitchX'];
