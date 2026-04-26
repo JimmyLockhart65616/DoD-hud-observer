@@ -6,9 +6,11 @@
  */
 import express, { Application } from 'express';
 import request from 'supertest';
-import { createIngestRouter, getServerPlayerCount, getServerSnapshot } from '../handler/ingest';
+import { createIngestRouter, getServerPlayerCount, getServerSnapshot, makeFireToSockets } from '../handler/ingest';
 import { MatchRecorder } from '../handler/matchRecorder';
 import { MetricsCollector } from '../handler/metrics';
+import { HltvSyncService } from '../handler/hltvSync';
+import { HltvDelayBuffer } from '../handler/hltvDelayBuffer';
 import { Server as SocketServer } from 'socket.io';
 import { createServer } from 'http';
 import os from 'os';
@@ -431,5 +433,247 @@ describe('getServerPlayerCount', () => {
 
     it('returns 0 for an unknown server', () => {
         expect(getServerPlayerCount('never-seen-this-host')).toBe(0);
+    });
+});
+
+describe('snapshot — sync invariants for late-joining clients', () => {
+    let tmpDir: string;
+    let recorder: MatchRecorder;
+    let io: SocketServer;
+    let app: Application;
+
+    beforeEach(() => {
+        tmpDir = makeTmpDir();
+        recorder = new MatchRecorder(tmpDir);
+        io = new SocketServer(createServer());
+        app = makeApp('key', recorder, io);
+    });
+
+    afterEach(() => {
+        recorder.close();
+        io.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    async function post(body: Record<string, unknown>, hostname: string): Promise<void> {
+        await request(app)
+            .post('/ingest')
+            .set('X-Auth-Key', 'key')
+            .set('X-Server-Hostname', hostname)
+            .send(body);
+    }
+
+    it('team_score survives half_start so half-2 carryover is replayed to late joiners', async () => {
+        const host = 'KTP - Score Carryover';
+        await post({ event: 'team_score', allies_score: 1, axis_score: 0 }, host);
+        await post({ event: 'half_start', half: 2, timeleft: 1200 }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const ts = snapshot.find(e => e.event === 'team_score');
+        expect(ts).toMatchObject({ allies_score: 1, axis_score: 0 });
+    });
+
+    it('half number is replayed in the snapshot', async () => {
+        const host = 'KTP - Half';
+        await post({ event: 'ktp_match_start', match_id: 'KTP-h', map: 'dod_anzio', match_type: 1, half: 1 }, host);
+        await post({ event: 'half_start', half: 2, timeleft: 1200 }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const hs = snapshot.find(e => e.event === 'half_start');
+        expect(hs).toMatchObject({ half: 2 });
+    });
+
+    it('round_phase is replayed when a round is live', async () => {
+        const host = 'KTP - Round Live';
+        await post({ event: 'time_sync', timeleft: 1180 }, host);
+        await post({ event: 'round_start_freeze' }, host);
+        await post({ event: 'round_start', timeleft: 1175 }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const rs = snapshot.find(e => e.event === 'round_start');
+        expect(rs).toBeDefined();
+    });
+
+    it('caches victim health from damage events and includes it in roster_player replay', async () => {
+        const host = 'KTP - Health Cache';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:1', name: 'Hurt', team: 'allies' }, host);
+        await post({
+            event: 'player_spawn',
+            user_id: 'STEAM_0:0:1', name: 'Hurt', team: 'allies',
+            class_id: 0, weapon_primary: 'garand', weapon_secondary: 'colt',
+        }, host);
+        await post({
+            event: 'damage',
+            attacker_id: 'STEAM_0:0:9', victim_id: 'STEAM_0:0:1',
+            damage: 60, weapon: 'k98', hitplace: 0, victim_health: 40,
+        }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const roster = snapshot.find(e => e.event === 'roster_player' && e.user_id === 'STEAM_0:0:1');
+        expect(roster).toMatchObject({ health: 40, alive: true });
+    });
+
+    it('roster_player snapshot reflects dead state with health=0 after a kill', async () => {
+        const host = 'KTP - Dead Cache';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:2', name: 'Gone', team: 'axis' }, host);
+        await post({
+            event: 'player_spawn',
+            user_id: 'STEAM_0:0:2', name: 'Gone', team: 'axis',
+            class_id: 0, weapon_primary: 'k98', weapon_secondary: 'luger',
+        }, host);
+        await post({
+            event: 'kill',
+            killer_id: 'STEAM_0:0:1', victim_id: 'STEAM_0:0:2',
+            weapon: 'garand', kill_type: 'normal',
+        }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const roster = snapshot.find(e => e.event === 'roster_player' && e.user_id === 'STEAM_0:0:2');
+        expect(roster).toMatchObject({ health: 0, alive: false });
+    });
+
+    it('roster_player event from the plugin updates cached health and alive', async () => {
+        const host = 'KTP - Roster';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:3', name: 'Bandaged', team: 'allies' }, host);
+        await post({
+            event: 'roster_player',
+            user_id: 'STEAM_0:0:3', name: 'Bandaged', team: 'allies',
+            alive: true, class_id: 2, weapon_primary: 'thompson', weapon_secondary: 'colt',
+            health: 75,
+        }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const roster = snapshot.find(e => e.event === 'roster_player' && e.user_id === 'STEAM_0:0:3');
+        expect(roster).toMatchObject({ health: 75, alive: true, class_id: 2 });
+    });
+
+    it('ktp_match_start clears the player cache', async () => {
+        const host = 'KTP - Match Reset';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:4', name: 'Old', team: 'allies' }, host);
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:5', name: 'Stale', team: 'axis' }, host);
+        expect(getServerPlayerCount(host)).toBe(2);
+
+        await post({
+            event: 'ktp_match_start',
+            match_id: 'KTP-fresh', map: 'dod_anzio', match_type: 1, half: 1,
+        }, host);
+
+        expect(getServerPlayerCount(host)).toBe(0);
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        expect(snapshot.find(e => e.event === 'roster_player' || e.event === 'player_connect')).toBeUndefined();
+    });
+
+    it('snapshot reflects the latest team_score after a cap → tick → tick → cap sequence', async () => {
+        // Models the production pattern after the dod_get_team_score → dodx_get_team_score
+        // fix: TeamScore broadcasts arrive on every cap and every tick-scoring
+        // increment. The snapshot must reflect the *latest* value so a
+        // late-joining client doesn't see stale earlier-tick scores.
+        const host = 'KTP - Score Sequence';
+        await post({ event: 'team_score', allies_score: 1, axis_score: 0 }, host);  // cap
+        await post({ event: 'team_score', allies_score: 1, axis_score: 0 }, host);  // re-broadcast tick (no change)
+        await post({ event: 'team_score', allies_score: 2, axis_score: 0 }, host);  // tick bump
+        await post({ event: 'team_score', allies_score: 2, axis_score: 1 }, host);  // axis cap
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const teamScores = snapshot.filter(e => e.event === 'team_score');
+        expect(teamScores).toHaveLength(1);  // snapshot caches latest only
+        expect(teamScores[0]).toMatchObject({ allies_score: 2, axis_score: 1 });
+    });
+
+    it('prone state is cached and included in roster_player replay', async () => {
+        const host = 'KTP - Prone Cache';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:6', name: 'Prone', team: 'axis' }, host);
+        await post({
+            event: 'player_spawn',
+            user_id: 'STEAM_0:0:6', name: 'Prone', team: 'axis',
+            class_id: 6, weapon_primary: 'mg42', weapon_secondary: 'luger',
+        }, host);
+        await post({
+            event: 'prone_change',
+            user_id: 'STEAM_0:0:6', state: 'deployed', timestamp: 1700000000000,
+        }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const roster = snapshot.find(e => e.event === 'roster_player' && e.user_id === 'STEAM_0:0:6');
+        expect(roster).toMatchObject({ prone_state: 'deployed', prone_since: 1700000000000 });
+    });
+});
+
+describe('POST /ingest — HLTV sync defers socket emit but records immediately', () => {
+    let tmpDir: string;
+    let recorder: MatchRecorder;
+    let io: SocketServer;
+    let app: Application;
+    let sync: HltvSyncService;
+    let buffer: HltvDelayBuffer;
+    let firedEvents: any[];
+
+    const HOST = 'KTP - Sync Test';
+
+    beforeEach(() => {
+        tmpDir = makeTmpDir();
+        recorder = new MatchRecorder(tmpDir);
+        io = new SocketServer(createServer());
+        sync = new HltvSyncService({
+            enabled: true,
+            heartbeat_seconds: 0,
+            fallback_delay_seconds: 60,
+            rcon_timeout_ms: 5000,
+            servers: { [HOST]: { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' } },
+        });
+        // Stub the RCON sample so no UDP traffic happens during tests
+        (sync as any).sample = async () => null;
+
+        firedEvents = [];
+        // Substitute a recording fire callback in place of the real socket emit
+        buffer = new HltvDelayBuffer(sync, ({ event }) => firedEvents.push(event));
+
+        const app2 = express();
+        app2.use(express.json());
+        const metrics = new MetricsCollector();
+        app2.use('/ingest', createIngestRouter('key', recorder, io, metrics, buffer, sync));
+        app = app2;
+    });
+
+    afterEach(() => {
+        recorder.close();
+        io.close();
+    });
+
+    it('records to disk immediately, holds socket emit', async () => {
+        const matchId = 'KTP-sync-1';
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').set('X-Server-Hostname', HOST)
+            .send({ event: 'ktp_match_start', match_id: matchId, map: 'dod_anzio', match_type: 1, half: 1, tick: 0 });
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').set('X-Server-Hostname', HOST)
+            .send({ event: 'kill', match_id: matchId, killer_id: 'A', victim_id: 'B', weapon: 'garand', tick: 5 });
+
+        // Disk got both events synchronously
+        const lines = fs.readFileSync(path.join(tmpDir, matchId, 'events.jsonl'), 'utf-8')
+            .trim().split('\n').filter(l => l);
+        expect(lines).toHaveLength(2);
+
+        // Socket emit hasn't fired — no clock yet, fallback delay (60s) hasn't elapsed
+        expect(firedEvents).toHaveLength(0);
+
+        // Inject a clock so the buffer can compute broadcastNow >= event ticks
+        (sync as any).clocks.set(HOST, {
+            server: HOST, cfg: { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' },
+            delaySeconds: 0, activeTime: 100, sampledAt: Date.now(),
+            map: 'dod_anzio', serverName: HOST, online: true, lastError: null, calibrationOffsetMs: 0,
+        });
+
+        // Drive the buffer manually — both events have tick <= broadcastNow (100 - 0 = 100)
+        (buffer as any).tick();
+        expect(firedEvents.map(e => e.event)).toEqual(['ktp_match_start', 'kill']);
+    });
+
+    it('falls back to fire-immediately when sync is disabled for a server', async () => {
+        const otherHost = 'KTP - Not Configured';
+        const matchId = 'KTP-sync-2';
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').set('X-Server-Hostname', otherHost)
+            .send({ event: 'ktp_match_start', match_id: matchId, map: 'dod_anzio', match_type: 1, half: 1, tick: 0 });
+        // The buffer's onFire is recorded, but it shouldn't fire for the unconfigured
+        // server — that path goes through fireToSockets directly. Verify buffer is empty.
+        expect(buffer.queueDepth(otherHost)).toBe(0);
     });
 });
