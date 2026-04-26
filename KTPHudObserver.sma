@@ -69,7 +69,9 @@ enum _:MatchType {
 
 // ─── Globals ─────────────────────────────────────────────────────────────────
 
-// Curl persistent headers (built once in plugin_init, never freed)
+// Curl persistent headers — built once in task_init_config, never freed.
+// SList_Empty is the sentinel for "not yet initialized"; see task_init_config
+// for the rationale (UAF avoidance across overlapping async POSTs).
 new curl_slist:g_curlHeaders = SList_Empty;
 
 // CVAR cache
@@ -195,24 +197,34 @@ public task_init_config() {
     get_cvar_string("dod_hud_key", g_cvar_key, charsmax(g_cvar_key));
     get_cvar_string("hostname",    g_hostname,  charsmax(g_hostname));
 
-    // Build persistent curl headers (once, reused for every POST)
-    if (g_curlHeaders != SList_Empty) {
-        curl_slist_free_all(g_curlHeaders);
-        g_curlHeaders = SList_Empty;
-    }
+    // Build persistent curl headers — ONCE per process, NEVER freed across
+    // overlapping async requests. Same UAF class fixed in KTPHLTVRecorder
+    // v1.5.1: curl_easy_setopt(CURLOPT_HTTPHEADER) stores the slist pointer
+    // by reference; if a request is in-flight when curl_slist_free_all runs,
+    // libcurl's poller deref's the freed slist on the next frame tick and
+    // crashes inside Curl_strncasecompare during header walk.
+    //
+    // task_init_config re-fires every map change (re-armed in plugin_cfg),
+    // so a server with active map rotation guarantees overlap with whatever
+    // POSTs were emitted just before the changelevel. Build once, reuse.
+    //
+    // Trade-off: dod_hud_url / dod_hud_key / hostname cvar changes between
+    // maps won't take effect until next server restart. Acceptable given
+    // these are rcon/static-config values, not gameplay-tunable.
+    if (g_curlHeaders == SList_Empty) {
+        g_curlHeaders = curl_slist_append(SList_Empty, "Content-Type: application/json");
 
-    g_curlHeaders = curl_slist_append(SList_Empty, "Content-Type: application/json");
+        if (g_cvar_key[0]) {
+            new authHeader[192];
+            formatex(authHeader, charsmax(authHeader), "X-Auth-Key: %s", g_cvar_key);
+            g_curlHeaders = curl_slist_append(g_curlHeaders, authHeader);
+        }
 
-    if (g_cvar_key[0]) {
-        new authHeader[192];
-        formatex(authHeader, charsmax(authHeader), "X-Auth-Key: %s", g_cvar_key);
-        g_curlHeaders = curl_slist_append(g_curlHeaders, authHeader);
-    }
-
-    if (g_hostname[0]) {
-        new hostHeader[128];
-        formatex(hostHeader, charsmax(hostHeader), "X-Server-Hostname: %s", g_hostname);
-        g_curlHeaders = curl_slist_append(g_curlHeaders, hostHeader);
+        if (g_hostname[0]) {
+            new hostHeader[128];
+            formatex(hostHeader, charsmax(hostHeader), "X-Server-Hostname: %s", g_hostname);
+            g_curlHeaders = curl_slist_append(g_curlHeaders, hostHeader);
+        }
     }
 
     server_print("[HUD] Initialized — URL: %s  Auth: %s  Hostname: %s",
