@@ -135,6 +135,45 @@ describe('HltvDelayBuffer', () => {
         expect(buf.queueDepth('atl1')).toBe(1);
     });
 
+    // Regression: at half-2 / OT changelevel, the plugin's tick clock resets
+    // from ~1300s back to ~1-90s. Without detection, old half-1 events sit at
+    // the queue tail and the new low-tick events get fired instantly under
+    // the still-stale broadcast clock. Detect via tail-vs-incoming gap and
+    // drain before insertion so end-of-half events still surface as a flush.
+    it('flushes stranded events when an incoming tick is far below the queue tail', () => {
+        const stub = new StubSync();
+        const fired: number[] = [];
+        const buf = makeBuffer(stub, (e) => fired.push(e.event.tick));
+
+        // Half-1 events queued, broadcast clock not yet caught up.
+        stub.setBroadcastNow('atl1', 1000);
+        buf.enqueue({ server: 'atl1', event: evt(1100), enqueuedAt: Date.now() });
+        buf.enqueue({ server: 'atl1', event: evt(1200), enqueuedAt: Date.now() });
+        expect(buf.queueDepth('atl1')).toBe(2);
+
+        // Half-2 starts: first event arrives with tick well below the tail.
+        buf.enqueue({ server: 'atl1', event: evt(5), enqueuedAt: Date.now() });
+
+        // Stranded half-1 events fired immediately; new event sits queued.
+        expect(fired.sort((a, b) => a - b)).toEqual([1100, 1200]);
+        expect(buf.queueDepth('atl1')).toBe(1);
+    });
+
+    it('does not flush on small tick jitter from out-of-order arrivals', () => {
+        const stub = new StubSync();
+        const fired: number[] = [];
+        const buf = makeBuffer(stub, (e) => fired.push(e.event.tick));
+
+        stub.setBroadcastNow('atl1', 0);
+        buf.enqueue({ server: 'atl1', event: evt(100), enqueuedAt: Date.now() });
+        buf.enqueue({ server: 'atl1', event: evt(110), enqueuedAt: Date.now() });
+        // 5s out-of-order arrival — far below the 30s reset threshold.
+        buf.enqueue({ server: 'atl1', event: evt(105), enqueuedAt: Date.now() });
+
+        expect(fired).toEqual([]);
+        expect(buf.queueDepth('atl1')).toBe(3);
+    });
+
     it('start/stop drives a setInterval', () => {
         const stub = new StubSync();
         const buf = makeBuffer(stub);

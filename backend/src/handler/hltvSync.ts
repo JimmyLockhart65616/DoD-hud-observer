@@ -145,11 +145,20 @@ export interface HltvSyncConfig {
     servers: Record<string, HltvServerConfig>;  // keyed on game-server hostname (matches X-Server-Hostname)
 }
 
+// Same threshold as HltvDelayBuffer's tick-reset detection. Kept in sync as a
+// local constant so this module stays self-contained — they describe the same
+// game-server clock event from two angles (queue tail vs. last-seen-tick).
+const TICK_RESET_THRESHOLD_S = 30;
+
 export class HltvSyncService extends EventEmitter {
     private clocks = new Map<string, HltvClock>();
     private lazyInited = new Set<string>();
     private heartbeatTimer: NodeJS.Timeout | null = null;
     private inflight = new Map<string, Promise<HltvClock | null>>();
+    // Highest event.tick observed per server. After a confirmed tick reset
+    // (changelevel / half-2 / OT) we drop this to the new low value so the
+    // next legitimate event doesn't re-trigger the reset path.
+    private highestEventTick = new Map<string, number>();
 
     constructor(private cfg: HltvSyncConfig) { super(); }
 
@@ -194,6 +203,9 @@ export class HltvSyncService extends EventEmitter {
         if (!this.isActive(server)) return;
         if (!this.lazyInited.has(server)) {
             this.lazyInited.add(server);
+            if (typeof event.tick === 'number') {
+                this.highestEventTick.set(server, event.tick);
+            }
             void this.sample(server, 'lazy_init');
             return;
         }
@@ -201,7 +213,26 @@ export class HltvSyncService extends EventEmitter {
         // buffer doesn't fire post-changelevel events with stale clock math.
         const c = this.clocks.get(server);
         if (c && event.map && c.map && event.map !== c.map) {
+            this.highestEventTick.delete(server);
             void this.sample(server, 'map_change');
+        } else if (typeof event.tick === 'number') {
+            const prev = this.highestEventTick.get(server);
+            if (prev !== undefined && prev - event.tick > TICK_RESET_THRESHOLD_S) {
+                // Same map, fresh map load (half-2 changelevel / OT). Cached
+                // activeTime is from the *previous* level instance — naive
+                // broadcastNow() would now run minutes ahead of reality and
+                // the buffer would fire post-reset events instantly. Mark the
+                // clock offline so the buffer takes the fallback-delay path
+                // until the resample lands, and reset the tick high-water mark
+                // so we don't re-trigger on the next event.
+                if (c) c.online = false;
+                this.highestEventTick.set(server, event.tick);
+                void this.sample(server, 'tick_reset');
+                return;
+            }
+            if (prev === undefined || event.tick > prev) {
+                this.highestEventTick.set(server, event.tick);
+            }
         }
     }
 

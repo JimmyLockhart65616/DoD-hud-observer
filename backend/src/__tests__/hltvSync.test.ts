@@ -98,6 +98,45 @@ describe('HltvSyncService — trigger logic', () => {
         svc.onIngestEvent('mocker', { event: 'kill' });
         expect(sampleCalls()).toEqual([]);
     });
+
+    // Regression: at half-2 / OT changelevel on the same map, the game-server
+    // tick clock resets but `event.map` doesn't change — the old map-change
+    // detector missed this and the cached clock kept running with stale
+    // activeTime, causing the delay buffer to fire post-reset events instantly.
+    it('tick reset on the same map triggers a fresh sample and marks the clock offline', () => {
+        const { svc, sampleCalls } = makeServiceWithCountedSample();
+        // Lazy-init at high tick (mid-half-1).
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 1200, map: 'dod_anzio' });
+        const onlineClock = fakeClock({ map: 'dod_anzio', online: true });
+        (svc as any).clocks.set('atl1', onlineClock);
+
+        // Ticks keep climbing through half-1 — no extra sample.
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 1300, map: 'dod_anzio' });
+        expect(sampleCalls()).toEqual(['atl1:lazy_init']);
+        expect(svc.getClock('atl1')?.online).toBe(true);
+
+        // Half-2 starts on the same map: tick jumps back to a low value.
+        svc.onIngestEvent('atl1', { event: 'half_start', tick: 5, map: 'dod_anzio' });
+        expect(sampleCalls()).toEqual(['atl1:lazy_init', 'atl1:tick_reset']);
+        // Clock invalidated so the buffer takes the fallback-delay path until
+        // the fresh sample lands.
+        expect(svc.getClock('atl1')?.online).toBe(false);
+
+        // Subsequent low-tick events should NOT re-trigger the reset path
+        // (sample is already in flight; the high-water mark was reset).
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 8, map: 'dod_anzio' });
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 12, map: 'dod_anzio' });
+        expect(sampleCalls()).toEqual(['atl1:lazy_init', 'atl1:tick_reset']);
+    });
+
+    it('small tick jitter does not trigger a tick-reset sample', () => {
+        const { svc, sampleCalls } = makeServiceWithCountedSample();
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 1000, map: 'dod_anzio' });
+        (svc as any).clocks.set('atl1', fakeClock({ map: 'dod_anzio' }));
+        // Out-of-order arrival within the 30s threshold — tolerated.
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 985, map: 'dod_anzio' });
+        expect(sampleCalls()).toEqual(['atl1:lazy_init']);
+    });
 });
 
 describe('HltvSyncService — getStatus', () => {

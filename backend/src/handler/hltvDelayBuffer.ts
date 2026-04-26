@@ -27,6 +27,12 @@ export type FireCallback = (item: BufferedEvent) => void;
 
 const DRIVER_TICK_MS = 50; // matches the GoldSrc HLTV proxy updaterate floor
 
+// Detect a game-server tick reset (changelevel for half-2 / OT) by looking for
+// an incoming event whose tick is at least this far below the queue tail. The
+// half-1 tail tick is in the high hundreds-to-thousands; half-2 starts at
+// ~1-90s. 30s is comfortably above natural out-of-order arrival jitter.
+const TICK_RESET_THRESHOLD_S = 30;
+
 export class HltvDelayBuffer {
     private queues = new Map<string, BufferedEvent[]>();
     private driver: NodeJS.Timeout | null = null;
@@ -42,10 +48,26 @@ export class HltvDelayBuffer {
     enqueue(item: BufferedEvent): void {
         let q = this.queues.get(item.server);
         if (!q) { q = []; this.queues.set(item.server, q); }
+
+        const tick = numericTick(item.event);
+
+        // Tick reset (mid-match changelevel: half-2 / OT). Old-half events
+        // queued at high ticks would never reach the new (low) broadcast clock
+        // and would otherwise sit forever, while the queue head also wouldn't
+        // re-sort to put the new low-tick event first under stale-clock math.
+        // Drain the queue immediately so the kill feed / captures from end of
+        // previous half still surface — they're already past on HLTV's side.
+        if (q.length > 0) {
+            const tailTick = numericTick(q[q.length - 1].event);
+            if (tailTick - tick > TICK_RESET_THRESHOLD_S) {
+                for (const stranded of q) this.onFire(stranded);
+                q.length = 0;
+            }
+        }
+
         // Events arrive ~ordered by tick from the plugin, so almost every
         // append goes at the end. Linear-scan insertion is fine at the
         // realistic event rate (~10-50 events/sec/server).
-        const tick = numericTick(item.event);
         let i = q.length;
         while (i > 0 && numericTick(q[i - 1].event) > tick) i--;
         q.splice(i, 0, item);
