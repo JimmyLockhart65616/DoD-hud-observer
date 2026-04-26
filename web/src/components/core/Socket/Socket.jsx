@@ -45,6 +45,12 @@ socket.onAny((event, msg) => {
 // when the player isn't yet in a team array (e.g. connect arrives with team "spectator").
 const playerDirectory = {};
 
+// Monotonic counters for stable React keys + addedAt timestamps for
+// render-time TTL filtering. setTimeout-based hide breaks under browser
+// background-tab throttling (OBS overlay running while game is foregrounded).
+let flagEventSeq = 0;
+let killSeq = 0;
+
 // ─── Zustand Store ────────────────────────────────────────────────────────────
 
 export const useHudStore = create(set => ({
@@ -112,15 +118,29 @@ export const useHudStore = create(set => ({
         }
         // Reset victim's streak
         streaks[kill.victim_id] = 0;
+        // Cap at 6 — visual limit, oldest evicted when a 7th arrives. Was
+        // unbounded; observed 715+ kills in one prod match, and inactive-tab
+        // OBS overlays couldn't auto-hide via setTimeout, so the entire history
+        // would render at once on refocus.
         return {
-            kills: [...state.kills, { ...kill, streak: streaks[kill.killer_id] || 0 }],
+            kills: [...state.kills.slice(-5), {
+                ...kill,
+                streak: streaks[kill.killer_id] || 0,
+                id: ++killSeq,
+                addedAt: Date.now(),
+            }],
             kill_streaks: streaks,
         };
     }),
     addChat: (msg)  => set(state => ({ chat: [...state.chat.slice(-19), msg] })),
 
+    // Cap at 3 — visual limit, oldest evicted when a 4th arrives.
     addFlagEvent: (entry) => set(state => ({
-        flag_feed: [...state.flag_feed.slice(-9), { ...entry, id: state.flag_feed.length }],
+        flag_feed: [...state.flag_feed.slice(-2), {
+            ...entry,
+            id: ++flagEventSeq,
+            addedAt: Date.now(),
+        }],
     })),
 
     setRoundState: (info) => set({ round_state: { ...info } }),
@@ -231,12 +251,26 @@ export const SocketStoreComponent = () => {
             playerDirectory[e.user_id] = { name: e.name, team: e.team };
             const player = makeDefaultPlayer(e.user_id, e.name, e.team);
 
+            // Reconnect path: keep the existing record (preserves class/weapons/
+            // score) but refresh name+team. The plugin reuses user_id across
+            // reconnects, and dproto can keep the same fake-id through an in-game
+            // rename — so a stale name would otherwise stick on the HUD.
+            const upsert = (prev) => {
+                const idx = prev.findIndex(p => p.user_id === e.user_id);
+                if (idx === -1) return [...prev, player];
+                const cur = prev[idx];
+                if (cur.name === e.name && cur.team === e.team) return prev;
+                const next = [...prev];
+                next[idx] = { ...cur, name: e.name, team: e.team };
+                return next;
+            };
+
             if (e.team === 'allies') {
                 setAxisPlayers(prev => prev.filter(p => p.user_id !== e.user_id));
-                setAlliesPlayers(prev => prev.find(p => p.user_id === e.user_id) ? prev : [...prev, player]);
+                setAlliesPlayers(upsert);
             } else if (e.team === 'axis') {
                 setAlliesPlayers(prev => prev.filter(p => p.user_id !== e.user_id));
-                setAxisPlayers(prev => prev.find(p => p.user_id === e.user_id) ? prev : [...prev, player]);
+                setAxisPlayers(upsert);
             }
         });
 
@@ -277,6 +311,10 @@ export const SocketStoreComponent = () => {
             }
 
             const spawnState = {
+                // Include name so an in-game rename (dproto keeps the same fake
+                // SteamID through changename) propagates onto the HUD instead
+                // of being trapped in playerDirectory.
+                ...(e.name ? { name: e.name } : {}),
                 class_id:         e.class_id,
                 weapon_primary:   e.weapon_primary,
                 weapon_secondary: e.weapon_secondary,
@@ -484,6 +522,8 @@ export const SocketStoreComponent = () => {
             }
 
             const rosterState = {
+                // Same rename-propagation reason as player_spawn.
+                ...(e.name ? { name: e.name } : {}),
                 class_id:         e.alive ? e.class_id : null,
                 weapon_primary:   e.alive ? e.weapon_primary : null,
                 weapon_secondary: e.alive ? e.weapon_secondary : null,

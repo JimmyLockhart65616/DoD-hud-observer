@@ -1,16 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { humanizeFlagName } from '../Flags/humanize';
 
-const FlagFeedItem = ({ entry, delay }) => {
-    const [visible, setVisible] = useState(true);
+// Render-time TTL filtering. The previous implementation used per-item
+// setTimeout to flip a `visible` flag, but browsers throttle setTimeout to
+// ~1Hz in inactive tabs — when the OBS overlay sits behind a windowed game,
+// items never hide and the feed accumulates indefinitely (observed in prod
+// 2026-04-26). Filtering at render time using `entry.addedAt` instead means:
+//   - When new events arrive, the parent re-renders and stale items drop out
+//     immediately, no timer needed.
+//   - During quiet periods we drive a 1s ticker so items can age out without
+//     waiting for the next event. setInterval is throttled in inactive tabs
+//     too, but that's fine — when the tab refocuses, the next render filters
+//     by current Date.now() and stale items disappear at once.
 
-    useEffect(() => {
-        const t = setTimeout(() => setVisible(false), delay);
-        return () => clearTimeout(t);
-    }, [delay]);
-
-    if (!visible) return null;
-
+const FlagFeedItem = ({ entry }) => {
     if (entry.kind === 'cap_break') {
         const team = entry.contesting_team;
         const label = team === 'allies' ? 'Allies' : 'Axis';
@@ -29,7 +32,6 @@ const FlagFeedItem = ({ entry, delay }) => {
         );
     }
 
-    // captured
     const team = entry.new_owner;
     const label = team === 'allies' ? 'Allies' : 'Axis';
     const names = (entry.captors || []).map(p => p.name).filter(Boolean);
@@ -50,11 +52,25 @@ const FlagFeedItem = ({ entry, delay }) => {
 };
 
 const FlagFeed = React.memo(({ entries, screentime }) => {
-    if (!entries || entries.length === 0) return null;
+    const [now, setNow] = useState(() => Date.now());
+    const hasEntries = !!(entries && entries.length > 0);
+
+    // Drive a 1s ticker only while there are entries that could expire.
+    // Stops the interval when the feed is empty so we're not spinning forever.
+    useEffect(() => {
+        if (!hasEntries) return undefined;
+        const t = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(t);
+    }, [hasEntries]);
+
+    if (!hasEntries) return null;
+    const visible = entries.filter(e => now - (e.addedAt ?? 0) <= screentime);
+    if (visible.length === 0) return null;
+
     return (
         <div className="flagfeed-wrapper">
-            {entries.map((entry, i) => (
-                <FlagFeedItem key={entry.id ?? i} entry={entry} delay={screentime} />
+            {visible.map(entry => (
+                <FlagFeedItem key={entry.id} entry={entry} />
             ))}
         </div>
     );
