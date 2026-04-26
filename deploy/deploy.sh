@@ -5,11 +5,16 @@
 # Uses tar-over-ssh (no rsync required — Git Bash on Windows doesn't ship it).
 #
 # Usage:
-#   ./deploy/deploy.sh                # deploy both
+#   ./deploy/deploy.sh                # deploy both (config.yaml NOT shipped)
 #   ./deploy/deploy.sh --backend      # backend only (skip web build)
 #   ./deploy/deploy.sh --frontend     # frontend only (skip backend restart)
 #   ./deploy/deploy.sh --no-build     # skip frontend build step (use existing web/build)
+#   ./deploy/deploy.sh --config       # also overwrite production config.yaml (first deploys, intentional config rollouts)
 #   ./deploy/deploy.sh --dry-run      # print planned actions, do nothing
+#
+# config.yaml is excluded from routine deploys so server-side production
+# tweaks (per-server hltv_sync, secrets, etc.) survive code pushes. Pass
+# --config to overwrite it intentionally — confirm with the operator first.
 #
 # Overrides:
 #   DEPLOY_HOST=cadaver@74.91.112.242
@@ -32,12 +37,14 @@ cd "$REPO_ROOT"
 DO_BACKEND=1
 DO_FRONTEND=1
 DO_BUILD=1
+DO_CONFIG=0
 DRY_RUN=0
 for arg in "$@"; do
     case "$arg" in
         --backend)   DO_FRONTEND=0 ;;
         --frontend)  DO_BACKEND=0 ;;
         --no-build)  DO_BUILD=0 ;;
+        --config)    DO_CONFIG=1 ;;
         --dry-run)   DRY_RUN=1 ;;
         *) echo "unknown arg: $arg" >&2; exit 1 ;;
     esac
@@ -70,18 +77,28 @@ fi
 run ssh "$HOST" "mkdir -p $REMOTE_DIR/web"
 
 if [[ "$DO_BACKEND" == 1 ]]; then
-    echo "==> Packing + streaming backend source + root package files"
-    # Pack repo-root files (package.json, package-lock.json, config.yaml) + backend/
+    # config.yaml is included only with --config so server-side production
+    # edits (hltv_sync per-server map, secrets, etc.) survive routine code
+    # pushes. The repo's config.yaml carries safe defaults for fresh setups
+    # and is rebuilt into the image for Docker; in production it must be
+    # rolled out deliberately, not as a side effect of pushing TS changes.
+    PACK_FILES=("backend" "package.json" "package-lock.json")
+    if [[ "$DO_CONFIG" == 1 ]]; then
+        echo "==> Packing + streaming backend source + root package files + config.yaml (--config)"
+        PACK_FILES+=("config.yaml")
+    else
+        echo "==> Packing + streaming backend source + root package files (config.yaml excluded; pass --config to overwrite)"
+    fi
     # Exclude node_modules and tests. On the remote we DON'T delete backend/ first
     # because node_modules lives under it after npm ci — we only replace the source.
     if [[ "$DRY_RUN" == 1 ]]; then
-        echo "DRY: tar -c backend package.json package-lock.json config.yaml | ssh $HOST ..."
+        echo "DRY: tar -c ${PACK_FILES[*]} | ssh $HOST ..."
     else
         tar -c \
             --exclude='backend/node_modules' \
             --exclude='backend/src/__tests__' \
             --exclude='backend/jest.config.js' \
-            backend package.json package-lock.json config.yaml \
+            "${PACK_FILES[@]}" \
             | ssh "$HOST" "cd $REMOTE_DIR && rm -rf backend && tar -x"
     fi
 fi
