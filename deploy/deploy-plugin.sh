@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+#
+# Install/update KTPHudObserver.amxx on a single KTP game server.
+#
+# Plain plugin push + restart (the common case once a server is bootstrapped):
+#   ./deploy/deploy-plugin.sh cadaver@66.163.114.109 dod-27019
+#
+# First-time install on a server that's never run KTPHudObserver before
+# (full 5-step setup: plugin + hud_observer.cfg + dodserver.cfg exec line +
+# plugins.ini line + LGSM restart):
+#   ./deploy/deploy-plugin.sh --bootstrap cadaver@172.238.176.101 dod-27015
+#
+# Flags:
+#   --bootstrap      Full first-time install (implies --cfg, edits plugins.ini
+#                    and dodserver.cfg). Idempotent — safe to re-run.
+#   --cfg            Also push deploy/hud_observer.cfg (URL + auth key).
+#   --no-restart     Skip the LGSM restart at the end (e.g. staging multiple
+#                    plugins before a single restart).
+#   --plugin <path>  Override the plugin file shipped (default: KTPHudObserver.amxx
+#                    in the repo root).
+#   --dry-run        Print every remote command, run nothing.
+#
+# Env overrides:
+#   LGSM_ROOT=/home/dodserver        — parent dir of the LGSM instance scripts
+#   LGSM_USER=dodserver              — owner of the gameserver files (chown target)
+#
+# Layout assumed on the target host:
+#   $LGSM_ROOT/<instance>                                                # LGSM script
+#   $LGSM_ROOT/<instance>/serverfiles/dod/dodserver.cfg                  # server config
+#   $LGSM_ROOT/<instance>/serverfiles/dod/addons/ktpamx/plugins/         # .amxx files
+#   $LGSM_ROOT/<instance>/serverfiles/dod/addons/ktpamx/configs/         # cfg + plugins.ini
+#
+# cadaver has NOPASSWD: ALL on every KTP host (see KTP fleet SSH memory),
+# so every remote command goes through `sudo` without prompting.
+
+set -euo pipefail
+
+DO_BOOTSTRAP=0
+DO_CFG=0
+DO_RESTART=1
+DRY_RUN=0
+PLUGIN_FILE=""
+
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --bootstrap)   DO_BOOTSTRAP=1; DO_CFG=1; shift ;;
+        --cfg)         DO_CFG=1; shift ;;
+        --no-restart)  DO_RESTART=0; shift ;;
+        --dry-run)     DRY_RUN=1; shift ;;
+        --plugin)      PLUGIN_FILE="$2"; shift 2 ;;
+        --help|-h)     sed -n '3,30p' "$0"; exit 0 ;;
+        --*)           echo "unknown flag: $1" >&2; exit 1 ;;
+        *)             POSITIONAL+=("$1"); shift ;;
+    esac
+done
+
+if [[ ${#POSITIONAL[@]} -ne 2 ]]; then
+    echo "usage: $0 [flags] <user@host> <instance>" >&2
+    echo "       run with --help for full options" >&2
+    exit 1
+fi
+
+HOST="${POSITIONAL[0]}"
+INSTANCE="${POSITIONAL[1]}"
+LGSM_ROOT="${LGSM_ROOT:-/home/dodserver}"
+LGSM_USER="${LGSM_USER:-dodserver}"
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PLUGIN_FILE="${PLUGIN_FILE:-$REPO_ROOT/KTPHudObserver.amxx}"
+CFG_FILE="$REPO_ROOT/deploy/hud_observer.cfg"
+
+if [[ ! -f "$PLUGIN_FILE" ]]; then
+    echo "error: plugin not found at $PLUGIN_FILE" >&2
+    echo "       compile it first (see CLAUDE.md → 'Compiling the AMXX Plugin')" >&2
+    exit 1
+fi
+if [[ "$DO_CFG" == 1 && ! -f "$CFG_FILE" ]]; then
+    echo "error: $CFG_FILE not found (gitignored — copy from .example and fill in)" >&2
+    exit 1
+fi
+
+INSTANCE_DIR="$LGSM_ROOT/$INSTANCE"
+SERVER_DIR="$INSTANCE_DIR/serverfiles/dod"
+PLUGIN_DEST="$SERVER_DIR/addons/ktpamx/plugins/KTPHudObserver.amxx"
+CFG_DEST="$SERVER_DIR/addons/ktpamx/configs/hud_observer.cfg"
+PLUGINS_INI="$SERVER_DIR/addons/ktpamx/configs/plugins.ini"
+DODSERVER_CFG="$SERVER_DIR/dodserver.cfg"
+
+PLUGINS_INI_LINE="KTPHudObserver.amxx debug"
+DODSERVER_EXEC_LINE="exec addons/ktpamx/configs/hud_observer.cfg"
+
+echo "==> Target: $HOST :: $INSTANCE_DIR"
+echo "==> Plugin: $PLUGIN_FILE  ($(wc -c <"$PLUGIN_FILE") bytes)"
+[[ "$DO_BOOTSTRAP" == 1 ]] && echo "==> Mode: bootstrap (full install)"
+[[ "$DO_CFG" == 1 ]]       && echo "==> Will push hud_observer.cfg"
+[[ "$DO_RESTART" == 0 ]]   && echo "==> Skipping LGSM restart"
+
+run_remote() {
+    if [[ "$DRY_RUN" == 1 ]]; then
+        echo "DRY: ssh $HOST -- $*"
+    else
+        ssh "$HOST" "$@"
+    fi
+}
+
+run_scp() {
+    local src="$1" dst="$2"
+    if [[ "$DRY_RUN" == 1 ]]; then
+        echo "DRY: scp $src $HOST:$dst"
+    else
+        scp "$src" "$HOST:$dst"
+    fi
+}
+
+# ── 1. Stage plugin (and cfg, if requested) into /tmp on the remote ──────────
+TMP_PLUGIN="/tmp/KTPHudObserver.amxx.$$"
+TMP_CFG="/tmp/hud_observer.cfg.$$"
+
+run_scp "$PLUGIN_FILE" "$TMP_PLUGIN"
+[[ "$DO_CFG" == 1 ]] && run_scp "$CFG_FILE" "$TMP_CFG"
+
+# ── 2. Move into place + chown ───────────────────────────────────────────────
+run_remote "sudo install -o $LGSM_USER -g $LGSM_USER -m 0644 $TMP_PLUGIN $PLUGIN_DEST && rm -f $TMP_PLUGIN"
+if [[ "$DO_CFG" == 1 ]]; then
+    run_remote "sudo install -o $LGSM_USER -g $LGSM_USER -m 0644 $TMP_CFG $CFG_DEST && rm -f $TMP_CFG"
+fi
+
+# ── 3. Idempotent edits to plugins.ini + dodserver.cfg (bootstrap only) ──────
+#
+# Both edits use the same pattern: grep first, append only if missing, and
+# guarantee a leading newline if the target file doesn't end in one. The
+# newline guard exists because we hit a real bug on CHI1/DAL1 where
+# plugins.ini's last line had no trailing \n, so `echo 'X' >> file` produced
+# `KTPGrenadeDamage.amxxKTPHudObserver.amxx` as a single line — silently
+# breaking BOTH plugins.
+if [[ "$DO_BOOTSTRAP" == 1 ]]; then
+    run_remote "sudo bash -c '
+        set -e
+        for entry in \
+            \"$PLUGINS_INI|$PLUGINS_INI_LINE\" \
+            \"$DODSERVER_CFG|$DODSERVER_EXEC_LINE\"
+        do
+            file=\${entry%%|*}
+            line=\${entry##*|}
+            if ! grep -qFx \"\$line\" \"\$file\"; then
+                if [ -s \"\$file\" ] && [ \"\$(tail -c1 \"\$file\")\" != \"\" ]; then
+                    echo \"\" >> \"\$file\"
+                fi
+                echo \"\$line\" >> \"\$file\"
+                echo \"  added: \$line  →  \$file\"
+            else
+                echo \"  present: \$line  →  \$file\"
+            fi
+        done
+    '"
+fi
+
+# ── 4. LGSM restart ──────────────────────────────────────────────────────────
+if [[ "$DO_RESTART" == 1 ]]; then
+    echo "==> LGSM restart"
+    run_remote "sudo -u $LGSM_USER $INSTANCE_DIR restart"
+fi
+
+echo "==> Done."
