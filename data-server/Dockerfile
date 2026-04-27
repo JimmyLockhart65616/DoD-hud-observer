@@ -25,7 +25,7 @@ RUN npm ci --legacy-peer-deps
 
 # Backend source
 COPY backend/ ./backend/
-COPY config.yaml ./
+COPY config/local/config.yaml ./config/local/config.yaml
 
 # Web deps (separate layer for caching)
 COPY web/package.json web/package-lock.json ./web/

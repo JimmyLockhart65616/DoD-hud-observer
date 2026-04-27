@@ -29,6 +29,10 @@ playwright-report/
 deploy/hud-observer.service
 deploy/hud_observer.cfg
 
+# Production backend config — contains ingest auth_key + HLTV rcon passwords.
+# Checked-in counterpart: config/online/config.yaml.example
+config/online/config.yaml
+
 # Compiled plugin — build output, not source
 /KTPHudObserver.amxx
 

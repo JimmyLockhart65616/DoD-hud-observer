@@ -64,7 +64,9 @@ npm install
 cd web && npm install && cd ..
 
 # 2. Configure
-cp config.example.yaml config.yaml    # set auth key, ports, storage dir
+# Local dev: config/local/config.yaml ships with safe defaults — no copy needed.
+# Production: cp config/online/config.yaml.example config/online/config.yaml
+#             and fill in auth_key + HLTV rcon passwords.
 
 # 3. Run locally
 npm run backend   # Node backend with hot reload

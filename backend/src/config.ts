@@ -26,8 +26,16 @@ export interface Config {
     hltv_sync: HltvSyncConfig;
 }
 
+// Resolved relative to the repo root from backend/src or backend/lib. The
+// online counterpart lives at config/online/config.yaml (gitignored, operator-
+// owned) — production sets HUD_CONFIG_PATH on the systemd unit to point at
+// /opt/hud-observer/config/online/config.yaml directly.
+const DEFAULT_CONFIG_PATH = path.resolve(__dirname, '../../config/local/config.yaml');
+
 function loadConfig(): Config {
-    const configPath = path.resolve(__dirname, '../../config.yaml');
+    const configPath = process.env.HUD_CONFIG_PATH
+        ? path.resolve(process.env.HUD_CONFIG_PATH)
+        : DEFAULT_CONFIG_PATH;
     const raw = fs.readFileSync(configPath, 'utf-8');
     const file = yaml.load(raw) as any;
 

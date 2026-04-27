@@ -1,0 +1,50 @@
+# DoD HUD Observer — production backend configuration template.
+#
+# Copy to config/online/config.yaml on the data server (gitignored, hand-managed
+# at /opt/hud-observer/config.yaml in production) and fill in the real auth key
+# and HLTV rcon_password values. Routine deploys via deploy/deploy.sh do NOT
+# overwrite this file — operator owns it.
+#
+# Schema matches config/local/config.yaml; see that file for env-var override
+# names. The auth_key, port, and HLTV rcon_password fields below are placeholders
+# — replace before serving traffic.
+
+ingest:
+  port: 9000             # 8088 was already bound on the data server (KTP AC API)
+  auth_key: REPLACE_WITH_INGEST_SECRET   # must match dod_hud_key in plugin's hud_observer.cfg
+
+api:
+  port: 3001
+
+socket:
+  port: 4000
+
+storage:
+  matches_dir: /opt/hud-observer/matches
+
+frontend:
+  origin: "http://74.91.112.242:3000"
+
+auth:
+  steam_api_key: ""
+
+# Production fleet HLTV sync. Each entry pairs a game-server hostname (the
+# value the plugin sends in X-Server-Hostname) with the local HLTV proxy's
+# rcon endpoint. Port convention: HLTV port = game port + 5005.
+#
+# rcon_password matches the HLTV adminpassword in /home/hltvserver/hlds/hltv.cfg.
+# Do NOT commit the real value — substitute before placing this file on the
+# data server, or set HUD_HLTV_RCON_PASSWORD via systemd Environment= and pull
+# it through env-substitution at boot.
+hltv_sync:
+  enabled: true
+  heartbeat_seconds: 60
+  fallback_delay_seconds: 60
+  rcon_timeout_ms: 5000
+  servers:
+    "KTP - Atlanta 1":  { hltv_addr: 127.0.0.1, hltv_port: 27020, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Dallas 1":   { hltv_addr: 127.0.0.1, hltv_port: 27025, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Denver 5":   { hltv_addr: 127.0.0.1, hltv_port: 27034, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - New York 1": { hltv_addr: 127.0.0.1, hltv_port: 27035, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Chicago 1":  { hltv_addr: 127.0.0.1, hltv_port: 27040, rcon_password: REPLACE_WITH_HLTV_RCON }
+    # Add remaining servers as canary expands. Port = game port + 5005.

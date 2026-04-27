@@ -61,7 +61,24 @@ Port 9000 (not 8088) because 8088 was already bound by an unrelated "KTP AC API"
 
 ## Config
 
-`/opt/hud-observer/config.yaml` is overwritten by every deploy. If you need per-environment values (auth key, ports), set them in the systemd unit via `Environment=` lines (see `HUD_AUTH_KEY`, `HUD_INGEST_PORT`, etc. in `config.yaml`'s header).
+The repo follows the KTPInfrastructure split:
+
+- `config/local/config.yaml` — committed, safe dev defaults. Used by `npm run backend`, the docker test stack, and CI. Shipped to the data server by every deploy.
+- `config/online/config.yaml` — **gitignored**, operator-owned. Lives at `/opt/hud-observer/config/online/config.yaml` on the data server and contains the real ingest auth key + HLTV rcon passwords. `deploy.sh` never touches it.
+- `config/online/config.yaml.example` — committed template. Copy to `config/online/config.yaml` for first-time setup.
+
+Which one the backend loads is controlled by `HUD_CONFIG_PATH` in the systemd unit (defaults to `/opt/hud-observer/config/online/config.yaml` per `deploy/hud-observer.service.example`). Per-secret overrides like `HUD_AUTH_KEY`, `HUD_INGEST_PORT`, etc. still work via `Environment=` lines on the unit.
+
+### One-time bootstrap of the online config
+
+```bash
+ssh cadaver@74.91.112.242
+sudo mkdir -p /opt/hud-observer/config/online
+sudo cp /opt/hud-observer/config/online/config.yaml.example \
+        /opt/hud-observer/config/online/config.yaml
+sudo nano /opt/hud-observer/config/online/config.yaml   # fill in auth_key + rcon passwords
+sudo systemctl restart hud-observer
+```
 
 ## Logs
 

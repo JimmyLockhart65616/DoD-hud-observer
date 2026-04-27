@@ -406,6 +406,6 @@ cd ../KTPAMXX           && bash scripts/install-hooks.sh
 - `web/src/components/core/Socket/Socket.jsx` — all game state logic (Zustand store + event handlers)
 - `web/src/components/screen/api/api.js` — weapon name → display info mapping
 - `web/src/components/screen/Example.jsx` — main HUD layout
-- `config.yaml` — backend configuration (ports, auth key, storage)
+- `config/local/config.yaml` — local-dev backend config (committed; ports, auth key, storage). Production uses `config/online/config.yaml` (gitignored, operator-owned), selected via `HUD_CONFIG_PATH` env var. Template: `config/online/config.yaml.example`.
 - `data-server/Dockerfile` — build source for the KTPInfrastructure data container
 - `dod_hud_observer.sma` — legacy plugin (vanilla Metamod version, kept for reference)

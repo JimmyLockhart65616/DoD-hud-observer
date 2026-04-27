@@ -10,6 +10,10 @@ ExecStart=/usr/bin/npx ts-node --script-mode /opt/hud-observer/backend/src/app.t
 Restart=on-failure
 RestartSec=3
 Environment=NODE_ENV=production
+# Production backend config — operator-owned, gitignored. Routine deploys
+# (deploy/deploy.sh) do not touch this file; bootstrap from
+# config/online/config.yaml.example.
+Environment=HUD_CONFIG_PATH=/opt/hud-observer/config/online/config.yaml
 Environment=HUD_AUTH_KEY=REPLACE_WITH_SECRET
 # Data server already has a KTP service on 8088 — move ingest to 9000.
 Environment=HUD_INGEST_PORT=9000

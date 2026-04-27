@@ -30,7 +30,7 @@ services:
       - "27500:27500/udp"
       - "3306:3306"
     volumes:
-      - "./config.yaml:/app/config.yaml:ro"
+      - "./config/local/config.yaml:/app/config/local/config.yaml:ro"
       - "mysql-data:/var/lib/mysql"
 
 
