@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Pre-push hook: catch known amxxcurl async-lifetime foot-guns before they
+# land in committed plugin source.
+#
+# Two rules, both targeting different KTPAmxxCurl anti-patterns we've
+# either documented or actually been bitten by:
+#
+# RULE 1 — synchronous curl_easy_cleanup after perform.
+#   curl_easy_perform is async (it adds the easy handle to curl_multi and
+#   returns immediately). Calling curl_easy_cleanup synchronously after
+#   perform sets cleanup_deferred + interrupt flags but doesn't actually
+#   block; libcurl can still walk the easy handle's state from an asio
+#   completion handler that fires before the cleanup fully takes effect.
+#   Result: SIGSEGV in libcurl walking a freed slist or torn-down easy.
+#
+#   Allowed call sites: function names matching *_complete, *_callback,
+#   or plugin_end (mirrors the KTPMatchHandler / KTPHLTVRecorder pattern).
+#
+# RULE 2 — curl_slist_free_all on a global slist outside plugin_end.
+#   curl_easy_setopt(CURLOPT_HTTPHEADER, slist) stores the slist by
+#   reference. If the slist gets freed while a POST is in flight, libcurl's
+#   poller dereferences the freed nodes and crashes inside
+#   Curl_strncasecompare during header walk.
+#
+#   This is the bug Tony fixed in commit 7e1ce00 (PR #3 superseded). The
+#   original code freed g_curlHeaders + rebuilt it on every map change
+#   (task_init_config re-fires per changelevel), racing in-flight POSTs
+#   from the previous map. Heuristic: flag curl_slist_free_all on any
+#   identifier starting with g_ (project naming convention for globals)
+#   when the enclosing function isn't plugin_end.
+#
+# Install (one-time, per clone):
+#     git config core.hooksPath scripts/hooks
+#
+# Bypass (rare — escape hatch only):
+#     git push --no-verify
+#
+# Background incident: 2026-04-26 amxxcurl segfault on NY1 (12 of 13 prod
+# core dumps at the same instruction offset, all during map-change
+# windows). Fixed via Tony's PR #3 (commit 7e1ce00). RULE 2 above would
+# have caught the original anti-pattern at commit time.
+
+set -euo pipefail
+
+# Find .sma / .inc files staged for push (changed vs. main, or staged in HEAD).
+files=$(git diff --name-only --diff-filter=ACM HEAD~1..HEAD 2>/dev/null | grep -E '\.(sma|inc)$' || true)
+
+# Fallback: if HEAD~1 doesn't exist (initial commit), check the working tree
+if [ -z "$files" ]; then
+    files=$(git ls-files | grep -E '\.(sma|inc)$' || true)
+fi
+
+[ -z "$files" ] && exit 0
+
+fail=0
+for f in $files; do
+    [ -f "$f" ] || continue
+
+    # State machine: track the most recently seen function declaration line so
+    # we can attribute each flagged call to its enclosing function.
+    awk -v file="$f" '
+        # New top-level function — capture name
+        /^[[:space:]]*(public|stock)[[:space:]]+[A-Za-z_]/ {
+            fn=$0
+        }
+        # RULE 1: curl_easy_cleanup outside callback/teardown context
+        /curl_easy_cleanup\(/ {
+            if (fn !~ /(complete|callback|plugin_end|cleanup_handle)/) {
+                printf("ERROR: %s:%d curl_easy_cleanup outside *_complete/*_callback/plugin_end:\n  %s\n  \xe2\x86\xb3 enclosing fn: %s\n  \xe2\x86\xb3 rationale: amxxcurl perform is async; sync cleanup races libcurl callback dispatch.\n",
+                       file, NR, $0, fn) > "/dev/stderr"
+                exit 1
+            }
+        }
+        # RULE 2: curl_slist_free_all on a g_*-prefixed global outside plugin_end
+        /curl_slist_free_all\(\s*g_[A-Za-z_0-9]+/ {
+            if (fn !~ /plugin_end/) {
+                printf("ERROR: %s:%d curl_slist_free_all on a g_* global outside plugin_end:\n  %s\n  \xe2\x86\xb3 enclosing fn: %s\n  \xe2\x86\xb3 rationale: CURLOPT_HTTPHEADER stores slist by reference; freeing while POSTs are in flight = UAF (see Tony PR #3 / commit 7e1ce00).\n",
+                       file, NR, $0, fn) > "/dev/stderr"
+                exit 1
+            }
+        }
+    ' "$f" || fail=1
+done
+
+if [ $fail -ne 0 ]; then
+    echo "" >&2
+    echo "Pre-push check failed. See errors above." >&2
+    echo "If this is a deliberate exception, push with --no-verify (and document why in the commit message)." >&2
+    exit 1
+fi
+
+exit 0
