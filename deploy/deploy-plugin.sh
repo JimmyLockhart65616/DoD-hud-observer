@@ -32,6 +32,17 @@
 #
 # cadaver has NOPASSWD: ALL on every KTP host (see KTP fleet SSH memory),
 # so every remote command goes through `sudo` without prompting.
+#
+# LGSM-script naming convention (relevant to step 4 below):
+#   The LGSM control script lives INSIDE the instance directory and is named
+#   dodserver, dodserver2, dodserver3, etc. depending on the host's instance
+#   layout. The script auto-discovers it via `ls $INSTANCE_DIR/dodserver*` and
+#   expects exactly one match. Fails loudly otherwise.
+#     /home/dodserver/dod-27015/dodserver       (ATL/CHI/DAL/NY :27015)
+#     /home/dodserver/dod-27019/dodserver5      (DEN :27019)
+#   Earlier versions of this script invoked `sudo -u dodserver $INSTANCE_DIR
+#   restart` directly, which fails with `sudo: <dir>: command not found`
+#   because the directory itself isn't executable.
 
 set -euo pipefail
 
@@ -157,9 +168,32 @@ if [[ "$DO_BOOTSTRAP" == 1 ]]; then
 fi
 
 # ── 4. LGSM restart ──────────────────────────────────────────────────────────
+#
+# The LGSM control script is named dodserver, dodserver2, … inside
+# $INSTANCE_DIR — auto-discover it. Single-match is required (multi-match
+# means $INSTANCE_DIR isn't a single instance dir, which is a usage bug).
 if [[ "$DO_RESTART" == 1 ]]; then
     echo "==> LGSM restart"
-    run_remote "sudo -u $LGSM_USER $INSTANCE_DIR restart"
+    if [[ "$DRY_RUN" == 1 ]]; then
+        echo "DRY: ssh $HOST -- sudo -u $LGSM_USER \$($INSTANCE_DIR/dodserver*) restart"
+    else
+        # Discover the LGSM script. Glob expansion happens remotely.
+        # The script name varies per host (dodserver vs dodserver5 etc).
+        LGSM_SCRIPTS=$(ssh "$HOST" "ls -1 $INSTANCE_DIR/dodserver* 2>/dev/null")
+        SCRIPT_COUNT=$(echo "$LGSM_SCRIPTS" | grep -c '^/' || true)
+        if [[ "$SCRIPT_COUNT" -eq 0 ]]; then
+            echo "error: no LGSM script found at $INSTANCE_DIR/dodserver*" >&2
+            echo "       expected one of: dodserver, dodserver2, dodserver3, dodserver4, dodserver5" >&2
+            exit 1
+        fi
+        if [[ "$SCRIPT_COUNT" -gt 1 ]]; then
+            echo "error: multiple LGSM scripts found in $INSTANCE_DIR — ambiguous:" >&2
+            echo "$LGSM_SCRIPTS" >&2
+            exit 1
+        fi
+        echo "    LGSM script: $LGSM_SCRIPTS"
+        ssh "$HOST" "sudo -u $LGSM_USER $LGSM_SCRIPTS restart"
+    fi
 fi
 
 echo "==> Done."
