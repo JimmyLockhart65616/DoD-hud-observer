@@ -177,9 +177,12 @@ if [[ "$DO_RESTART" == 1 ]]; then
     if [[ "$DRY_RUN" == 1 ]]; then
         echo "DRY: ssh $HOST -- sudo -u $LGSM_USER \$($INSTANCE_DIR/dodserver*) restart"
     else
-        # Discover the LGSM script. Glob expansion happens remotely.
-        # The script name varies per host (dodserver vs dodserver5 etc).
-        LGSM_SCRIPTS=$(ssh "$HOST" "ls -1 $INSTANCE_DIR/dodserver* 2>/dev/null")
+        # Discover the LGSM script. Glob expansion happens remotely under
+        # sudo because cadaver isn't in the dodserver group on most hosts
+        # (only DEN5), so a bare `ls` of /home/dodserver/dod-<port>/ returns
+        # Permission denied. Wrap in sudo bash -c so the glob expands as
+        # root rather than as cadaver.
+        LGSM_SCRIPTS=$(ssh "$HOST" "sudo bash -c 'ls -1 $INSTANCE_DIR/dodserver* 2>/dev/null'")
         SCRIPT_COUNT=$(echo "$LGSM_SCRIPTS" | grep -c '^/' || true)
         if [[ "$SCRIPT_COUNT" -eq 0 ]]; then
             echo "error: no LGSM script found at $INSTANCE_DIR/dodserver*" >&2
