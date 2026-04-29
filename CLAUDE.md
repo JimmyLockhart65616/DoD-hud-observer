@@ -284,10 +284,27 @@ Output: `../KTPInfrastructure/local/plugins/KTPHudObserver.amxx`
 
 Compile using the AMXX compiler from the KTPInfrastructure artifacts. The compiler resolves
 includes relative to its own directory, so everything must be copied to `/tmp` first
-(Windows volume mounts cause read issues for the compiler):
+(Windows volume mounts cause read issues for the compiler).
+
+The host-side prelude computes git SHA + UTC build time and passes them through env vars;
+the inner shell writes them to `include/build_info.inc` so `ktp_version_reporter` can report
+them via the `amx_ktp_versions` rcon command. `jives/hlds:dod` doesn't ship git, hence the
+host-side `git rev-parse`.
 
 ```bash
+GIT_SHA=$(git -C /d/Git/DoD-hud-observer rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_DIRTY=""
+if [ "$GIT_SHA" != "unknown" ]; then
+    if ! git -C /d/Git/DoD-hud-observer diff --quiet 2>/dev/null \
+       || ! git -C /d/Git/DoD-hud-observer diff --cached --quiet 2>/dev/null; then
+        GIT_DIRTY="-dirty"
+    fi
+fi
+BUILD_TIME=$(date -u +%Y-%m-%dT%H:%MZ)
+
 docker run --rm --entrypoint sh \
+  -e KTP_BUILD_SHA="${GIT_SHA}${GIT_DIRTY}" \
+  -e KTP_BUILD_TIME="$BUILD_TIME" \
   -v "d:/Git/DoD-hud-observer:/src" \
   -v "d:/Git/KTPInfrastructure:/infra" \
   jives/hlds:dod -c '
@@ -295,6 +312,7 @@ docker run --rm --entrypoint sh \
     cp /infra/artifacts/latest/ktpamx/scripting/include/*.inc /tmp/compile/include/
     cp /infra/artifacts/latest/ktpamx/scripting/amxxpc /tmp/compile/
     cp /infra/artifacts/latest/ktpamx/scripting/amxxpc32.so /tmp/compile/
+    printf "#define KTP_BUILD_SHA \"%s\"\n#define KTP_BUILD_TIME \"%s\"\n" "$KTP_BUILD_SHA" "$KTP_BUILD_TIME" > /tmp/compile/include/build_info.inc
     cat /src/KTPHudObserver.sma | tr -d "\r" > /tmp/compile/KTPHudObserver.sma
     cd /tmp/compile
     chmod +x amxxpc
@@ -304,7 +322,7 @@ docker run --rm --entrypoint sh \
 ```
 
 Expected: 1 warning (`client_disconnect` deprecated — harmless, DODX still fires it).
-Expected output size: ~14.7 KB.
+Expected output size: ~19 KB.
 
 ### Deploying the compiled plugin
 

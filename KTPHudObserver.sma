@@ -21,6 +21,7 @@
 #include <amxmisc>
 #include <dodx>
 #include <curl>
+#include <ktp_version_reporter>
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -135,6 +136,7 @@ new g_hostname[64];
 
 public plugin_init() {
     register_plugin(PLUGIN, VERSION, AUTHOR);
+    KTP_RegisterVersion(PLUGIN, VERSION);
 
     register_cvar("dod_hud_url", "http://127.0.0.1:8088/ingest", FCVAR_SERVER);
     register_cvar("dod_hud_key", "",                              FCVAR_PROTECTED);
