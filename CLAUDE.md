@@ -197,11 +197,34 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 
 ## Dev Commands
 ```bash
-npm run backend   # backend with hot reload
-npm run web       # React dev server
-npm run mocker    # simulate events without a real server
-npm run test      # Jest — backend unit + integration tests
+npm run backend       # backend with hot reload
+npm run web           # React dev server
+npm run mocker        # simulate events without a real server
+npm run test          # Jest — backend unit + integration tests
+npm run plugin:smoke  # Tier 1 build-time smoke for KTPHudObserver.amxx
 ```
+
+## Plugin Smoke (Tier 1)
+
+`npm run plugin:smoke` (= `scripts/plugin-smoke.sh`) reproduces the exact
+`compile_plugin` invocation Tony's CI runs in `KTPInfrastructure/build/plugins/Dockerfile`:
+
+```sh
+amxxpc KTPHudObserver.sma -i./include -i/build/plugins/KTPHudObserver -o.../KTPHudObserver.amxx
+```
+
+Sources the compiler + includes from `../KTPInfrastructure/artifacts/latest/ktpamx/scripting/`.
+If artifacts are missing, run `cd ../KTPInfrastructure && make build-amxx` once.
+
+Exit codes:
+
+- `0` clean compile
+- `1` compile failed
+- `2` unexpected warning (only the documented `client_disconnect` deprecation is allowed)
+- `3` environment problem (missing artifacts, no docker)
+
+Use this after every `.sma` edit before deploying. Catches every CI compile failure
+locally in ~10s on warm Docker.
 
 ## Mocker
 

@@ -12,7 +12,8 @@
     "test": "jest --config backend/jest.config.js",
     "e2e": "npx playwright test",
     "e2e:headed": "npx playwright test --headed",
-    "e2e:screenshot": "npx ts-node e2e/screenshot-tool.ts"
+    "e2e:screenshot": "npx ts-node e2e/screenshot-tool.ts",
+    "plugin:smoke": "bash scripts/plugin-smoke.sh"
   },
   "repository": {
     "type": "git",
