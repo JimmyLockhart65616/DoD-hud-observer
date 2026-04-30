@@ -82,7 +82,7 @@ describe('POST /ingest — auth', () => {
         const res = await request(app)
             .post('/ingest')
             .set('X-Auth-Key', 'secret')
-            .send({ event: 'round_start', match_id: 'KTP-abc', timeleft: 1200 });
+            .send({ event: 'team_score', match_id: 'KTP-abc', allies_score: 0, axis_score: 0 });
         expect(res.status).toBe(200);
         expect(res.body).toEqual({ ok: true });
     });
@@ -122,7 +122,7 @@ describe('POST /ingest — match lifecycle', () => {
         await request(app).post('/ingest').set('X-Auth-Key', 'key')
             .send({ event: 'ktp_match_start', match_id: matchId, map: 'dod_flash', match_type: 1, half: 1 });
         await request(app).post('/ingest').set('X-Auth-Key', 'key')
-            .send({ event: 'round_start', match_id: matchId, timeleft: 1200 });
+            .send({ event: 'half_start', match_id: matchId, half: 1, timeleft: 1200 });
         await request(app).post('/ingest').set('X-Auth-Key', 'key')
             .send({ event: 'kill', match_id: matchId, killer_id: 'STEAM_0:0:1', victim_id: 'STEAM_0:0:2', weapon: 'garand' });
 
@@ -130,7 +130,7 @@ describe('POST /ingest — match lifecycle', () => {
         const lines = jsonl.trim().split('\n').filter(l => l);
         expect(lines).toHaveLength(3);
         expect(JSON.parse(lines[0]).event).toBe('ktp_match_start');
-        expect(JSON.parse(lines[1]).event).toBe('round_start');
+        expect(JSON.parse(lines[1]).event).toBe('half_start');
         expect(JSON.parse(lines[2]).event).toBe('kill');
     });
 
@@ -139,13 +139,13 @@ describe('POST /ingest — match lifecycle', () => {
         await request(app).post('/ingest').set('X-Auth-Key', 'key')
             .send({ event: 'ktp_match_start', match_id: matchId, map: 'dod_anzio', match_type: 1, half: 1 });
         await request(app).post('/ingest').set('X-Auth-Key', 'key')
-            .send({ event: 'round_start', match_id: matchId, timeleft: 1200 });
+            .send({ event: 'half_start', match_id: matchId, half: 1, timeleft: 1200 });
         await request(app).post('/ingest').set('X-Auth-Key', 'key')
             .send({ event: 'ktp_match_end', match_id: matchId });
 
         const meta = JSON.parse(fs.readFileSync(path.join(tmpDir, matchId, 'metadata.json'), 'utf-8'));
         expect(meta.endedAt).not.toBeNull();
-        expect(meta.eventCount).toBe(3);  // start + round_start + end
+        expect(meta.eventCount).toBe(3);  // start + half_start + end
     });
 });
 

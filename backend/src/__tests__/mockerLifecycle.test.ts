@@ -184,4 +184,109 @@ describe('mocker lifecycle — scripted match round-trips through ingest → dis
                 e.event === 'kill' && e.weapon === 'garand');
         expect(killWithGarand).toBeDefined();
     }, 30000);
+
+    it('does not emit production-impossible events', async () => {
+        // Production fixture (8997 events) confirmed 0 occurrences of:
+        // round_start_freeze, round_start, round_end, weapon_pickup,
+        // weapon_drop, nade_throw, flag_cap_contested.
+        // Mocker must not emit these dead events either.
+
+        let tmpDir: string;
+        let recorder: MatchRecorder;
+        let io: SocketServer;
+        let app: Application;
+
+        tmpDir = makeTmpDir();
+        recorder = new MatchRecorder(tmpDir);
+        io = new SocketServer(createServer());
+        app = makeApp(AUTH_KEY, recorder, io);
+
+        try {
+            const matchId = 'KTP-mocker-dead-events-1';
+
+            // Start match
+            await request(app).post('/ingest').set('X-Auth-Key', AUTH_KEY)
+                .send({ event: 'ktp_match_start', match_id: matchId, map: 'dod_anzio', match_type: 1, half: 1 });
+
+            // Collect mocker events
+            jest.useFakeTimers({ doNotFake: ['performance'] });
+            const mocker = new MockerClass();
+            const events: string[] = [];
+
+            mocker.on('action', (info: [string | string[], Record<string, unknown>]) => {
+                const eventName = Array.isArray(info[0]) ? info[0][0] : info[0];
+                events.push(eventName);
+            });
+
+            mocker.on('done', () => {
+                // done
+            });
+
+            mocker.start();
+            jest.runAllTimers();
+            jest.useRealTimers();
+
+            // Assert dead events were not emitted
+            const seenEvents = new Set(events);
+            expect(seenEvents.has('round_start_freeze')).toBe(false);
+            expect(seenEvents.has('round_start')).toBe(false);
+            expect(seenEvents.has('round_end')).toBe(false);
+            expect(seenEvents.has('weapon_pickup')).toBe(false);
+            expect(seenEvents.has('weapon_drop')).toBe(false);
+            expect(seenEvents.has('nade_throw')).toBe(false);
+            expect(seenEvents.has('flag_cap_contested')).toBe(false);
+        } finally {
+            recorder.close();
+            io.close();
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    it('codifies metadata.half quirk: pre-start team_score auto-starts match with half=0', async () => {
+        // Production behavior: if non-lifecycle events (team_score, player_score,
+        // player_connect) arrive BEFORE ktp_match_start at the warmup boundary,
+        // recorder auto-starts the match with default matchType=0/half=0. When
+        // ktp_match_start then arrives, it's a no-op (match already active).
+        // This is documented production behavior, not a bug. Codified here so a
+        // future "fix" can't silently change the on-disk shape.
+
+        let tmpDir: string;
+        let recorder: MatchRecorder;
+        let io: SocketServer;
+        let app: Application;
+
+        tmpDir = makeTmpDir();
+        recorder = new MatchRecorder(tmpDir);
+        io = new SocketServer(createServer());
+        app = makeApp(AUTH_KEY, recorder, io);
+
+        try {
+            const matchId = 'KTP-mocker-pre-start-1';
+
+            // Non-lifecycle event BEFORE ktp_match_start: team_score.
+            // This should trigger auto-start with defaults (matchType=0, half=0).
+            await request(app).post('/ingest').set('X-Auth-Key', AUTH_KEY)
+                .send({ event: 'team_score', match_id: matchId, allies_score: 0, axis_score: 0 });
+
+            // Now send ktp_match_start — should be a no-op for metadata.
+            await request(app).post('/ingest').set('X-Auth-Key', AUTH_KEY)
+                .send({ event: 'ktp_match_start', match_id: matchId, map: 'dod_anzio', match_type: 2, half: 1 });
+
+            await request(app).post('/ingest').set('X-Auth-Key', AUTH_KEY)
+                .send({ event: 'ktp_match_end', match_id: matchId });
+
+            // Check: metadata should show auto-start defaults (matchType=0, half=0),
+            // NOT the ktp_match_start values (matchType=2, half=1).
+            const meta = JSON.parse(
+                fs.readFileSync(path.join(tmpDir, matchId, 'metadata.json'), 'utf-8'),
+            );
+            expect(meta.matchType).toBe(0);  // auto-start default, not ktp_match_start's 2
+            expect(meta.half).toBe(0);       // auto-start default, not ktp_match_start's 1
+            expect(meta.map).toBe('unknown'); // auto-start default, not ktp_match_start's dod_anzio
+        } finally {
+            recorder.close();
+            io.close();
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
 });

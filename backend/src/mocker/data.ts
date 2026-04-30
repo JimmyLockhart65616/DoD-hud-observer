@@ -5,14 +5,27 @@
  * Times are in milliseconds from mocker start.
  *
  * Event shapes mirror what KTPHudObserver.amxx actually emits in extension mode.
- * Verified against captured live plugin output (.local-refs/real-events.jsonl).
+ * Verified against production fixture: match-1777342963-NY1 (8997 events, 2026-04-27).
  *
- * Notable extension-mode constraints reflected here:
+ * Production deviations codified:
+ *   - NEVER emitted: round_start_freeze, round_start, round_end, weapon_pickup,
+ *     weapon_drop, nade_throw, flag_cap_contested. These are documented in
+ *     CLAUDE.md but dead code in the plugin (confimed 0 occurrences across
+ *     production fixture).
+ *   - flags_init re-emitted per-round (47× in fixture, 6 H1 + 41 H2), not once.
+ *   - team_score and player_score are the dominant events (1444 and 1306 occurrences).
+ *     flag_zone_players is the highest frequency (2609/8997 = 29% of all traffic).
+ *   - damage.victim_health ranges into negatives on overkill (e.g. -398 in fixture).
+ *   - kill events always carry headshot + killer_prone + victim_prone (CLAUDE.md
+ *     schema was incomplete — only listed victim_prone).
+ *   - player_team_change can emit team: "spectator" (codified in production fixture).
+ *   - prone_change emits state: "standing" on player spawn, not just transitions.
+ *
+ * Extension-mode constraints:
  *   - flag_zone_players carries integer counts (allies_count/axis_count), NOT id arrays.
  *     Per-player zone membership isn't readable in extension mode.
  *   - flag_cap_started.captor_ids is always []. Captor names only surface on
  *     flag_captured.captor_ids, populated by dod_score_event post-cap.
- *   - flag_cap_contested carries contester_count (int) + empty contester_ids: [].
  *   - flags_init.flag_name uses raw BSP entity strings (e.g. POINT_ANZIO_PLAZA).
  *     All dod_anzio flags initialise as "neutral".
  *
@@ -50,7 +63,6 @@ export default [
     { "player_connect": { "time": 650,  "user_id": "STEAM_0:0:2006", "name": "ian",       "team": "axis" } },
 
     // ── Round 1 ──────────────────────────────────────────────────────────────
-    { "round_start_freeze": { "time": 1000 } },
 
     // dod_anzio: 5 cap zones, all start neutral. flag_name = BSP entity string.
     { "flags_init": { "time": 1100, "flags": [
@@ -75,7 +87,6 @@ export default [
     { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:2005", "name": "Polak",    "team": "axis",   "class_id": 0, "weapon_primary": "k98",      "weapon_secondary": "luger" } },
     { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:2006", "name": "ian",      "team": "axis",   "class_id": 6, "weapon_primary": "mg42",     "weapon_secondary": "luger" } },
 
-    { "round_start": { "time": 4000, "timeleft": 1197 } },
     { "caster_observed_player": { "time": 4500, "user_id": "STEAM_0:0:1001" } },
 
     // ian goes prone (shame!). Real plugin sets timestamp = get_systime()*1000 (wall clock).
@@ -93,9 +104,6 @@ export default [
     // Chat: pre-round banter
     { "user_say": { "time": 6700, "user_id": "STEAM_0:0:1001", "team_only": false, "message": "gl hf" } },
     { "user_say": { "time": 7000, "user_id": "STEAM_0:0:2001", "team_only": false, "message": "hf" } },
-
-    // Grenade thrown — Raphinha nades the Street
-    { "nade_throw": { "time": 7500, "user_id": "STEAM_0:0:1001", "nade_type": "frag_allies" } },
 
     // Two axis enter Anzio Street zone
     { "flag_zone_players": { "time": 7800, "zones": [
@@ -125,8 +133,6 @@ export default [
         { "flag_id": 3, "allies_count": 0, "axis_count": 0 },
         { "flag_id": 4, "allies_count": 0, "axis_count": 0 },
     ]}},
-    // contester_count is the count of opposing-team bodies in the zone; ids stay [].
-    { "flag_cap_contested": { "time": 9900, "flag_id": 1, "flag_name": "POINT_ANZIO_STREET", "contesting_team": "allies", "contester_count": 1, "contester_ids": [] } },
 
     // Raphinha kills omenator on the point
     { "damage": { "time": 9950, "attacker_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2002", "damage": 55, "weapon": "garand", "hitplace": 2, "victim_health": 45 } },
@@ -142,9 +148,6 @@ export default [
         { "flag_id": 4, "allies_count": 0, "axis_count": 0 },
     ]}},
     { "flag_cap_stopped": { "time": 10500, "flag_id": 1, "flag_name": "POINT_ANZIO_STREET", "capping_team": "axis" } },
-
-    // Raphinha picks up the dead mp40
-    { "weapon_pickup": { "time": 11000, "user_id": "STEAM_0:0:1001", "weapon": "mp40" } },
 
     // Team chat
     { "user_say": { "time": 11500, "user_id": "STEAM_0:0:1001", "team_only": true, "message": "picked up mp40, pushing street" } },
@@ -201,7 +204,6 @@ export default [
     { "damage": { "time": 17900, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "damage": 35, "weapon": "mp44", "hitplace": 3, "victim_health": 30 } },
     { "damage": { "time": 18000, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "damage": 35, "weapon": "mp44", "hitplace": 2, "victim_health": 0 } },
     { "kill":   { "time": 18000, "killer_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "weapon": "mp44",   "kill_type": "normal", "headshot": false, "victim_prone": false, "killer_prone": false } },
-    { "nade_throw": { "time": 18500, "user_id": "STEAM_0:0:2004", "nade_type": "frag_axis" } },
     { "damage": { "time": 18900, "attacker_id": "STEAM_0:0:1006", "victim_id": "STEAM_0:0:2003", "damage": 100, "weapon": "garand", "hitplace": 1, "victim_health": 0 } },
     { "kill":   { "time": 19000, "killer_id": "STEAM_0:0:1006", "victim_id": "STEAM_0:0:2003", "weapon": "garand", "kill_type": "normal", "headshot": true,  "victim_prone": false, "killer_prone": false } },
     // mogers 2nd kill this round — streak
@@ -228,20 +230,11 @@ export default [
     // flags. Allies still hold Anzio Street, so they tick to 2.
     { "team_score": { "time": 25500, "allies_score": 2, "axis_score": 0 } },
 
-    // Raphinha drops the mp40, back to garand
-    { "weapon_drop":   { "time": 26000, "user_id": "STEAM_0:0:1001", "weapon": "mp40" } },
-    { "weapon_pickup": { "time": 26100, "user_id": "STEAM_0:0:1001", "weapon": "garand" } },
-
     // ── Player disconnect / reconnect ────────────────────────────────────────
     { "player_disconnect": { "time": 27000, "user_id": "STEAM_0:0:2005" } },
     { "player_connect":    { "time": 29000, "user_id": "STEAM_0:0:2005", "name": "Polak", "team": "axis" } },
 
-    // Round 1 ends — Allies win (1 cap + 1 tick = score 2-0)
-    { "round_end": { "time": 30000, "winner": "allies", "end_type": "objectives", "allies_score": 2, "axis_score": 0 } },
-
-
     // ── Round 2 ──────────────────────────────────────────────────────────────
-    { "round_start_freeze": { "time": 35000 } },
 
     { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:1001", "name": "Raphinha", "team": "allies", "class_id": 0, "weapon_primary": "garand",   "weapon_secondary": "colt" } },
     { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:1002", "name": "bud",      "team": "allies", "class_id": 2, "weapon_primary": "thompson", "weapon_secondary": "colt" } },
@@ -256,7 +249,6 @@ export default [
     { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:2005", "name": "Polak",    "team": "axis",   "class_id": 0, "weapon_primary": "k98",      "weapon_secondary": "luger" } },
     { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:2006", "name": "ian",      "team": "axis",   "class_id": 6, "weapon_primary": "mg42",     "weapon_secondary": "luger" } },
 
-    { "round_start": { "time": 38000, "timeleft": 1163 } },
     // Round 2 carryover — score continues from round 1's 2-0.
     { "team_score":  { "time": 38100, "allies_score": 2, "axis_score": 0 } },
 
@@ -294,9 +286,6 @@ export default [
     { "player_score": { "time": 48200, "user_id": "STEAM_0:0:2001", "kills": 2, "deaths": 0, "score": 7, "obj_score": 5 } },
     { "player_score": { "time": 48200, "user_id": "STEAM_0:0:2004", "kills": 2, "deaths": 0, "score": 7, "obj_score": 5 } },
 
-    // Round 2 ends — Axis recap counts as the round win, but cumulative still 2-1.
-    { "round_end": { "time": 55000, "winner": "axis", "end_type": "objectives", "allies_score": 2, "axis_score": 1 } },
-
     { "time_sync": { "time": 56000, "timeleft": 1145 } },
 
 
@@ -325,7 +314,7 @@ export default [
     { "player_team_change": { "time": 62100, "user_id": "STEAM_0:0:2006", "team": "allies" } },
 
     // ── Half 2, Round 1 ──────────────────────────────────────────────────────
-    { "round_start_freeze": { "time": 63000 } },
+    // Production: flags_init is re-emitted per round (47× in fixture, 6 H1 + 41 H2).
 
     { "flags_init": { "time": 63100, "flags": [
         { "flag_id": 0, "flag_name": "POINT_ANZIO_PLAZA",   "owner": "neutral" },
@@ -349,16 +338,22 @@ export default [
     { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:1005", "name": "MaT*",     "team": "axis",   "class_id": 2, "weapon_primary": "mp40",     "weapon_secondary": "luger" } },
     { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:1006", "name": "BitchX",   "team": "axis",   "class_id": 0, "weapon_primary": "k98",      "weapon_secondary": "luger" } },
 
-    { "round_start": { "time": 66000, "timeleft": 1197 } },
-
     // Chat
     { "user_say": { "time": 67000, "user_id": "STEAM_0:0:2001", "team_only": false, "message": "our turn now" } },
 
     // Some half 2 action
     { "damage": { "time": 69900, "attacker_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2003", "damage": 100, "weapon": "k98", "hitplace": 2, "victim_health": 0 } },
     { "kill":   { "time": 70000, "killer_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2003", "weapon": "k98",    "kill_type": "normal", "headshot": false, "victim_prone": false, "killer_prone": false } },
-    { "damage": { "time": 71900, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1003", "damage": 100, "weapon": "garand", "hitplace": 1, "victim_health": 0 } },
-    { "kill":   { "time": 72000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1003", "weapon": "garand", "kill_type": "normal", "headshot": true,  "victim_prone": false, "killer_prone": false } },
+
+    // Production: player_team_change to "spectator" (someone going to ref/spec mid-half).
+    // Also shows team="spectator" is a real production value (CLAUDE.md schema says allies|axis only).
+    { "player_team_change": { "time": 70500, "user_id": "STEAM_0:0:1003", "team": "spectator" } },
+
+    { "damage": { "time": 71900, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "damage": 120, "weapon": "garand", "hitplace": 1, "victim_health": -20 } },
+    { "kill":   { "time": 72000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "weapon": "garand", "kill_type": "normal", "headshot": true,  "victim_prone": false, "killer_prone": false } },
+
+    // Player rejoins from spec
+    { "player_team_change": { "time": 72500, "user_id": "STEAM_0:0:1003", "team": "axis" } },
 
     { "time_sync": { "time": 75000, "timeleft": 1187 } },
 
