@@ -41,6 +41,19 @@ fi
 # Remove default hltv.cfg if present (avoid conflicts with instance configs)
 rm -f /opt/hltv/hltv.cfg
 
+# Copy staged HLTV configs from /host-cfgs/ into per-instance dirs.
+# Direct bind-mount of cfgs into /opt/hltv/instance-N/hltv.cfg breaks the
+# 32-bit HLTV binary's stat() on Docker Desktop / WSL2: the bind-mount
+# synthesizes 64-bit inodes that overflow stat32 (EOVERFLOW), the cfg
+# silently falls back to default port 27020, and both proxies race for
+# the same port. KTPInfrastructure/docker-compose.local.yml stages the
+# cfgs at /host-cfgs/ instead; this loop copies them to the instance dirs.
+for i in 1 2; do
+    if [ -f "/host-cfgs/hltv-$i.cfg" ]; then
+        cp "/host-cfgs/hltv-$i.cfg" "/opt/hltv/instance-$i/hltv.cfg"
+    fi
+done
+
 # Ensure demo directories exist
 mkdir -p /opt/hltv/instance-1/demos /opt/hltv/instance-2/demos
 
