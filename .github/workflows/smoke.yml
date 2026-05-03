@@ -1,0 +1,37 @@
+# KTP Tier 1 — Build-time smoke for KTPHudObserver
+#
+# Catches plugin-load regressions: missing native, wrong AMXX ABI,
+# truncated build artifact, syntax error that compile.sh missed but the
+# AMXX runtime rejects on load.
+#
+# Implementation lives in the reusable workflow at
+# afraznein/KTPInfrastructure/.github/workflows/smoke-callable.yml. This
+# file is just the trigger + assertion configuration.
+
+name: Tier 1 Smoke
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    uses: afraznein/KTPInfrastructure/.github/workflows/smoke-callable.yml@main
+    with:
+      under_test_label: KTPHudObserver
+      under_test_kind: amx_plugin
+      amxx_source: KTPHudObserver.sma
+      artifact_container_path: /opt/hlds/dod/addons/ktpamx/plugins/KTPHudObserver.amxx
+      assert_plugin: KTPHudObserver
+      caller_repo_path: KTPHudObserver
+    secrets:
+      ktp_checkout_token: ${{ secrets.KTP_CHECKOUT_TOKEN }}
