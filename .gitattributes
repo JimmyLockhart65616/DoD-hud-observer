@@ -1,0 +1,19 @@
+# Force LF line endings on text files that get exec'd or parsed by Linux tools
+# inside containers, regardless of the host platform's core.autocrlf setting.
+#
+# Background: this repo has core.autocrlf=true (set on at least one developer's
+# machine), which silently rewrote LF→CRLF on Windows checkouts. Once a CRLF
+# data-server/start.sh was COPY'd into the data container, /bin/bash refused
+# to exec it because the shebang line ended with `\r`. The data container
+# entered a Restart loop and HudObserver POSTs to data:8088 timed out.
+#
+# These rules pin per-file-type EOLs so the issue can't recur regardless of
+# host or autocrlf setting.
+
+*.sh                       text eol=lf
+data-server/Dockerfile     text eol=lf
+data-server/supervisord.conf text eol=lf
+*.yml                      text eol=lf
+*.yaml                     text eol=lf
+Dockerfile                 text eol=lf
+Makefile                   text eol=lf

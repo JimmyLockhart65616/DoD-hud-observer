@@ -432,7 +432,13 @@ Install the pre-push hooks once per machine (they run a full Docker build before
 ```bash
 cd ../KTPInfrastructure && bash scripts/install-hooks.sh
 cd ../KTPAMXX           && bash scripts/install-hooks.sh
+cd ../DoD-hud-observer  && bash scripts/install-hooks.sh
 ```
+
+Our hook (`scripts/pre-push.sh`) runs three stages: amxxcurl async-lifetime
+lint (awk), `amxxpc` compile of `KTPHudObserver.sma`, then `npm run test`.
+Bypass with `git push --no-verify` or `KTP_SKIP_PREPUSH=1`. Requires
+KTPInfrastructure as a sibling directory (same as the KTPAMXX hook).
 
 ---
 

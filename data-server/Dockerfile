@@ -32,7 +32,18 @@ RUN cd web && npm ci --legacy-peer-deps
 
 # Web source + build
 COPY web/ ./web/
-RUN cd web && npm run build
+# CRA picks up web/.env.local during build, which on this repo is intentionally
+# port-shifted to 3011/4010 for the host-side `npm run web` dev workflow. That
+# same .env.local would silently override .env.production inside the container
+# and bake the wrong URLs into the bundle. Pass the docker-stack ports inline
+# so the resulting bundle calls the host:3001 / host:4000 the data container
+# actually exposes. Production overrides come from build-arg / CI env.
+ARG REACT_APP_API_URL=http://localhost:3001
+ARG REACT_APP_SOCKET_URL=http://localhost:4000
+RUN cd web && rm -f .env.local && \
+    REACT_APP_API_URL=$REACT_APP_API_URL \
+    REACT_APP_SOCKET_URL=$REACT_APP_SOCKET_URL \
+    npm run build
 
 # Install 'serve' for static file serving
 RUN npm install -g serve
