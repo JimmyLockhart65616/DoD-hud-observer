@@ -17,6 +17,9 @@
 #   HUD_HLTV_SYNC_HEARTBEAT_SECONDS  → hltv_sync.heartbeat_seconds (0 disables)
 #   HUD_HLTV_SYNC_FALLBACK_SECONDS   → hltv_sync.fallback_delay_seconds
 #   HUD_HLTV_SYNC_RCON_TIMEOUT_MS    → hltv_sync.rcon_timeout_ms
+#   HUD_HLTV_API_URL                 → hltv_sync.api_url (empty disables /state)
+#   HUD_HLTV_API_AUTH_KEY            → hltv_sync.api_auth_key
+#   HUD_HLTV_API_TIMEOUT_MS          → hltv_sync.api_timeout_ms
 
 ingest:
   port: 8088
@@ -52,4 +55,11 @@ hltv_sync:
   heartbeat_seconds: 60
   fallback_delay_seconds: 60
   rcon_timeout_ms: 5000
+  # hltv-api 2.2 integration. When api_url is non-empty, each successful RCON
+  # sample also fetches GET /hltv/<port>/state for diagnostic correlation with
+  # the broadcast offset bug. Pure observation — does not affect clock math.
+  # Leave api_url empty (default) on dev machines without hltv-api running.
+  api_url: ""
+  api_auth_key: ""
+  api_timeout_ms: 3000
   servers: {}

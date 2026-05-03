@@ -619,6 +619,9 @@ describe('POST /ingest — HLTV sync defers socket emit but records immediately'
             heartbeat_seconds: 0,
             fallback_delay_seconds: 60,
             rcon_timeout_ms: 5000,
+            api_url: '',
+            api_auth_key: '',
+            api_timeout_ms: 3000,
             servers: { [HOST]: { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' } },
         });
         // Stub the RCON sample so no UDP traffic happens during tests

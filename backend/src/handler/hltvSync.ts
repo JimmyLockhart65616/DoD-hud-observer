@@ -1,4 +1,5 @@
 import dgram from 'dgram';
+import http from 'http';
 import { EventEmitter } from 'events';
 
 // ─── HLTV broadcast clock state ────────────────────────────────────────────
@@ -28,6 +29,20 @@ export interface HltvServerConfig {
     rcon_password: string;   // matches HLTV's `adminpassword` cvar
 }
 
+// Recording state from hltv-api 2.2's GET /hltv/<port>/state. Sourced by
+// scanning the last 5 minutes of `journalctl -u hltv@<port>` for Start/Already/
+// Completed/Length lines. Used here purely as observation — does NOT feed into
+// broadcast clock math. Captured at every RCON sample so we can correlate with
+// the open ~99s broadcast offset bug (see project_post_uaf_followups memory).
+export interface RecordingState {
+    recording: boolean;
+    basename: string | null;
+    process_running: boolean;
+    last_event: { type: string; age_sec: number } | null;
+    already_recording_warning: boolean;
+    error?: string;
+}
+
 export interface HltvClock {
     server: string;            // game-server hostname (matches X-Server-Hostname)
     cfg: HltvServerConfig;
@@ -39,6 +54,8 @@ export interface HltvClock {
     online: boolean;           // false on RCON failure or HLTV-not-connected
     lastError: string | null;
     calibrationOffsetMs: number; // operator-set fine-tune; added to broadcastNow
+    recordingState: RecordingState | null; // hltv-api /state observation, null if api_url unset or fetch failed
+    recordingStateError: string | null;
 }
 
 /**
@@ -113,6 +130,52 @@ async function rconStatus(cfg: HltvServerConfig, timeoutMs: number): Promise<Rco
     }
 }
 
+// ─── hltv-api /state client ─────────────────────────────────────────────────
+//
+// hltv-api 2.2 ships a GET /hltv/<port>/state endpoint that returns the
+// recording state derived from journalctl. We poll it after each RCON sample
+// to capture a parallel signal for diagnosing the broadcast offset bug. Pure
+// observation — never affects broadcast clock math; failures are swallowed
+// and surface as `recordingStateError` on the clock.
+async function fetchRecordingState(
+    apiUrl: string,
+    apiAuthKey: string,
+    port: number,
+    timeoutMs: number,
+): Promise<RecordingState> {
+    const url = new URL(`/hltv/${port}/state`, apiUrl);
+    return new Promise((resolve, reject) => {
+        const req = http.request(
+            {
+                hostname: url.hostname,
+                port: url.port || 80,
+                path: url.pathname,
+                method: 'GET',
+                headers: { 'X-Auth-Key': apiAuthKey },
+                timeout: timeoutMs,
+            },
+            (res) => {
+                const chunks: Buffer[] = [];
+                res.on('data', (c) => chunks.push(c));
+                res.on('end', () => {
+                    if (res.statusCode !== 200) {
+                        reject(new Error(`hltv-api /state returned ${res.statusCode}`));
+                        return;
+                    }
+                    try {
+                        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+                    } catch (e: any) {
+                        reject(new Error(`hltv-api /state parse error: ${e.message}`));
+                    }
+                });
+            },
+        );
+        req.on('timeout', () => { req.destroy(new Error(`hltv-api /state timeout after ${timeoutMs}ms`)); });
+        req.on('error', reject);
+        req.end();
+    });
+}
+
 function rconRoundTrip(sock: dgram.Socket, cfg: HltvServerConfig, packet: Buffer, timeoutMs: number): Promise<Buffer> {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
@@ -143,12 +206,28 @@ export interface HltvSyncConfig {
     fallback_delay_seconds: number;  // used when no successful sample exists yet
     rcon_timeout_ms: number;
     servers: Record<string, HltvServerConfig>;  // keyed on game-server hostname (matches X-Server-Hostname)
+    // hltv-api integration (KTPInfrastructure scripts/hltv-api.py, v2.2+).
+    // When api_url is non-empty, each successful RCON sample also fetches
+    // /hltv/<port>/state and attaches it to the clock for diagnostics. Empty
+    // disables the feature (e.g. local dev without hltv-api running).
+    api_url: string;
+    api_auth_key: string;
+    api_timeout_ms: number;
 }
 
 // Same threshold as HltvDelayBuffer's tick-reset detection. Kept in sync as a
 // local constant so this module stays self-contained — they describe the same
 // game-server clock event from two angles (queue tail vs. last-seen-tick).
 const TICK_RESET_THRESHOLD_S = 30;
+
+function formatRecordingStateLog(state: RecordingState | null, err: string | null): string {
+    if (err) return ` recording=err:${err}`;
+    if (!state) return '';
+    if (!state.process_running) return ' recording=process-down';
+    if (!state.recording) return ' recording=idle';
+    const evt = state.last_event ? `${state.last_event.type}@${state.last_event.age_sec}s` : 'no-events';
+    return ` recording=${state.basename ?? '?'} (${evt})`;
+}
 
 export class HltvSyncService extends EventEmitter {
     private clocks = new Map<string, HltvClock>();
@@ -161,6 +240,21 @@ export class HltvSyncService extends EventEmitter {
     private highestEventTick = new Map<string, number>();
 
     constructor(private cfg: HltvSyncConfig) { super(); }
+
+    /**
+     * Fetch hltv-api /state for the given port. Returns [state, error] —
+     * exactly one is non-null. When api_url is empty (feature disabled), both
+     * are null. Never throws; failures land in the error slot for diagnostics.
+     */
+    private async observeRecordingState(port: number): Promise<[RecordingState | null, string | null]> {
+        if (!this.cfg.api_url) return [null, null];
+        try {
+            const state = await fetchRecordingState(this.cfg.api_url, this.cfg.api_auth_key, port, this.cfg.api_timeout_ms);
+            return [state, null];
+        } catch (err: any) {
+            return [null, err.message];
+        }
+    }
 
     isActive(server: string): boolean {
         return this.cfg.enabled && server in this.cfg.servers;
@@ -249,6 +343,7 @@ export class HltvSyncService extends EventEmitter {
             const sampledAt = Date.now();
             try {
                 const status = await rconStatus(cfg, this.cfg.rcon_timeout_ms);
+                const [recordingState, recordingStateError] = await this.observeRecordingState(cfg.hltv_port);
                 const prev = this.clocks.get(server);
                 const clock: HltvClock = {
                     server,
@@ -261,9 +356,14 @@ export class HltvSyncService extends EventEmitter {
                     online: true,
                     lastError: null,
                     calibrationOffsetMs: prev?.calibrationOffsetMs ?? 0,
+                    recordingState,
+                    recordingStateError,
                 };
                 this.clocks.set(server, clock);
-                console.log(`[hltv-sync] ${server} sample (${reason}): delay=${clock.delaySeconds}s gameTime=${clock.activeTime}s map=${clock.map}`);
+                console.log(`[hltv-sync] ${server} sample (${reason}): delay=${clock.delaySeconds}s gameTime=${clock.activeTime}s map=${clock.map}${formatRecordingStateLog(recordingState, recordingStateError)}`);
+                if (recordingState?.already_recording_warning) {
+                    console.warn(`[hltv-sync] ${server} hltv-api reports already_recording_warning — half-2 record command likely refused (basename=${recordingState.basename ?? 'unknown'})`);
+                }
                 this.emit('clock', clock);
                 return clock;
             } catch (err: any) {
@@ -280,6 +380,8 @@ export class HltvSyncService extends EventEmitter {
                         online: false,
                         lastError: err.message,
                         calibrationOffsetMs: 0,
+                        recordingState: null,
+                        recordingStateError: null,
                     };
                 this.clocks.set(server, clock);
                 console.warn(`[hltv-sync] ${server} sample failed (${reason}): ${err.message}`);
@@ -327,6 +429,8 @@ export class HltvSyncService extends EventEmitter {
                 online: c.online,
                 lastError: c.lastError,
                 calibrationOffsetMs: c.calibrationOffsetMs,
+                recordingState: c.recordingState,
+                recordingStateError: c.recordingStateError,
             } : {
                 server,
                 hltvHost: `${this.cfg.servers[server].hltv_addr}:${this.cfg.servers[server].hltv_port}`,

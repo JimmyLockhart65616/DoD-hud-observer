@@ -41,6 +41,13 @@ hltv_sync:
   heartbeat_seconds: 60
   fallback_delay_seconds: 60
   rcon_timeout_ms: 5000
+  # hltv-api 2.2 integration (KTPInfrastructure scripts/hltv-api.py).
+  # On the data server hltv-api binds 127.0.0.1:8087. Pull the matching auth
+  # key from /home/hltvserver/hltv-api.py (AUTH_KEY constant) — it's hardcoded
+  # there, do NOT commit the real value here.
+  api_url: "http://127.0.0.1:8087"
+  api_auth_key: REPLACE_WITH_HLTV_API_AUTH_KEY
+  api_timeout_ms: 3000
   servers:
     "KTP - Atlanta 1":  { hltv_addr: 127.0.0.1, hltv_port: 27020, rcon_password: REPLACE_WITH_HLTV_RCON }
     "KTP - Dallas 1":   { hltv_addr: 127.0.0.1, hltv_port: 27025, rcon_password: REPLACE_WITH_HLTV_RCON }

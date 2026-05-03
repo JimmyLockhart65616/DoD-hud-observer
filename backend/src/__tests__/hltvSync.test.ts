@@ -26,6 +26,8 @@ function fakeClock(over: Partial<HltvClock> = {}): HltvClock {
         online: true,
         lastError: null,
         calibrationOffsetMs: 0,
+        recordingState: null,
+        recordingStateError: null,
         ...over,
     };
 }
@@ -54,6 +56,9 @@ describe('HltvSyncService — trigger logic', () => {
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
         rcon_timeout_ms: 5000,
+        api_url: '',
+        api_auth_key: '',
+        api_timeout_ms: 3000,
         servers: { 'atl1': { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' } },
     };
 
@@ -145,6 +150,9 @@ describe('HltvSyncService — getStatus', () => {
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
         rcon_timeout_ms: 5000,
+        api_url: '',
+        api_auth_key: '',
+        api_timeout_ms: 3000,
         servers: { 'atl1': { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' } },
     };
 
@@ -178,6 +186,9 @@ describe('HltvSyncService.broadcastNow — offline-clock guard', () => {
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
         rcon_timeout_ms: 5000,
+        api_url: '',
+        api_auth_key: '',
+        api_timeout_ms: 3000,
         servers: { 'atl1': { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' } },
     };
 
@@ -216,6 +227,9 @@ describe('HltvSyncService — calibration', () => {
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
         rcon_timeout_ms: 5000,
+        api_url: '',
+        api_auth_key: '',
+        api_timeout_ms: 3000,
         servers: { 'atl1': { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' } },
     };
 
