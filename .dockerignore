@@ -23,3 +23,10 @@ ktp-server
 
 *.amxx
 *.amx
+# CRA env-file priority: .env.local silently overrides .env.production at build
+# time. Port-shifted dev URLs (3011/4010) belong to the host-side `npm run web`
+# workflow and would break the in-container build if shipped. Defense in depth
+# — the Dockerfile also `rm -f .env.local` before npm run build.
+web/.env.local
+web/.env.local.bak
+web/.env.mocker
