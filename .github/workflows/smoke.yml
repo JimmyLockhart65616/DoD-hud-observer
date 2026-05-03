@@ -25,7 +25,11 @@ on:
 
 jobs:
   smoke:
-    uses: afraznein/KTPInfrastructure/.github/workflows/smoke-callable.yml@main
+    # Pinned at JimmyLockhart65616:ci/smoke-callable-cross-owner until
+    # afraznein/KTPInfrastructure PR #8 lands. Once merged, repoint to
+    # `afraznein/.../smoke-callable.yml@main` and drop the `ktp_owner`
+    # input (the new default `afraznein` makes it redundant).
+    uses: JimmyLockhart65616/KTPInfrastructure/.github/workflows/smoke-callable.yml@ci/smoke-callable-cross-owner
     with:
       under_test_label: KTPHudObserver
       under_test_kind: amx_plugin
@@ -33,5 +37,6 @@ jobs:
       artifact_container_path: /opt/hlds/dod/addons/ktpamx/plugins/KTPHudObserver.amxx
       assert_plugin: KTPHudObserver
       caller_repo_path: KTPHudObserver
+      ktp_owner: afraznein
     secrets:
       ktp_checkout_token: ${{ secrets.KTP_CHECKOUT_TOKEN }}
