@@ -40,8 +40,13 @@ auth:
 
 # HUD-to-HLTV broadcast sync. When enabled, ingested events are held in a
 # per-server reorder buffer and released to Socket.IO at the wall-clock instant
-# HLTV's broadcast clock catches up to each event's tick. Off by default in
-# local — the docker test stack uses delay 0 so there's nothing to align.
+# HLTV's broadcast clock catches up to each event's tick.
+#
+# Off by default in this file: `npm run backend` (laptop dev) has no HLTV proxy
+# to talk to. The local docker stack overrides via HUD_CONFIG_PATH to read
+# KTPInfrastructure/config/local/config.yaml (which enables hltv_sync against
+# the in-container HLTV proxies). Production overrides via HUD_CONFIG_PATH to
+# /opt/hud-observer/config/online/config.yaml on the data server.
 hltv_sync:
   enabled: false
   heartbeat_seconds: 60
