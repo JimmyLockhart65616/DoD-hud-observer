@@ -182,6 +182,7 @@ export const useHudStore = create(set => ({
         kill_streaks: {},
         allies_players: [],
         axis_players: [],
+        flags: [],
         timeleft: null,
         timeleft_at: null,
         round_state: { round_end: false, round_freeze: false, round_start: false },
@@ -563,10 +564,24 @@ export const SocketStoreComponent = () => {
 
         gameEvents.on('flags_init', (raw) => {
             const e = JSON.parse(raw);
-            setFlags(e.flags.map(f => ({
-                ...f, capping_team: null, captor_ids: [], contested: false, progress: 0,
-                allies_count: 0, axis_count: 0,
-            })));
+            const { flags: prior } = getState();
+            setFlags(e.flags.map(f => {
+                // Preserve a non-neutral owner against a neutral snapshot. The
+                // engine resets every flag to TEAM_SPECTATOR during round-restart
+                // windows (e.g. last minute before half-time), and the 30s
+                // task_emit_flags tick would otherwise wipe the HUD bar to grey.
+                // flag_captured remains the source of truth for owner; ktp_match_start
+                // clears flags so a fresh half/match still adopts neutrals correctly.
+                const before = prior.find(p => p.flag_id === f.flag_id);
+                const owner = (before && before.owner !== 'neutral' && f.owner === 'neutral')
+                    ? before.owner
+                    : f.owner;
+                return {
+                    ...f, owner,
+                    capping_team: null, captor_ids: [], contested: false, progress: 0,
+                    allies_count: 0, axis_count: 0,
+                };
+            }));
         });
 
         gameEvents.on('flag_cap_started', (raw) => {
