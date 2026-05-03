@@ -36,7 +36,10 @@
 #define PRONE_POLL_INTERVAL 0.25
 #define ZONE_POLL_INTERVAL  0.5
 #define BUFFER_SIZE     2048
-#define CURL_TIMEOUT_MS 1000
+// 3s — accommodates production /ingest p95 latency observed during scrim
+// (saturation under 5-canary aggregate load; per-event POST p95 ~1.2-1.8s).
+// 1s timed out enough to starve repeating tasks (zone polling / time_sync).
+#define CURL_TIMEOUT_MS 3000
 
 // Task IDs — used to clear stale tasks on map change before re-scheduling.
 // AMXX task persistence across changelevel is inconsistent in practice;
