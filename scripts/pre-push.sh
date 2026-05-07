@@ -38,39 +38,11 @@ INFRA_DIR="$REPO_ROOT/../KTPInfrastructure"
 # ============================================================
 echo "[pre-push] stage 1/3: amxxcurl lint"
 
-files=$(git ls-files | grep -E '\.(sma|inc)$' || true)
-
-if [[ -n "$files" ]]; then
-  fail=0
-  for f in $files; do
-    [ -f "$f" ] || continue
-    awk -v file="$f" '
-        /^[[:space:]]*(public|stock)[[:space:]]+[A-Za-z_]/ {
-            fn=$0
-        }
-        /curl_easy_cleanup\(/ {
-            if (fn !~ /(complete|callback|plugin_end|cleanup_handle)/) {
-                printf("ERROR: %s:%d curl_easy_cleanup outside *_complete/*_callback/plugin_end:\n  %s\n  -> enclosing fn: %s\n  -> rationale: amxxcurl perform is async; sync cleanup races libcurl callback dispatch.\n",
-                       file, NR, $0, fn) > "/dev/stderr"
-                exit 1
-            }
-        }
-        /curl_slist_free_all\(\s*g_[A-Za-z_0-9]+/ {
-            if (fn !~ /plugin_end/) {
-                printf("ERROR: %s:%d curl_slist_free_all on a g_* global outside plugin_end:\n  %s\n  -> enclosing fn: %s\n  -> rationale: CURLOPT_HTTPHEADER stores slist by reference; freeing while POSTs are in flight = UAF (see KTPAmxxCurl commit 7e1ce00).\n",
-                       file, NR, $0, fn) > "/dev/stderr"
-                exit 1
-            }
-        }
-    ' "$f" || fail=1
-  done
-
-  if [[ $fail -ne 0 ]]; then
-    echo "" >&2
-    echo "[pre-push] LINT FAILED — see errors above." >&2
-    echo "[pre-push] Bypass with --no-verify (and document why in the commit message)." >&2
-    exit 1
-  fi
+if ! "$REPO_ROOT/scripts/lint-amxxcurl-async.sh"; then
+  echo "" >&2
+  echo "[pre-push] LINT FAILED — see errors above." >&2
+  echo "[pre-push] Bypass with --no-verify (and document why in the commit message)." >&2
+  exit 1
 fi
 
 echo "[pre-push] stage 1/3: lint OK"
