@@ -33,12 +33,26 @@ fi
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 INFRA_DIR="$REPO_ROOT/../KTPInfrastructure"
 
+if [[ ! -d "$INFRA_DIR" ]]; then
+  echo "[pre-push] KTPInfrastructure not found at $INFRA_DIR" >&2
+  echo "[pre-push] Clone it as a sibling dir, or bypass with --no-verify" >&2
+  exit 1
+fi
+
 # ============================================================
-# Stage 1/3: amxxcurl async-lifetime lint
+# Stage 1/3: amxxcurl async-lifetime lint (canonical, in KTPInfra)
 # ============================================================
 echo "[pre-push] stage 1/3: amxxcurl lint"
 
-if ! "$REPO_ROOT/scripts/lint-amxxcurl-async.sh"; then
+LINT="$INFRA_DIR/scripts/hooks/lint-amxxcurl-async.sh"
+if [[ ! -x "$LINT" ]]; then
+  echo "[pre-push] canonical lint not found at $LINT" >&2
+  echo "[pre-push] pull KTPInfrastructure (sibling dir) to latest, or bypass with --no-verify" >&2
+  exit 1
+fi
+
+cd "$REPO_ROOT"
+if ! "$LINT"; then
   echo "" >&2
   echo "[pre-push] LINT FAILED — see errors above." >&2
   echo "[pre-push] Bypass with --no-verify (and document why in the commit message)." >&2
@@ -50,11 +64,6 @@ echo "[pre-push] stage 1/3: lint OK"
 # ============================================================
 # Stage 2/3: Docker amxxpc compile (mirrors CLAUDE.md compile snippet)
 # ============================================================
-if [[ ! -d "$INFRA_DIR" ]]; then
-  echo "[pre-push] KTPInfrastructure not found at $INFRA_DIR" >&2
-  echo "[pre-push] Clone it as a sibling dir, or bypass with --no-verify" >&2
-  exit 1
-fi
 
 VERSION="prepush-$(date +%Y%m%d-%H%M%S)"
 echo "[pre-push] stage 2/3: amxxpc compile (VERSION=$VERSION)"
