@@ -46,3 +46,8 @@ config/online/config.yaml
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .claude/hooks/
+
+# Weapon-sprite SOURCE BMPs: 18 MB extracted, but compress to a 38 KB zip. Commit
+# assets/weapons-src.zip (provenance); the extracted working dir is local-only.
+# Regenerate the committed PNGs with `npm run assets:weapons`.
+/assets/weapons-src/

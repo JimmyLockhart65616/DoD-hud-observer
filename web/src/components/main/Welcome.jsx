@@ -15,6 +15,12 @@ class Welcome extends React.Component {
                             <li><a href="/help">Viewer Guide</a> — how to set up and use the HUD in OBS</li>
                         </ul>
                         <h5 style={{ marginTop: '32px' }}>
+                            What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-06-08</small>
+                        </h5>
+                        <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>
+                            <li>Weapon icons now show in the kill feed and on player cards</li>
+                        </ul>
+                        <h5 style={{ marginTop: '32px' }}>
                             What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-05-02</small>
                         </h5>
                         <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>

@@ -80,11 +80,11 @@ export default [
     { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:1004", "name": "storm",    "team": "allies", "class_id": 4, "weapon_primary": "spring",   "weapon_secondary": "colt" } },
     { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:1005", "name": "MaT*",     "team": "allies", "class_id": 2, "weapon_primary": "thompson", "weapon_secondary": "colt" } },
     { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:1006", "name": "BitchX",   "team": "allies", "class_id": 0, "weapon_primary": "garand",   "weapon_secondary": "colt" } },
-    { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:2001", "name": "mogers",   "team": "axis",   "class_id": 0, "weapon_primary": "k98",      "weapon_secondary": "luger" } },
+    { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:2001", "name": "mogers",   "team": "axis",   "class_id": 0, "weapon_primary": "kar",      "weapon_secondary": "luger" } },
     { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:2002", "name": "omenator", "team": "axis",   "class_id": 2, "weapon_primary": "mp40",     "weapon_secondary": "luger" } },
-    { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:2003", "name": "E t",      "team": "axis",   "class_id": 0, "weapon_primary": "k98",      "weapon_secondary": "luger" } },
+    { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:2003", "name": "E t",      "team": "axis",   "class_id": 0, "weapon_primary": "kar",      "weapon_secondary": "luger" } },
     { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:2004", "name": "bad",      "team": "axis",   "class_id": 3, "weapon_primary": "mp44",     "weapon_secondary": "luger" } },
-    { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:2005", "name": "Polak",    "team": "axis",   "class_id": 0, "weapon_primary": "k98",      "weapon_secondary": "luger" } },
+    { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:2005", "name": "Polak",    "team": "axis",   "class_id": 0, "weapon_primary": "kar",      "weapon_secondary": "luger" } },
     { "player_spawn": { "time": 1200, "user_id": "STEAM_0:0:2006", "name": "ian",      "team": "axis",   "class_id": 6, "weapon_primary": "mg42",     "weapon_secondary": "luger" } },
 
     { "caster_observed_player": { "time": 4500, "user_id": "STEAM_0:0:1001" } },
@@ -120,8 +120,8 @@ export default [
     { "flag_cap_progress": { "time": 8500, "flag_id": 1, "progress": 10, "capping_team": "axis" } },
 
     // Damage before kill
-    { "damage": { "time": 8800, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1003", "damage": 100, "weapon": "k98", "hitplace": 1, "victim_health": 0 } },
-    { "kill":   { "time": 9000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1003", "weapon": "k98",    "kill_type": "normal", "headshot": true,  "victim_prone": false, "killer_prone": false } },
+    { "damage": { "time": 8800, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1003", "damage": 100, "weapon": "kar", "hitplace": 1, "victim_health": 0 } },
+    { "kill":   { "time": 9000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1003", "weapon": "kar",    "kill_type": "normal", "headshot": true,  "victim_prone": false, "killer_prone": false } },
 
     { "flag_cap_progress": { "time": 9200, "flag_id": 1, "progress": 25, "capping_team": "axis" } },
 
@@ -207,11 +207,11 @@ export default [
     { "damage": { "time": 18900, "attacker_id": "STEAM_0:0:1006", "victim_id": "STEAM_0:0:2003", "damage": 100, "weapon": "garand", "hitplace": 1, "victim_health": 0 } },
     { "kill":   { "time": 19000, "killer_id": "STEAM_0:0:1006", "victim_id": "STEAM_0:0:2003", "weapon": "garand", "kill_type": "normal", "headshot": true,  "victim_prone": false, "killer_prone": false } },
     // mogers 2nd kill this round — streak
-    { "damage": { "time": 19900, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1005", "damage": 100, "weapon": "k98", "hitplace": 2, "victim_health": 0 } },
-    { "kill":   { "time": 20000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1005", "weapon": "k98",    "kill_type": "normal", "headshot": false, "victim_prone": false, "killer_prone": false } },
+    { "damage": { "time": 19900, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1005", "damage": 100, "weapon": "kar", "hitplace": 2, "victim_health": 0 } },
+    { "kill":   { "time": 20000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1005", "weapon": "kar",    "kill_type": "normal", "headshot": false, "victim_prone": false, "killer_prone": false } },
 
     // Teamkill
-    { "kill":     { "time": 21000, "killer_id": "STEAM_0:0:2005", "victim_id": "STEAM_0:0:2004", "weapon": "k98",  "kill_type": "teamkill", "headshot": false, "victim_prone": false, "killer_prone": false } },
+    { "kill":     { "time": 21000, "killer_id": "STEAM_0:0:2005", "victim_id": "STEAM_0:0:2004", "weapon": "kar",  "kill_type": "teamkill", "headshot": false, "victim_prone": false, "killer_prone": false } },
     { "user_say": { "time": 21500, "user_id": "STEAM_0:0:2004", "team_only": true, "message": "WTF POLAK" } },
 
     // Zone re-poll mid-round
@@ -242,19 +242,19 @@ export default [
     { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:1004", "name": "storm",    "team": "allies", "class_id": 4, "weapon_primary": "spring",   "weapon_secondary": "colt" } },
     { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:1005", "name": "MaT*",     "team": "allies", "class_id": 2, "weapon_primary": "thompson", "weapon_secondary": "colt" } },
     { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:1006", "name": "BitchX",   "team": "allies", "class_id": 0, "weapon_primary": "garand",   "weapon_secondary": "colt" } },
-    { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:2001", "name": "mogers",   "team": "axis",   "class_id": 0, "weapon_primary": "k98",      "weapon_secondary": "luger" } },
+    { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:2001", "name": "mogers",   "team": "axis",   "class_id": 0, "weapon_primary": "kar",      "weapon_secondary": "luger" } },
     { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:2002", "name": "omenator", "team": "axis",   "class_id": 2, "weapon_primary": "mp40",     "weapon_secondary": "luger" } },
-    { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:2003", "name": "E t",      "team": "axis",   "class_id": 0, "weapon_primary": "k98",      "weapon_secondary": "luger" } },
+    { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:2003", "name": "E t",      "team": "axis",   "class_id": 0, "weapon_primary": "kar",      "weapon_secondary": "luger" } },
     { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:2004", "name": "bad",      "team": "axis",   "class_id": 3, "weapon_primary": "mp44",     "weapon_secondary": "luger" } },
-    { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:2005", "name": "Polak",    "team": "axis",   "class_id": 0, "weapon_primary": "k98",      "weapon_secondary": "luger" } },
+    { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:2005", "name": "Polak",    "team": "axis",   "class_id": 0, "weapon_primary": "kar",      "weapon_secondary": "luger" } },
     { "player_spawn": { "time": 35500, "user_id": "STEAM_0:0:2006", "name": "ian",      "team": "axis",   "class_id": 6, "weapon_primary": "mg42",     "weapon_secondary": "luger" } },
 
     // Round 2 carryover — score continues from round 1's 2-0.
     { "team_score":  { "time": 38100, "allies_score": 2, "axis_score": 0 } },
 
     // Axis push hard — quick kills
-    { "damage": { "time": 41900, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "damage": 100, "weapon": "k98", "hitplace": 1, "victim_health": 0 } },
-    { "kill":   { "time": 42000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "weapon": "k98",  "kill_type": "normal", "headshot": true,  "victim_prone": false, "killer_prone": false } },
+    { "damage": { "time": 41900, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "damage": 100, "weapon": "kar", "hitplace": 1, "victim_health": 0 } },
+    { "kill":   { "time": 42000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "weapon": "kar",  "kill_type": "normal", "headshot": true,  "victim_prone": false, "killer_prone": false } },
     { "damage": { "time": 42800, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1006", "damage": 40, "weapon": "mp44", "hitplace": 4, "victim_health": 60 } },
     { "damage": { "time": 42900, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1006", "damage": 40, "weapon": "mp44", "hitplace": 2, "victim_health": 20 } },
     { "damage": { "time": 43000, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1006", "damage": 40, "weapon": "mp44", "hitplace": 3, "victim_health": 0 } },
@@ -331,19 +331,19 @@ export default [
     { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:2004", "name": "bad",      "team": "allies", "class_id": 2, "weapon_primary": "thompson", "weapon_secondary": "colt" } },
     { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:2005", "name": "Polak",    "team": "allies", "class_id": 0, "weapon_primary": "garand",   "weapon_secondary": "colt" } },
     { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:2006", "name": "ian",      "team": "allies", "class_id": 0, "weapon_primary": "garand",   "weapon_secondary": "colt" } },
-    { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:1001", "name": "Raphinha", "team": "axis",   "class_id": 0, "weapon_primary": "k98",      "weapon_secondary": "luger" } },
+    { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:1001", "name": "Raphinha", "team": "axis",   "class_id": 0, "weapon_primary": "kar",      "weapon_secondary": "luger" } },
     { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:1002", "name": "bud",      "team": "axis",   "class_id": 2, "weapon_primary": "mp40",     "weapon_secondary": "luger" } },
-    { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:1003", "name": "ORTIN",    "team": "axis",   "class_id": 0, "weapon_primary": "k98",      "weapon_secondary": "luger" } },
-    { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:1004", "name": "storm",    "team": "axis",   "class_id": 4, "weapon_primary": "k98s",     "weapon_secondary": "luger" } },
+    { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:1003", "name": "ORTIN",    "team": "axis",   "class_id": 0, "weapon_primary": "kar",      "weapon_secondary": "luger" } },
+    { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:1004", "name": "storm",    "team": "axis",   "class_id": 4, "weapon_primary": "scopedkar",     "weapon_secondary": "luger" } },
     { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:1005", "name": "MaT*",     "team": "axis",   "class_id": 2, "weapon_primary": "mp40",     "weapon_secondary": "luger" } },
-    { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:1006", "name": "BitchX",   "team": "axis",   "class_id": 0, "weapon_primary": "k98",      "weapon_secondary": "luger" } },
+    { "player_spawn": { "time": 63200, "user_id": "STEAM_0:0:1006", "name": "BitchX",   "team": "axis",   "class_id": 0, "weapon_primary": "kar",      "weapon_secondary": "luger" } },
 
     // Chat
     { "user_say": { "time": 67000, "user_id": "STEAM_0:0:2001", "team_only": false, "message": "our turn now" } },
 
     // Some half 2 action
-    { "damage": { "time": 69900, "attacker_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2003", "damage": 100, "weapon": "k98", "hitplace": 2, "victim_health": 0 } },
-    { "kill":   { "time": 70000, "killer_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2003", "weapon": "k98",    "kill_type": "normal", "headshot": false, "victim_prone": false, "killer_prone": false } },
+    { "damage": { "time": 69900, "attacker_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2003", "damage": 100, "weapon": "kar", "hitplace": 2, "victim_health": 0 } },
+    { "kill":   { "time": 70000, "killer_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2003", "weapon": "kar",    "kill_type": "normal", "headshot": false, "victim_prone": false, "killer_prone": false } },
 
     // Production: player_team_change to "spectator" (someone going to ref/spec mid-half).
     // Also shows team="spectator" is a real production value (CLAUDE.md schema says allies|axis only).

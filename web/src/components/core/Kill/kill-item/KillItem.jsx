@@ -1,9 +1,5 @@
 import React from 'react';
-
-// Pre-build weapon image map at compile time
-const weaponImages = {};
-const weaponCtx = require.context('../../../screen/resources/images/weapons', false, /\.png$/);
-weaponCtx.keys().forEach(key => { weaponImages[key.replace('./', '').replace('.png', '')] = weaponCtx(key); });
+import { getWeaponIcon } from '../../../screen/resources/weaponIcons';
 
 // Visibility/TTL is handled by the parent (Kill.jsx) — this component just
 // renders. The previous useState/setTimeout self-hide broke under browser
@@ -62,8 +58,10 @@ const KillItem = ({ killinfo, killer, victim }) => {
 // Weapon icon — falls back to text if image not in pre-built map
 const WeaponIcon = ({ weapon }) => {
     if (!weapon) return null;
-    if (weaponImages[weapon]) return <img src={weaponImages[weapon]} alt={weapon} style={{ margin: '0 4px' }} />;
-    return <span className="weapon-text">{weapon}</span>;
+    const src = getWeaponIcon(weapon);
+    return src
+        ? <img src={src} alt={weapon} style={{ margin: '0 4px' }} />
+        : <span className="weapon-text">{weapon}</span>;
 };
 
 export default KillItem;

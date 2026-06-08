@@ -1,8 +1,5 @@
 import React, { useState, useEffect } from 'react';
-
-const weaponImages = {};
-const weaponCtx = require.context('../../screen/resources/images/weapons', false, /\.png$/);
-weaponCtx.keys().forEach(key => { weaponImages[key.replace('./', '').replace('.png', '')] = weaponCtx(key); });
+import { getWeaponIcon } from '../../screen/resources/weaponIcons';
 
 const classImages = {};
 const classCtx = require.context('../../screen/resources/images/classes', false, /\.png$/);
@@ -25,8 +22,10 @@ function useProneTimer(prone_since) {
 
 const WeaponIcon = ({ weapon }) => {
     if (!weapon) return null;
-    if (weaponImages[weapon]) return <img src={weaponImages[weapon]} alt={weapon} />;
-    return <span className="observed-weapon-text">{weapon}</span>;
+    const src = getWeaponIcon(weapon);
+    return src
+        ? <img src={src} alt={weapon} />
+        : <span className="observed-weapon-text">{weapon}</span>;
 };
 
 const ClassIcon = ({ team, classId }) => {

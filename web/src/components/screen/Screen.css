@@ -447,6 +447,8 @@
 
 .box-right img {
   height: 16px;
+  width: auto;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.7));
 }
 
 /* ── Kill feed icons ──────────────────────────────────────────── */
@@ -649,12 +651,16 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 1;
-  min-width: 0;
+  width: 100%;
+  min-height: 14px;
+  margin-top: 1px;
 }
 
 .card-weapon img {
-  height: 12px;
+  height: 13px;
+  width: auto;
+  max-width: 94%;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.6));
 }
 
 .card-weapon-text {

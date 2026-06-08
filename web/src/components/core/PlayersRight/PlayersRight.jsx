@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getWeaponIcon } from '../../screen/resources/weaponIcons';
 
 function useProneTimer(prone_since) {
     const [elapsed, setElapsed] = useState(0);
@@ -12,18 +13,16 @@ function useProneTimer(prone_since) {
     return elapsed;
 }
 
-const weaponImages = {};
-const weaponCtx = require.context('../../screen/resources/images/weapons', false, /\.png$/);
-weaponCtx.keys().forEach(key => { weaponImages[key.replace('./', '').replace('.png', '')] = weaponCtx(key); });
-
 const classImages = {};
 const classCtx = require.context('../../screen/resources/images/classes', false, /^\.\/axis_.*\.png$/);
 classCtx.keys().forEach(key => { classImages[key.replace('./', '').replace('.png', '')] = classCtx(key); });
 
 const WeaponIcon = ({ weapon }) => {
     if (!weapon) return null;
-    if (weaponImages[weapon]) return <img src={weaponImages[weapon]} alt={weapon} />;
-    return <span className="card-weapon-text">{weapon}</span>;
+    const src = getWeaponIcon(weapon);
+    return src
+        ? <img src={src} alt={weapon} />
+        : <span className="card-weapon-text">{weapon}</span>;
 };
 
 const ClassIcon = ({ classId }) => {
@@ -81,9 +80,9 @@ const PlayerCard = React.memo(({ player }) => {
                     <span className="card-kills">{player.kills}</span>
                     <span className="card-kd-sep">/</span>
                     <span className="card-deaths">{player.deaths}</span>
-                    <span className="card-weapon">
-                        <WeaponIcon weapon={player.weapon_primary} />
-                    </span>
+                </div>
+                <div className="card-weapon">
+                    <WeaponIcon weapon={player.weapon_primary} />
                 </div>
             </div>
         </div>
