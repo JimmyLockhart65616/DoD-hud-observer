@@ -214,6 +214,11 @@ export default [
     { "kill":     { "time": 21000, "killer_id": "STEAM_0:0:2005", "victim_id": "STEAM_0:0:2004", "weapon": "kar",  "kill_type": "teamkill", "headshot": false, "victim_prone": false, "killer_prone": false } },
     { "user_say": { "time": 21500, "user_id": "STEAM_0:0:2004", "team_only": true, "message": "WTF POLAK" } },
 
+    // Self-frag — BitchX cooks a grenade too long and blows himself up. DODX
+    // attributes the nade (weapon "grenade", killer == victim), so the kill feed
+    // shows skull + grenade icon, not a bare generic suicide.
+    { "kill": { "time": 23000, "killer_id": "STEAM_0:0:1006", "victim_id": "STEAM_0:0:1006", "weapon": "grenade", "kill_type": "suicide", "headshot": false, "victim_prone": false, "killer_prone": false } },
+
     // Zone re-poll mid-round
     { "flag_zone_players": { "time": 22000, "zones": [
         { "flag_id": 0, "allies_count": 1, "axis_count": 0 },

@@ -18,6 +18,11 @@ const KillItem = ({ killinfo, killer, victim }) => {
                         src={require(`../../../screen/resources/images/skull.png`)}
                         alt="suicide"
                     />
+                    {/* Keep the weapon icon on a self-frag when it resolves to a
+                        sprite (e.g. a grenade self-kill — DODX attributes the nade).
+                        Falls / console / "none" deaths have no sprite, so this
+                        renders nothing extra: plain skull + name, as before. */}
+                    <SuicideWeaponIcon weapon={killinfo.weapon} />
                     <span className={`${victim.team}-style`}>{victim.name}</span>
                 </>
             ) : (
@@ -62,6 +67,17 @@ const WeaponIcon = ({ weapon }) => {
     return src
         ? <img src={src} alt={weapon} style={{ margin: '0 4px' }} />
         : <span className="weapon-text">{weapon}</span>;
+};
+
+// Suicide weapon icon — render ONLY when the weapon resolves to a real sprite
+// (grenade/grenade2). Unlike the normal kill row, this never text-falls-back:
+// fall/drown/console deaths report "none" (or a spriteless weapon), and a stray
+// "none" label next to the skull reads as noise. Sprite-or-nothing keeps the
+// self-frag clean while restoring the nade icon casters expect.
+const SuicideWeaponIcon = ({ weapon }) => {
+    const src = weapon ? getWeaponIcon(weapon) : null;
+    if (!src) return null;
+    return <img src={src} alt={weapon} style={{ margin: '0 4px' }} />;
 };
 
 export default KillItem;
