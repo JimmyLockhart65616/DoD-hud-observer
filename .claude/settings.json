@@ -2,7 +2,35 @@
   "permissions": {
     "allow": [
       "Bash(gh run watch *)",
-      "Bash(gh variable list *)"
+      "Bash(gh variable list *)",
+      "Bash(git -C * log *)",
+      "Bash(git -C * status *)",
+      "Bash(git -C * show *)",
+      "Bash(git -C * fetch *)",
+      "Bash(git -C * remote get-url *)",
+      "Bash(git -C * remote -v)",
+      "Bash(git -C * symbolic-ref *)",
+      "Bash(git -C * rev-parse *)",
+      "Bash(git -C * rev-list *)",
+      "Bash(git -C * merge-base *)",
+      "Bash(git -C * branch *)",
+      "Bash(cd /d/Git/* && git status*)",
+      "Bash(cd /d/Git/* && git log*)",
+      "Bash(cd /d/Git/* && git fetch*)",
+      "Bash(cd /d/Git/* && git branch*)",
+      "Bash(cd /d/Git/* && git remote*)",
+      "Bash(cd d:/Git/* && git status*)",
+      "Bash(cd d:/Git/* && git log*)",
+      "Bash(cd d:/Git/* && git fetch*)",
+      "Bash(cd d:/Git/* && git branch*)",
+      "Bash(cd d:/Git/* && git remote*)",
+      "Bash(gh api repos/afraznein/* *)",
+      "Bash(gh pr list *)",
+      "Bash(gh pr view *)",
+      "Bash(gh issue view *)",
+      "Bash(gh repo view *)",
+      "Bash(gh run list *)",
+      "Bash(gh search prs *)"
     ]
   }
 }
