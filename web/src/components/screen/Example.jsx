@@ -2,7 +2,6 @@ import React from 'react';
 
 import { SocketStoreComponent, useHudStore } from '../core/Socket/Socket';
 import Replay from '../core/Replay/Replay';
-import Crosshair from '../core/Crosshair/Crosshair';
 import Kill from '../core/Kill/Kill';
 import Score from '../core/Score/Score';
 import PlayersLeft from '../core/PlayersLeft/PlayersLeft';
@@ -29,6 +28,9 @@ function Example() {
 
     const alliesPlayers = useHudStore(s => s.allies_players);
     const axisPlayers   = useHudStore(s => s.axis_players);
+
+    const alliesAlive = alliesPlayers.filter(p => !p.dead).length;
+    const axisAlive   = axisPlayers.filter(p => !p.dead).length;
     const kills         = useHudStore(s => s.kills);
     const alliesScore   = useHudStore(s => s.allies_score);
     const axisScore     = useHudStore(s => s.axis_score);
@@ -45,8 +47,6 @@ function Example() {
 
             {isReplay && matchId && <Replay matchId={matchId} />}
 
-            <Crosshair />
-
             <div className="flags-bar">
                 <Flags flags={flags} />
             </div>
@@ -60,7 +60,10 @@ function Example() {
             </div>
 
             <div className="top-bar">
-                <span className="team-name team-name-allies">{team1Name}</span>
+                <span className="team-name team-name-allies">
+                    {team1Name}
+                    <span className="team-alive team-alive-allies" title="Players alive">{alliesAlive}</span>
+                </span>
                 <Score
                     roundState={roundState}
                     alliesScore={alliesScore}
@@ -70,7 +73,10 @@ function Example() {
                     timeleft={timeleft}
                     timeleftAt={timeleftAt}
                 />
-                <span className="team-name team-name-axis">{team2Name}</span>
+                <span className="team-name team-name-axis">
+                    <span className="team-alive team-alive-axis" title="Players alive">{axisAlive}</span>
+                    {team2Name}
+                </span>
             </div>
 
             <div className="hud-middle" />

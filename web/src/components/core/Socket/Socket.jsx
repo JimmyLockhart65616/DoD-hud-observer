@@ -50,6 +50,7 @@ const playerDirectory = {};
 // background-tab throttling (OBS overlay running while game is foregrounded).
 let flagEventSeq = 0;
 let killSeq = 0;
+let dmgSeq = 0;
 
 // ─── Zustand Store ────────────────────────────────────────────────────────────
 
@@ -163,11 +164,13 @@ export const useHudStore = create(set => ({
             ...p, health: 100, dead: false, prone_state: 'standing', prone_since: null,
             kills: 0, deaths: 0, score: 0, obj_score: 0,
             weapon_primary: null, weapon_secondary: null, class_id: null,
+            weapon_active: null, nades: null, last_damage: null, last_damage_at: null,
         })),
         axis_players: state.axis_players.map(p => ({
             ...p, health: 100, dead: false, prone_state: 'standing', prone_since: null,
             kills: 0, deaths: 0, score: 0, obj_score: 0,
             weapon_primary: null, weapon_secondary: null, class_id: null,
+            weapon_active: null, nades: null, last_damage: null, last_damage_at: null,
         })),
     })),
 
@@ -200,6 +203,11 @@ function makeDefaultPlayer(user_id, name, team) {
         class_id:         null,
         weapon_primary:   null,
         weapon_secondary: null,
+        weapon_active:    null,   // live held weapon (Phase 1: weapon_active event)
+        nades:            null,   // live grenade count  (Phase 2: player_state snapshot)
+        last_damage:      null,   // most recent hit amount (the -N damage popup)
+        last_damage_at:   null,   // browser ts of that hit (render-time TTL)
+        last_damage_id:   0,      // stable key so the popup re-animates per hit
         health:           100,
         dead:             false,
 
@@ -319,6 +327,10 @@ export const SocketStoreComponent = () => {
                 class_id:         e.class_id,
                 weapon_primary:   e.weapon_primary,
                 weapon_secondary: e.weapon_secondary,
+                weapon_active:    null,  // re-populated by first weapon_active switch
+                nades:            null,  // re-populated by player_state snapshot
+                last_damage:      null,
+                last_damage_at:   null,
                 health:           e.health ?? 100,
                 dead:             false,
 
@@ -361,8 +373,9 @@ export const SocketStoreComponent = () => {
 
             addKill({ ...e, killer, victim });
 
-            // Mark victim dead, clear prone shame
-            const deadState = { health: 0, dead: true, prone_state: 'standing', prone_since: null };
+            // Mark victim dead, clear prone shame + live weapon/nades
+            const deadState = { health: 0, dead: true, prone_state: 'standing', prone_since: null,
+                weapon_active: null, nades: null, last_damage: null, last_damage_at: null };
             setAlliesPlayers(prev => updatePlayer(prev, e.victim_id, () => deadState));
             setAxisPlayers(prev => updatePlayer(prev, e.victim_id, () => deadState));
         });
@@ -372,7 +385,13 @@ export const SocketStoreComponent = () => {
 
         gameEvents.on('damage', (raw) => {
             const e = JSON.parse(raw);
-            const healthUpdate = () => ({ health: Math.max(0, e.victim_health) });
+            const id = ++dmgSeq;
+            const healthUpdate = () => ({
+                health: Math.max(0, e.victim_health),
+                last_damage: e.damage,
+                last_damage_at: Date.now(),
+                last_damage_id: id,
+            });
             setAlliesPlayers(prev => updatePlayer(prev, e.victim_id, healthUpdate));
             setAxisPlayers(prev => updatePlayer(prev, e.victim_id, healthUpdate));
         });
@@ -388,6 +407,42 @@ export const SocketStoreComponent = () => {
             });
             setAlliesPlayers(prev => updatePlayer(prev, e.user_id, proneUpdate));
             setAxisPlayers(prev => updatePlayer(prev, e.user_id, proneUpdate));
+        });
+
+
+        // ── Weapon active (live held weapon) ─────────────────────────────────
+
+        gameEvents.on('weapon_active', (raw) => {
+            const e = JSON.parse(raw);
+            const wpnUpdate = () => ({ weapon_active: e.weapon });
+            setAlliesPlayers(prev => updatePlayer(prev, e.user_id, wpnUpdate));
+            setAxisPlayers(prev => updatePlayer(prev, e.user_id, wpnUpdate));
+        });
+
+
+        // ── Live player-state snapshot (4 Hz batched) ────────────────────────
+        // Owns weapon_active / nades only. Health stays owned by the precise
+        // damage/kill events (a 250ms-stale snapshot must not override a fresh
+        // hit), and prone stays owned by prone_change (it carries the shame
+        // timestamp). Players absent from the array (dead/disconnected) are left
+        // untouched — the kill/disconnect handlers already cleared them.
+
+        gameEvents.on('player_state', (raw) => {
+            const e = JSON.parse(raw);
+            if (!Array.isArray(e.players)) return;
+            const byId = {};
+            e.players.forEach(p => { byId[p.user_id] = p; });
+            const apply = (prev) => prev.map(pl => {
+                const s = byId[pl.user_id];
+                if (!s) return pl;
+                return {
+                    ...pl,
+                    weapon_active: s.weapon ? s.weapon : null,
+                    nades: s.nades,
+                };
+            });
+            setAlliesPlayers(apply);
+            setAxisPlayers(apply);
         });
 
 

@@ -112,10 +112,15 @@ describe('mocker lifecycle — scripted match round-trips through ingest → dis
         // resolve on the microtask queue, not inside runAllTimers.
         const pending: Promise<void>[] = [];
         let scriptedCount = 0;
+        let socketOnlyCount = 0;
+        // Mirror ingest.ts: these high-frequency live events fan out to sockets
+        // but are never written to events.jsonl, so they don't count toward disk.
+        const SOCKET_ONLY = new Set(['player_state', 'weapon_active']);
         mocker.on('action', (info: [string | string[], Record<string, unknown>]) => {
             const eventName = Array.isArray(info[0]) ? info[0][0] : info[0];
             const payload = info[1];
             scriptedCount++;
+            if (SOCKET_ONLY.has(eventName)) socketOnlyCount++;
             pending.push(post(wrapEnvelope(MATCH_ID, MATCH_TYPE, HALF, eventName, payload)));
         });
 
@@ -150,9 +155,11 @@ describe('mocker lifecycle — scripted match round-trips through ingest → dis
         expect(meta.matchType).toBe(MATCH_TYPE);
         expect(meta.half).toBe(HALF);
         expect(meta.endedAt).not.toBeNull();
-        // Disk holds: ktp_match_start + every scripted emit + ktp_match_end.
-        // ingest.ts records ktp_match_start as both bookkeeping AND an event.
-        const expectedTotal = scriptedCount + 2;
+        // Disk holds: ktp_match_start + every scripted emit + ktp_match_end,
+        // MINUS socket-only events (player_state / weapon_active) which fan out to
+        // sockets but are never persisted. ingest.ts records ktp_match_start as
+        // both bookkeeping AND an event.
+        const expectedTotal = scriptedCount + 2 - socketOnlyCount;
         expect(meta.eventCount).toBe(expectedTotal);
 
         const lines = fs
@@ -161,6 +168,13 @@ describe('mocker lifecycle — scripted match round-trips through ingest → dis
             .split('\n')
             .filter(l => l);
         expect(lines).toHaveLength(expectedTotal);
+
+        // Socket-only gating: the mocker emits player_state + weapon_active, but
+        // ingest must keep them off disk (live overlay state, zero replay value).
+        expect(socketOnlyCount).toBeGreaterThan(0); // sanity: the mocker does emit them
+        const persistedEvents = lines.map(l => JSON.parse(l).event);
+        expect(persistedEvents).not.toContain('player_state');
+        expect(persistedEvents).not.toContain('weapon_active');
 
         // First line is the opening ktp_match_start.
         expect(JSON.parse(lines[0]).event).toBe('ktp_match_start');

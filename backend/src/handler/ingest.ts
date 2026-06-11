@@ -16,6 +16,14 @@ import { HltvSyncService } from './hltvSync';
 // lobbies where players can sit idle without emitting per-player events.
 const PLAYER_STALE_MS = 5 * 60 * 1000;
 
+// Socket-only events: live overlay state that must NOT be persisted to
+// events.jsonl. player_state is the 4 Hz per-player snapshot (every alive
+// player, every tick); weapon_active fires on every weapon switch. Both carry
+// transient state with near-zero replay value, and writing them would bloat the
+// match log and hammer MatchRecorder's synchronous appendFileSync hot path.
+// They still fan out to sockets + metrics — just skipped on disk.
+const SOCKET_ONLY_EVENTS = new Set(['player_state', 'weapon_active']);
+
 interface ServerState {
     players: Map<string, any>;    // user_id → latest player_connect/spawn/score state
     team_score: any | null;       // latest team_score event
@@ -355,7 +363,7 @@ export function createIngestRouter(
             }
         }
 
-        if (matchId) {
+        if (matchId && !SOCKET_ONLY_EVENTS.has(event.event)) {
             recorder.recordEvent(matchId, event, sourceServer);
         }
 

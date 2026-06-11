@@ -33,7 +33,7 @@
 #define MAX_FLAGS       32
 #define MAX_CAPTORS     12
 #define TIME_SYNC_DELAY 30.0
-#define PRONE_POLL_INTERVAL 0.25
+#define PLAYER_POLL_INTERVAL 0.25
 #define ZONE_POLL_INTERVAL  0.5
 #define BUFFER_SIZE     2048
 // 3s — accommodates production /ingest p95 latency observed during scrim
@@ -45,7 +45,7 @@
 // AMXX task persistence across changelevel is inconsistent in practice;
 // we reschedule in plugin_cfg and remove_task() defensively to avoid dupes.
 #define TASK_ID_INIT_CONFIG  9001
-#define TASK_ID_POLL_PRONE   9002
+#define TASK_ID_POLL_PLAYER_STATE   9002
 #define TASK_ID_POLL_ZONES   9003
 #define TASK_ID_TIME_SYNC    9004
 #define TASK_ID_EMIT_FLAGS   9005
@@ -182,7 +182,7 @@ public plugin_cfg() {
 
     // Clear any stragglers from the previous map, then re-arm.
     remove_task(TASK_ID_INIT_CONFIG);
-    remove_task(TASK_ID_POLL_PRONE);
+    remove_task(TASK_ID_POLL_PLAYER_STATE);
     remove_task(TASK_ID_POLL_ZONES);
     remove_task(TASK_ID_TIME_SYNC);
     remove_task(TASK_ID_EMIT_FLAGS);
@@ -190,7 +190,7 @@ public plugin_cfg() {
     // Defer CVAR + header init to ensure amxx.cfg has loaded
     set_task(1.0, "task_init_config", TASK_ID_INIT_CONFIG);
 
-    set_task(PRONE_POLL_INTERVAL, "task_poll_prone", TASK_ID_POLL_PRONE, _, _, "b");
+    set_task(PLAYER_POLL_INTERVAL, "task_poll_player_state", TASK_ID_POLL_PLAYER_STATE, _, _, "b");
     set_task(ZONE_POLL_INTERVAL,  "task_poll_zones", TASK_ID_POLL_ZONES, _, _, "b");
     set_task(TIME_SYNC_DELAY,     "task_time_sync",  TASK_ID_TIME_SYNC,  _, _, "b");
     set_task(30.0,                "task_emit_flags", TASK_ID_EMIT_FLAGS, _, _, "b");
@@ -775,11 +775,43 @@ public dod_client_prone(id, value) {
     }
 }
 
-// Polling fallback: catches deployed state transitions that dod_client_prone misses
-public task_poll_prone() {
+// DODX forward: weapon switch — emit the live held weapon for the HUD weapon icon.
+// NOTE: ignore wpnew/wpnold. DODX executes this forward as (id, current, old) — the
+// header's named (wpnew, wpnold) order is wrong — so read the authoritative held
+// weapon via dod_get_user_weapon(id) instead of trusting the args.
+public dod_client_weaponswitch(id, wpnew, wpnold) {
+    if (!is_user_connected(id) || is_user_hltv(id)) return;
+
+    new wpnid = dod_get_user_weapon(id);
+    if (wpnid <= 0) return;
+
+    new steamid[32], weapon[32];
+    get_steamid(id, steamid, charsmax(steamid));
+    xmod_get_wpnlogname(wpnid, weapon, charsmax(weapon));
+
+    new json[160];
+    formatex(json, charsmax(json),
+        "{^"event^":^"weapon_active^",^"user_id^":^"%s^",^"weapon^":^"%s^"}",
+        steamid, weapon);
+    post_event(json);
+}
+
+// Per-player live snapshot poll (4 Hz). Renamed from task_poll_prone — it still
+// does the on-change prone detection (the shame timer needs the server-stamped
+// prone_change), and now ALSO emits one batched player_state snapshot per tick
+// carrying live held weapon / grenades / health / prone for every alive
+// player. Task-driven, so it inherits the half-1 changelevel-wedge until the
+// KTPAdminAudit server_exec() fix is fleet-deployed; works in half-2 regardless.
+// Socket-only on the backend (player_state is NOT persisted to events.jsonl).
+public task_poll_player_state() {
+    static ps_json[BUFFER_SIZE];
+    copy(ps_json, charsmax(ps_json), "{^"event^":^"player_state^",^"players^":[");
+    new bool:first = true;
+
     for (new id = 1; id <= get_maxplayers(); id++) {
         if (!is_user_connected(id) || !is_user_alive(id)) continue;
 
+        // ── Prone detection (unchanged: emits discrete prone_change on transition) ──
         new prone_raw = dod_get_pronestate(id);
         new prone_state;
         if (prone_raw == PS_NOPRONE)         prone_state = PRONE_STANDING;
@@ -790,7 +822,45 @@ public task_poll_prone() {
             g_player_prone[id] = prone_state;
             do_prone_change(id, prone_state);
         }
+
+        // ── Snapshot fields (clip/reserve ammo intentionally omitted — HLTV
+        //    already shows bullets-left; caster feedback says the HUD bar was
+        //    distracting) ──
+        new wpnid = dod_get_user_weapon(id);
+        new weapon[32];
+        if (wpnid > 0) xmod_get_wpnlogname(wpnid, weapon, charsmax(weapon));
+        else           weapon[0] = '^0';
+
+        // Allies hand + mills grenades share one pool (DODW_HANDGRENADE); Axis = stick.
+        // pdata-offset read — validate on the prod dod_i386.so before fleet rollout.
+        new nade_type = (g_player_team[id] == TEAM_AXIS) ? DODW_STICKGRENADE : DODW_HANDGRENADE;
+        new nades = dodx_get_grenade_ammo(id, nade_type);
+        if (nades < 0) nades = 0;
+
+        new prone_str[16];
+        get_prone_str(prone_state, prone_str, charsmax(prone_str));
+
+        new steamid[32];
+        get_steamid(id, steamid, charsmax(steamid));
+
+        // Defensive: stop before overflowing. Reserves room for this player's
+        // entry (<=192) AND post_event's envelope prefix (~165 with a match
+        // active) so a full 32-slot server can't truncate the wrapped payload
+        // mid-JSON. 6v6 stays well under this.
+        if (strlen(ps_json) > BUFFER_SIZE - 384) break;
+
+        static pbuf[192];
+        formatex(pbuf, charsmax(pbuf),
+            "%s{^"user_id^":^"%s^",^"weapon^":^"%s^",^"nades^":%d,^"health^":%d,^"prone_state^":^"%s^"}",
+            first ? "" : ",", steamid, weapon, nades, get_user_health(id), prone_str);
+        add(ps_json, charsmax(ps_json), pbuf);
+        first = false;
     }
+
+    add(ps_json, charsmax(ps_json), "]}");
+
+    // Skip the POST entirely when nobody is alive (pre-spawn / between rounds).
+    if (!first && g_cvar_url[0]) post_event(ps_json);
 }
 
 public ev_team_score() {

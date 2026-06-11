@@ -89,8 +89,55 @@ export default [
 
     { "caster_observed_player": { "time": 4500, "user_id": "STEAM_0:0:1001" } },
 
+    // weapon_active (Phase 1, NEW): emitted by the dod_client_weaponswitch public
+    // on every weapon switch. Raw dodx lognames; the HUD's WEAPON_ALIASES normalizes.
+    // Not in the production fixture (this is a new feature) — authored here for the HUD.
+    // storm (sniper) pulls pistol then re-scopes; bud swaps to knife; mogers throws to nade.
+    { "weapon_active": { "time": 5200, "user_id": "STEAM_0:0:1004", "weapon": "colt" } },
+    { "weapon_active": { "time": 5600, "user_id": "STEAM_0:0:1002", "weapon": "amerknife" } },
+    { "weapon_active": { "time": 5900, "user_id": "STEAM_0:0:2001", "weapon": "grenade2" } },
+
     // ian goes prone (shame!). Real plugin sets timestamp = get_systime()*1000 (wall clock).
     { "prone_change": { "time": 6000,  "user_id": "STEAM_0:0:2006", "state": "prone", "timestamp": 1741420806000 } },
+
+    // Switch back to primaries before the engagement.
+    { "weapon_active": { "time": 7200, "user_id": "STEAM_0:0:1004", "weapon": "spring" } },
+    { "weapon_active": { "time": 7400, "user_id": "STEAM_0:0:1002", "weapon": "thompson" } },
+    { "weapon_active": { "time": 7600, "user_id": "STEAM_0:0:2001", "weapon": "kar" } },
+
+    // player_state (Phase 2, NEW): the 4 Hz batched per-player snapshot emitted by
+    // task_poll_player_state. Carries live held weapon + grenade count for
+    // every ALIVE player (dead players are omitted — their cards stay in the dead
+    // state). Socket-only on the backend (never written to events.jsonl). The real
+    // plugin emits this 4×/sec; the mocker authors a few representative snapshots.
+    { "player_state": { "time": 4800, "players": [
+        { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 2, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1002", "weapon": "thompson", "nades": 2, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1003", "weapon": "garand",   "nades": 2, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 1, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1005", "weapon": "thompson", "nades": 2, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": 2, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 2, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2002", "weapon": "mp40",     "nades": 2, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2003", "weapon": "kar",      "nades": 2, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2004", "weapon": "mp44",     "nades": 2, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2005", "weapon": "kar",      "nades": 2, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2006", "weapon": "mg42",     "nades": 1, "health": 100, "prone_state": "standing" },
+    ]}},
+
+    // Mid-round snapshot: 1003/2002/2006 are dead by now (kills at 9s/10s/14s) and
+    // are intentionally absent — a couple of nades thrown.
+    { "player_state": { "time": 16000, "players": [
+        { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1002", "weapon": "thompson", "nades": 2, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 1, "health": 88,  "prone_state": "deployed" },
+        { "user_id": "STEAM_0:0:1005", "weapon": "thompson", "nades": 1, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": 0, "health": 51,  "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 1, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2003", "weapon": "kar",      "nades": 2, "health": 62,  "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2004", "weapon": "mp44",     "nades": 1, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2005", "weapon": "kar",      "nades": 2, "health": 90,  "prone_state": "standing" },
+    ]}},
 
     // Pre-engagement zone state — zone polling is 10Hz live; we sample at ~1Hz here.
     { "flag_zone_players": { "time": 6500, "zones": [

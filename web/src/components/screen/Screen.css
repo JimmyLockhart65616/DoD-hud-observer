@@ -45,6 +45,24 @@
   text-align: left;
 }
 
+/* Per-team alive counter (e.g. "6" / "4") — sits beside the team name,
+   toward the center score. Derived from per-player dead state. */
+.team-alive {
+  display: inline-block;
+  font-size: 16px;
+  font-weight: 800;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 10px;
+  padding: 1px 8px;
+  min-width: 14px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.team-alive-allies { margin-left: 10px; }
+.team-alive-axis   { margin-right: 10px; }
+
 /* ═══════════════════════════════════════════════════════════════════
    SCORE BAR
    ═══════════════════════════════════════════════════════════════════ */
@@ -488,24 +506,25 @@
 .bottom-bar {
   display: flex;
   align-items: flex-end;
-  padding: 0 8px 8px;
-  gap: 6px;
+  padding: 0 10px 10px;
+  gap: 8px;
 }
 
 .team-cards {
   display: flex;
   flex: 1;
-  gap: 2px;
+  gap: 3px;
 }
 
-/* ── Player Card ───────────────────────────────────────────────── */
+/* ── Player Card (Direction B: health on top, header, two icon rows) ── */
 .player-card {
   flex: 1;
   display: flex;
   flex-direction: column;
-  border-radius: 4px;
+  border-radius: 6px;
   overflow: hidden;
   min-width: 0;
+  position: relative;            /* anchors .card-damage-pop */
   transition: box-shadow 0.2s ease;
 }
 
@@ -514,179 +533,220 @@
 }
 
 .player-card-allies.spectated {
-  box-shadow: 0 0 16px rgba(143, 168, 71, 0.5);
+  box-shadow: 0 0 18px rgba(143, 168, 71, 0.6);
 }
 
 .player-card-axis.spectated {
-  box-shadow: 0 0 16px rgba(196, 48, 48, 0.5);
+  box-shadow: 0 0 18px rgba(196, 48, 48, 0.6);
 }
 
-/* ── Card Top (health area) ────────────────────────────────────── */
-.card-top {
+/* ── Health Strip (now the top cap of the card) ────────────────── */
+.card-health-strip {
+  position: relative;
+  height: 7px;
+  background-color: rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+/* Delayed-damage trail: ghost lingers at the prior health and shrinks slowly,
+   leaving a red wake behind the fast-snapping fill. Pure CSS — no JS timers,
+   so it survives OBS background-tab setTimeout throttling. */
+.card-health-ghost {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background-color: rgba(220, 60, 60, 0.85);
+  transition: width 0.6s ease 0.25s;
+}
+
+.card-health-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  transition: width 0.15s ease;
+}
+
+.player-card-allies .card-health-fill { background-color: #9FC04F; }
+.player-card-axis   .card-health-fill { background-color: #D14A4A; }
+
+/* ── Header (class icon + name + prone) — reclaims the old wasted band ── */
+.card-header {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 6px 4px;
-  min-height: 56px;
-  background-color: rgba(48, 54, 97, 0.85);
+  gap: 6px;
+  padding: 4px 7px;
+  min-height: 24px;
+  background-color: rgba(48, 54, 97, 0.9);
 }
 
-.card-dead {
-  background: linear-gradient(to bottom, rgba(70, 70, 70, 0.8), rgba(50, 50, 50, 0.6)) !important;
-  min-height: 48px;
-}
+.player-card-allies .card-header { background-color: rgba(70, 90, 34, 0.55); }
+.player-card-axis   .card-header { background-color: rgba(135, 30, 30, 0.55); }
 
 .card-class-icon {
   display: flex;
   align-items: center;
-  justify-content: center;
-  margin-bottom: 2px;
+  flex: 0 0 auto;
 }
 
-.card-class-icon img {
-  height: 20px;
-}
+.card-class-icon img { height: 18px; width: auto; }
 
-.card-hp {
-  font-size: 22px;
-  font-weight: 800;
-  color: white;
-  text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.7);
-  line-height: 1;
-}
-
-.card-skull {
-  width: 24px;
-  height: 24px;
-  opacity: 0.5;
-}
-
-/* ── Health Strip ──────────────────────────────────────────────── */
-.card-health-strip {
-  height: 3px;
-  background-color: rgba(0, 0, 0, 0.4);
-}
-
-.card-health-fill {
-  height: 100%;
-  transition: width 0.3s ease;
-}
-
-.player-card-allies .card-health-fill {
-  background-color: #8FA847;
-}
-
-.player-card-axis .card-health-fill {
-  background-color: #C43030;
-}
-
-/* ── Card Bottom (info area) ───────────────────────────────────── */
+/* ── Card Bottom (two icon rows) ───────────────────────────────── */
 .card-bottom {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  background-color: rgba(30, 33, 58, 0.95);
-  padding: 4px 4px;
-  gap: 2px;
+  align-items: stretch;
+  background-color: rgba(30, 33, 58, 0.96);
+  padding: 5px 7px;
+  gap: 5px;
 }
 
 .card-name {
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 800;
-  color: white;
+  color: #fff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
-  text-align: center;
-  line-height: 1.3;
+  flex: 1 1 auto;
+  text-align: left;
+  line-height: 1.2;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.6);
 }
 
 .player-card.dead .card-name {
   color: rgba(255, 255, 255, 0.4);
 }
 
+/* Stat row — icon + number for kills / deaths / objective */
 .card-stats {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
+  justify-content: space-between;
+  gap: 6px;
   width: 100%;
 }
 
-.card-objscore {
+.card-stat {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  font-size: 11px;
-  color: #E8C547;
+  gap: 3px;
+  font-size: 14px;
   font-weight: 800;
-}
-
-.card-objscore .card-stat-icon {
-  font-size: 10px;
+  font-variant-numeric: tabular-nums;
   line-height: 1;
 }
 
-.card-kills {
-  font-size: 11px;
-  color: #8FA847;
-  font-weight: 800;
-}
+.card-stat svg { width: 14px; height: 14px; display: block; }
 
-.card-kd-sep {
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.3);
-  font-weight: 600;
-}
+.card-kills    { color: #9FC04F; }
+.card-deaths   { color: #E05555; }
+.card-objscore { color: #E8C547; }
 
-.card-deaths {
-  font-size: 11px;
-  color: #C43030;
-  font-weight: 800;
+/* ── Loadout row (weapon centered | grenade+count right) ───────── */
+.card-loadout {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 24px;
 }
 
 .card-weapon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  min-height: 14px;
-  margin-top: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .card-weapon img {
-  height: 13px;
   width: auto;
-  max-width: 94%;
+  height: auto;
+  max-height: 22px;
+  max-width: 100%;
   filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.6));
 }
 
 .card-weapon-text {
   color: #aaa;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* ── Prone Indicator on Card ───────────────────────────────────── */
-.card-prone {
+.card-nades {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 14px;
+  font-weight: 800;
+  color: #6FB7E8;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.card-nades svg { width: 13px; height: 13px; display: block; }
+
+.card-nades.nades-empty { opacity: 0.35; }
+
+/* ── Dead card (single greyed skull + name row) ────────────────── */
+.card-dead-row {
   display: flex;
   align-items: center;
+  gap: 8px;
+  padding: 8px 7px;
+  background: linear-gradient(to bottom, rgba(70, 70, 70, 0.8), rgba(50, 50, 50, 0.6));
+}
+
+.card-skull {
+  width: 22px;
+  height: 22px;
+  opacity: 0.55;
+  flex: 0 0 auto;
+}
+
+/* ── Damage popup (-N floating number; pure-CSS fade, OBS-safe) ─── */
+.card-damage-pop {
+  position: absolute;
+  top: 9px;
+  right: 7px;
+  font-size: 18px;
+  font-weight: 900;
+  color: #FF5555;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 6px rgba(255, 40, 40, 0.5);
+  pointer-events: none;
+  z-index: 5;
+  animation: card-dmg-float 1.8s ease-out forwards;
+}
+
+@keyframes card-dmg-float {
+  0%   { opacity: 0; transform: translateY(4px) scale(0.85); }
+  8%   { opacity: 1; transform: translateY(0) scale(1.12); }
+  16%  { opacity: 1; transform: translateY(-3px) scale(1); }
+  72%  { opacity: 1; transform: translateY(-6px) scale(1); }   /* hold readable */
+  100% { opacity: 0; transform: translateY(-18px) scale(0.95); }
+}
+
+/* ── Prone Indicator (in header) ───────────────────────────────── */
+.card-prone {
+  display: inline-flex;
+  align-items: center;
   gap: 2px;
-  color: #C43030;
-  font-size: 9px;
+  flex: 0 0 auto;
+  color: #ffd0d0;
+  font-size: 10px;
   font-weight: 800;
-  padding: 1px 4px;
-  border-radius: 2px;
-  background-color: rgba(160, 35, 35, 0.3);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background-color: rgba(196, 48, 48, 0.55);
 }
 
 .card-prone .prone-label {
-  font-size: 8px;
+  font-size: 9px;
   letter-spacing: 0.5px;
 }
 
@@ -701,8 +761,8 @@
 
 /* ── Bottom center gap (for game's native observed player text) ─── */
 .bottom-center-gap {
-  width: 30%;
-  min-width: 30%;
+  width: 20%;
+  min-width: 20%;
 }
 
 /* ═══════════════════════════════════════════════════════════════════

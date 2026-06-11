@@ -15,6 +15,16 @@ class Welcome extends React.Component {
                             <li><a href="/help">Viewer Guide</a> — how to set up and use the HUD in OBS</li>
                         </ul>
                         <h5 style={{ marginTop: '32px' }}>
+                            What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-06-10</small>
+                        </h5>
+                        <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>
+                            <li>Player cards now show each player's live equipped weapon (updates as they switch)</li>
+                            <li>Grenade count on every player card</li>
+                            <li>Floating damage numbers pop up when a player takes a hit</li>
+                            <li>Per-team alive counter in the top bar</li>
+                            <li>Cleaner card layout — health bar on top, icon-labeled kills/deaths</li>
+                        </ul>
+                        <h5 style={{ marginTop: '32px' }}>
                             What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-06-08</small>
                         </h5>
                         <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>

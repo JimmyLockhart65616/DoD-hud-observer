@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getWeaponIcon } from '../../screen/resources/weaponIcons';
+import { IconTarget, IconSkull, IconFlag, IconGrenade } from '../../screen/resources/CardIcons';
 
 function useProneTimer(prone_since) {
     const [elapsed, setElapsed] = useState(0);
@@ -44,10 +45,8 @@ const PlayerCard = React.memo(({ player }) => {
     if (player.dead) {
         return (
             <div className={classes.join(' ')}>
-                <div className="card-top card-dead">
+                <div className="card-dead-row">
                     <img src={require('../../screen/resources/images/skull.png')} alt="dead" className="card-skull" />
-                </div>
-                <div className="card-bottom">
                     <div className="card-name">{player.name}</div>
                 </div>
             </div>
@@ -56,33 +55,46 @@ const PlayerCard = React.memo(({ player }) => {
 
     return (
         <div className={classes.join(' ')}>
-            <div className="card-top">
-                <div className="card-class-icon">
-                    <ClassIcon classId={player.class_id} />
-                </div>
-                <div className="card-hp">{player.health}</div>
-                {isProne && (
-                    <div className="card-prone">
-                        <span className="prone-label">PRONE</span>
-                        {elapsed}s
-                    </div>
-                )}
-            </div>
+            {/* Damage popup: pure CSS-animation fade (ends invisible), re-keyed per
+                hit so it replays. No JS timer — survives OBS background-tab throttling. */}
+            {player.last_damage_at && (
+                <div className="card-damage-pop" key={player.last_damage_id}>-{player.last_damage}</div>
+            )}
+
+            {/* Health bar on top — ghost trail (OBS-safe) unchanged. */}
             <div className="card-health-strip">
+                <div className="card-health-ghost" style={{ width: `${player.health}%` }} />
                 <div className="card-health-fill" style={{ width: `${player.health}%` }} />
             </div>
-            <div className="card-bottom">
-                <div className="card-name">{player.name}</div>
-                <div className="card-stats">
-                    <span className="card-objscore" title="Objective score (flag caps)">
-                        <span className="card-stat-icon">&#9873;</span>{player.obj_score ?? 0}
+
+            <div className="card-header">
+                <span className="card-class-icon">
+                    <ClassIcon classId={player.class_id} />
+                </span>
+                <span className="card-name">{player.name}</span>
+                {isProne && (
+                    <span className="card-prone">
+                        <span className="prone-label">PRONE</span>{elapsed}s
                     </span>
-                    <span className="card-kills">{player.kills}</span>
-                    <span className="card-kd-sep">/</span>
-                    <span className="card-deaths">{player.deaths}</span>
+                )}
+            </div>
+
+            <div className="card-bottom">
+                <div className="card-stats">
+                    <span className="card-stat card-kills"><IconTarget />{player.kills}</span>
+                    <span className="card-stat card-deaths"><IconSkull />{player.deaths}</span>
+                    <span className="card-stat card-objscore" title="Objective score (flag caps)">
+                        <IconFlag />{player.obj_score ?? 0}
+                    </span>
                 </div>
-                <div className="card-weapon">
-                    <WeaponIcon weapon={player.weapon_primary} />
+                <div className="card-loadout">
+                    <span className="card-weapon">
+                        <WeaponIcon weapon={player.weapon_active ?? player.weapon_primary} />
+                    </span>
+                    <span className={`card-nades${player.nades > 0 ? '' : ' nades-empty'}`}
+                        title={`${player.nades ?? 0} grenade(s)`}>
+                        <IconGrenade />{player.nades ?? 0}
+                    </span>
                 </div>
             </div>
         </div>
