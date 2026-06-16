@@ -10,6 +10,8 @@
     "mocker": "MOCKER_INGEST_URL=http://localhost:8089/ingest ts-node --script-mode backend/src/mocker/mocker.ts",
     "mocker:socket": "ts-node --script-mode backend/src/mocker/mocker.ts -- --socket",
     "test": "jest --config backend/jest.config.js",
+    "test:web": "cd web && npx react-scripts test --watchAll=false",
+    "test:all": "npm run test && npm run test:web",
     "e2e": "npx playwright test",
     "e2e:headed": "npx playwright test --headed",
     "e2e:screenshot": "npx ts-node e2e/screenshot-tool.ts",

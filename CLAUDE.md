@@ -140,9 +140,13 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 { "event": "player_team_change", "user_id": "STEAM_0:0:123", "team": "allies|axis" }
 { "event": "player_spawn", "user_id": "STEAM_0:0:123", "team": "allies|axis",
   "class_id": 0, "weapon_primary": "garand", "weapon_secondary": "colt" }
-{ "event": "player_score", "user_id": "STEAM_0:0:123", "kills": 0, "deaths": 0, "score": 0, "obj_score": 0 }
+{ "event": "player_score", "user_id": "STEAM_0:0:123", "kills": 0, "deaths": 0, "score": 0, "obj_score": 0,
+  "damage": 0, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0,
+  "caps": 0, "best_streak": 0 }
 { "event": "kill", "killer_id": "STEAM_0:0:123", "victim_id": "STEAM_0:0:456",
-  "weapon": "garand", "kill_type": "normal|suicide|teamkill", "victim_prone": false }
+  "weapon": "garand", "kill_type": "normal|suicide|teamkill", "kill_class": "gun|nade",
+  "headshot": false, "victim_prone": false, "killer_prone": false,
+  "assist_ids": ["STEAM_0:0:789"] }
 { "event": "prone_change", "user_id": "STEAM_0:0:123",
   "state": "standing|prone|deployed", "timestamp": 1234567890000 }
 { "event": "weapon_pickup", "user_id": "STEAM_0:0:123", "weapon": "mp40" }
@@ -166,6 +170,35 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 { "event": "flag_captured", "flag_id": 0, "flag_name": "Allied Plaza",
   "new_owner": "allies|axis", "captor_ids": ["STEAM_0:0:123"] }
 ```
+
+### Stats Events (popups: cap flash, round/halftime/match-end boards)
+
+```json
+{ "event": "half_end", "half": 1, "allies_score": 2, "axis_score": 1 }
+{ "event": "player_stats_summary", "reason": "round_end|half_end|match_end|manual",
+  "capout_team": "allies|axis", "capout_by": "Player1, Player2",
+  "players": [
+    { "user_id": "STEAM_0:0:123", "name": "PlayerName", "team": "allies|axis",
+      "kills": 0, "deaths": 0, "assists": 0, "damage": 0,
+      "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,
+      "caps": 0, "best_streak": 0 }
+  ]
+}
+```
+
+- `reason` `round_end` is a full **capout**; `capout_team`/`capout_by` (the team + the
+  names of the final flag's captors) are present only on that reason and title the board.
+
+- Accumulators are half-scoped (reset on `ktp_match_start`), slot-scoped (reset on
+  connect/disconnect). Assist = 50+ enemy damage to a victim since their last spawn,
+  killed by someone else. `kill_class` "nade" = wpnindex ∈ {13,14,15,16,36} (grenades + mills bomb).
+- `half_end` + a `half_end`-reason summary fire when the plugin sees KTPMatchHandler's
+  `KTP_HALF_END` log line (half-1 end only); `ktp_match_end` covers all terminal paths.
+- Summary emission is event-driven only (cap / capout / half end / match end /
+  rcon `amx_hud_statsboard`) — never from repeating tasks (half-1 wedge immunity).
+- Frontend boards: render-time TTL by reason (`hud.json` settings), dismissed when the
+  next half goes live; match-end board sums the cached half-1 summary with final-half
+  rows for full-match totals.
 
 ---
 
@@ -201,6 +234,8 @@ npm run backend       # backend with hot reload
 npm run web           # React dev server
 npm run mocker        # simulate events without a real server
 npm run test          # Jest — backend unit + integration tests
+npm run test:web      # Jest (CRA) — frontend store-machine tests
+npm run test:all      # backend + frontend Jest suites
 npm run plugin:smoke  # Tier 1 build-time smoke for KTPHudObserver.amxx
 ```
 
@@ -246,15 +281,38 @@ emits directly over Socket.IO; only used by the Playwright config.
 
 ## Backend Testing (Jest)
 
-`npm run test` runs the full backend suite (~2s, 41 tests). Exercises ingest
+`npm run test` runs the full backend suite (~2s, 124 tests). Exercises ingest
 → MatchRecorder → disk → REST read-back in-process, no servers needed:
 
-- [backend/src/\_\_tests\_\_/ingest.test.ts](backend/src/__tests__/ingest.test.ts) — `POST /ingest` auth, validation, all 6 match types, back-to-back matches, duplicate-start behavior
+- [backend/src/\_\_tests\_\_/ingest.test.ts](backend/src/__tests__/ingest.test.ts) — `POST /ingest` auth, validation, all 6 match types, back-to-back matches, duplicate-start behavior, stats round-trip + snapshot replay
+- [backend/src/\_\_tests\_\_/ingestChaos.test.ts](backend/src/__tests__/ingestChaos.test.ts) — adversarial 6v6 robustness: out-of-order arrivals (score/kill before connect), reconnect/rename/team-swap mid-match, malformed/partial/duplicate summaries, unknown-user rows, dropped `ktp_match_start`, rapid OT boundaries, two-server isolation, malformed-event burst
 - [backend/src/\_\_tests\_\_/matchRecorder.test.ts](backend/src/__tests__/matchRecorder.test.ts) — `MatchRecorder` startMatch/recordEvent/endMatch + multi-match isolation
 - [backend/src/\_\_tests\_\_/matchesApi.test.ts](backend/src/__tests__/matchesApi.test.ts) — `/api/matches/live|stored|:id/events` read-back after ingest
 - [backend/src/\_\_tests\_\_/mockerLifecycle.test.ts](backend/src/__tests__/mockerLifecycle.test.ts) — drives `MockerClass` in-process with fake timers; asserts the whole scripted match round-trips through ingest → disk in order
 
 Run a single suite: `npm run test -- <pattern>` (e.g. `npm run test -- mockerLifecycle`).
+
+## Frontend Store Tests (Jest via CRA)
+
+`npm run test:web` runs the React store-machine suite via `react-scripts test`
+(jsdom, ~2s). These drive the real Socket.jsx event handlers through the shared
+`gameEvents` bus — the same path the live socket uses — and assert the
+cumulative-stats state machine (the `halfRows`/`halfSource`/`recordHalf`/
+`carrySoFar`/`handleHalfBoundary` carry logic and the half_end-vs-summary
+precedence) survives adversarial 6v6 orderings:
+
+- [web/src/components/core/Socket/Socket.chaos.test.js](web/src/components/core/Socket/Socket.chaos.test.js) — summary-vs-marker precedence (both orderings), dropped-summary snapshot fallback, match-end cumulative totals (best_streak MAX'd), signal-less H2→OT boundary, prod double-boundary (ktp_match_start + half_start) counted once, reconnect + halftime team-swap carry by user_id, fresh-match carry/board reset, capout title
+
+Mechanics: `socket.io-client` is mocked at module load (no real connection);
+each test mounts a fresh component (RTL auto-unmounts between tests, clearing
+`gameEvents` handlers) and opens with a half-1 boundary emit, which resets the
+module-level carry globals + store exactly as production does. `web/package.json`
+adds a `moduleNameMapper` for `react`/`react-dom` because `zustand` is hoisted to
+the **root** `node_modules` while `react` lives in `web/node_modules` (webpack
+resolves this via `resolve.modules`; jest's relative resolver needs the map).
+
+`npm run test:all` runs backend + frontend. Both suites also gate `git push`
+(pre-push stages 3 + 4; stage 4 self-skips if web deps aren't installed).
 
 ## E2E Testing (Playwright)
 

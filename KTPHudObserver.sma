@@ -35,7 +35,7 @@
 #define TIME_SYNC_DELAY 30.0
 #define PLAYER_POLL_INTERVAL 0.25
 #define ZONE_POLL_INTERVAL  0.5
-#define BUFFER_SIZE     2048
+#define BUFFER_SIZE     4096
 // 3s — accommodates production /ingest p95 latency observed during scrim
 // (saturation under 5-canary aggregate load; per-event POST p95 ~1.2-1.8s).
 // 1s timed out enough to starve repeating tasks (zone polling / time_sync).
@@ -112,6 +112,42 @@ new g_player_objscore[MAX_PLAYERS + 1];
 // emit_player_score is self-sufficient. Reset alongside g_player_kills.
 new g_player_deaths[MAX_PLAYERS + 1];
 
+// ─── Stats accumulators (half-scoped, reset on ktp_match_start) ──────────────
+// All slot-indexed alongside g_player_kills. Damage matrix feeds assist
+// attribution: g_dmg_taken[victim][attacker] = enemy damage dealt to victim
+// since the victim's last spawn (row zeroed on spawn and after each death).
+// Only enemy damage accumulates (client_damage skips self + team hits), so
+// assists can never be earned by teammates.
+new g_dmg_taken[MAX_PLAYERS + 1][MAX_PLAYERS + 1];
+
+#define ASSIST_DAMAGE_THRESHOLD 50
+
+new g_player_damage[MAX_PLAYERS + 1];      // enemy damage dealt this half
+new g_player_hits[MAX_PLAYERS + 1];        // enemy hits landed this half
+new g_player_hs_hits[MAX_PLAYERS + 1];     // hits with hitplace == HIT_HEAD
+new g_player_hs_kills[MAX_PLAYERS + 1];    // normal kills via headshot
+new g_player_nade_kills[MAX_PLAYERS + 1];  // normal kills with a grenade weapon
+new g_player_gun_kills[MAX_PLAYERS + 1];   // all other normal kills (incl. melee/rockets)
+new g_player_assists[MAX_PLAYERS + 1];     // 50+ damage to a victim killed by someone else
+new g_player_caps[MAX_PLAYERS + 1];        // flag caps participated in (dod_score_event credits)
+new g_player_teamkills[MAX_PLAYERS + 1];   // teamkills committed this half (surfaced in kill feed)
+new g_player_cur_streak[MAX_PLAYERS + 1];  // current kill streak (resets on death)
+new g_player_best_streak[MAX_PLAYERS + 1]; // longest kill streak this half
+
+// player_stats_summary trigger reasons. Indexes g_summaryReasonStr and the
+// per-reason dedupe timestamps (capout + ev_round_end can both fire for the
+// same round end; the guard collapses them to one summary POST).
+enum _:SummaryReason {
+    SUMMARY_ROUND_END = 0,
+    SUMMARY_HALF_END,
+    SUMMARY_MATCH_END,
+    SUMMARY_MANUAL
+};
+new const g_summaryReasonStr[SummaryReason][] = {
+    "round_end", "half_end", "match_end", "manual"
+};
+new Float:g_lastSummaryAt[SummaryReason];
+
 // Flag ownership cache
 new g_flag_owner[MAX_FLAGS];
 new g_flag_count;
@@ -129,7 +165,11 @@ new g_flag_prev_axis_count[MAX_FLAGS];
 
 // Pending captor batch — populated by dod_score_event during a successful cap,
 // drained on the next dod_control_point_captured for that CP. Mirrors KTPScoreTracker.
+// _score holds each captor's score_delta so caps/obj_score are credited at
+// capture time, AFTER the owning-team filter — not eagerly in dod_score_event
+// (which can fire for opposing-team players via savedScore drift).
 new g_flag_pending_captor_ids[MAX_FLAGS][MAX_CAPTORS];
+new g_flag_pending_captor_score[MAX_FLAGS][MAX_CAPTORS];
 new g_flag_pending_captor_count[MAX_FLAGS];
 
 // Server hostname (sent as X-Server-Hostname header)
@@ -163,6 +203,10 @@ public plugin_init() {
 
     // Diagnostic: dump raw CAreaCapture values for every CP (server console only)
     register_concmd("amx_hud_dump_zones", "cmd_dump_zones", ADMIN_RCON, "dump raw zone state");
+
+    // Caster fallback: force a stats-board popup on the overlay (e.g. if the
+    // half-end POST was lost to the changelevel race).
+    register_concmd("amx_hud_statsboard", "cmd_statsboard", ADMIN_RCON, "force stats board popup on the HUD overlay");
 
     // Periodic tasks are scheduled in plugin_cfg (see below) so they get
     // re-armed on every map change — repeating tasks set here in plugin_init
@@ -330,6 +374,40 @@ stock get_steamid(id, out[], len) {
     }
 }
 
+// Grenade-class weapons per dodx weaponData (Utils.cpp): 13/14 live nades,
+// 15/16 the _ex variants (rare — get_weaponid remaps live ones), 36 mills bomb.
+// Rockets and melee intentionally count as "gun"; the kill event's weapon
+// string preserves enough data to reclassify later if casters want it.
+stock bool:is_nade_wpn(wpnindex) {
+    switch (wpnindex) {
+        case DODW_HANDGRENADE, DODW_STICKGRENADE,
+             DODW_STICKGRENADE_EX, DODW_HANDGRENADE_EX,
+             DODW_MILLS_BOMB: return true;
+    }
+    return false;
+}
+
+// Wipe one slot's stat accumulators plus its damage-matrix row AND column —
+// called on connect/disconnect so a reused slot can't inherit a ghost's
+// damage history (assists would mis-attribute otherwise).
+stock reset_player_stats_slot(id) {
+    g_player_damage[id]      = 0;
+    g_player_hits[id]        = 0;
+    g_player_hs_hits[id]     = 0;
+    g_player_hs_kills[id]    = 0;
+    g_player_nade_kills[id]  = 0;
+    g_player_gun_kills[id]   = 0;
+    g_player_assists[id]     = 0;
+    g_player_caps[id]        = 0;
+    g_player_teamkills[id]   = 0;
+    g_player_cur_streak[id]  = 0;
+    g_player_best_streak[id] = 0;
+    for (new j = 0; j <= MAX_PLAYERS; j++) {
+        g_dmg_taken[id][j] = 0;
+        g_dmg_taken[j][id] = 0;
+    }
+}
+
 // Get log name for the weapon in the given DODWT_* slot
 stock get_wpn_name_for_slot(id, slot, out[], len) {
     new wpn_id = dod_weapon_type(id, slot);
@@ -369,6 +447,10 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
         g_player_kills[i]    = 0;
         g_player_deaths[i]   = 0;
         g_player_objscore[i] = 0;
+        reset_player_stats_slot(i);
+    }
+    for (new r = 0; r < SummaryReason; r++) {
+        g_lastSummaryAt[r] = 0.0;
     }
 
     server_print("[HUD] Match started: %s (map=%s type=%d half=%d)", matchId, map, _:matchType, half);
@@ -408,6 +490,13 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
 public ktp_match_end(const matchId[], const map[], MatchType:matchType, team1Score, team2Score) {
     server_print("[HUD] Match ended: %s (allies=%d axis=%d)", matchId, team1Score, team2Score);
 
+    // Final stats snapshot — must precede the ktp_match_end event below:
+    // the backend closes the match (recorder.endMatch) when it sees
+    // ktp_match_end, and the summary needs to land inside events.jsonl.
+    // This fires for EVERY terminal path in KTPMatchHandler (normal end,
+    // OT win/limit, abandons, forfeits).
+    emit_stats_summary(SUMMARY_MATCH_END);
+
     // Emit BEFORE clearing g_matchActive so post_event() still injects match_id/map.
     // Event name must match the backend's lifecycle handler in ingest.ts (which
     // calls recorder.endMatch on ktp_match_end) — see backend/src/handler/ingest.ts.
@@ -419,6 +508,37 @@ public ktp_match_end(const matchId[], const map[], MatchType:matchType, team1Sco
 
     g_matchActive = false;
     g_matchId[0] = '^0';
+}
+
+// ─── Half End (KTPMatchHandler log line) ─────────────────────────────────────
+
+// KTPMatchHandler emits `KTP_HALF_END (matchid "...") (map "...") (half "1st")`
+// from handle_first_half_end() — the only half-1-end signal it exposes (no
+// AMXX forward exists; ktp_match_end covers half-2/OT terminal paths). The
+// line is logged at the moment gameplay ends, inside the changelevel hook;
+// amxxcurl is process-lifetime so the POST survives the map change (same
+// proven path as KTPMatchHandler's own halftime Discord embed).
+// plugin_log fires per log line even in extension mode (KTPAMXX hooks
+// AlertMessage via the ReHLDS hookchain). Prefix-match on raw logdata —
+// the custom (matchid "...") line tokenizes unpredictably via logevents.
+public plugin_log() {
+    static logline[256];
+    read_logdata(logline, charsmax(logline));
+    if (!equal(logline, "KTP_HALF_END", 12)) return PLUGIN_CONTINUE;
+
+    server_print("[HUD] KTP_HALF_END detected — emitting half_end + stats summary");
+
+    new allies = dodx_get_team_score(TEAM_ALLIES);
+    new axis   = dodx_get_team_score(TEAM_AXIS);
+
+    new json[160];
+    formatex(json, charsmax(json),
+        "{^"event^":^"half_end^",^"half^":%d,^"allies_score^":%d,^"axis_score^":%d}",
+        g_matchHalf, allies, axis);
+    post_event(json);
+
+    emit_stats_summary(SUMMARY_HALF_END);
+    return PLUGIN_CONTINUE;
 }
 
 // ─── Roster Dump ─────────────────────────────────────────────────────────────
@@ -515,6 +635,8 @@ public ev_round_end() {
         "{^"event^":^"round_end^",^"winner^":^"%s^",^"end_type^":^"%s^",^"allies_score^":%d,^"axis_score^":%d}",
         winner, end_type, allies, axis);
     post_event(json);
+
+    emit_stats_summary(SUMMARY_ROUND_END);
 }
 
 stock classify_round_end(out[], len) {
@@ -583,6 +705,7 @@ public client_authorized(id) {
     g_player_kills[id]    = 0;
     g_player_deaths[id]   = 0;
     g_player_objscore[id] = 0;
+    reset_player_stats_slot(id);
 
     new json[256];
     formatex(json, charsmax(json),
@@ -608,6 +731,7 @@ public client_disconnect(id) {
     g_player_kills[id]    = 0;
     g_player_deaths[id]   = 0;
     g_player_objscore[id] = 0;
+    reset_player_stats_slot(id);
 }
 
 // DODX forward: player spawned
@@ -630,6 +754,11 @@ public dod_client_spawn(id) {
     g_player_team[id]  = team;
     g_player_prone[id] = PRONE_STANDING;
     g_player_alive[id] = 1;
+
+    // Fresh life — clear damage taken so assist credit only spans one life.
+    for (new a = 0; a <= MAX_PLAYERS; a++) {
+        g_dmg_taken[id][a] = 0;
+    }
 
     new json[384];
     formatex(json, charsmax(json),
@@ -662,6 +791,15 @@ public dod_client_changeteam(id, team, oldteam) {
 public client_damage(attacker, victim, damage, wpnindex, hitplace, TK) {
     if (attacker < 1 || attacker > MAX_PLAYERS) return;
     if (victim < 1 || victim > MAX_PLAYERS) return;
+
+    // Accumulate enemy damage only — self-damage and team hits earn nothing.
+    // Matrix row feeds assist attribution at client_death.
+    if (attacker != victim && !TK) {
+        g_dmg_taken[victim][attacker] += damage;
+        g_player_damage[attacker] += damage;
+        g_player_hits[attacker]++;
+        if (hitplace == 1) g_player_hs_hits[attacker]++;
+    }
 
     new attacker_steam[35], victim_steam[35], weapon[32];
     get_steamid(attacker, attacker_steam, charsmax(attacker_steam));
@@ -702,17 +840,54 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
     new bool:headshot = (hitplace == 1);
     new victim_prone = (g_player_prone[victim] != PRONE_STANDING) ? 1 : 0;
     new killer_prone = (g_player_prone[killer] != PRONE_STANDING) ? 1 : 0;
+    new bool:nade_kill = is_nade_wpn(wpnindex);
 
     g_player_alive[victim] = 0;
     g_player_prone[victim] = PRONE_STANDING;
 
-    new json[512];
+    // Bump the teamkiller's running TK count BEFORE building the kill JSON so
+    // the kill feed can surface it (e.g. "Polak (TK x2)"). Counted per half.
+    if (killer != victim && TK && is_user_connected(killer)) {
+        g_player_teamkills[killer]++;
+    }
+
+    // Assists: anyone (not killer, not victim) who dealt 50+ enemy damage to
+    // the victim this life. The matrix only ever holds enemy damage, so the
+    // team check is belt-and-braces for mid-life team switches. Enemies who
+    // forced a suicide/TK/world death still earn the assist.
+    static assist_json[512];
+    assist_json[0] = '^0';
+    new assist_ids[MAX_PLAYERS], assist_count = 0;
+    for (new a = 1; a <= MAX_PLAYERS; a++) {
+        if (a == killer || a == victim) continue;
+        if (g_dmg_taken[victim][a] < ASSIST_DAMAGE_THRESHOLD) continue;
+        if (!is_user_connected(a)) continue;
+        if (g_player_team[a] == g_player_team[victim]) continue;
+        // Whole entries only — a truncated steamid would break the JSON.
+        if (strlen(assist_json) > charsmax(assist_json) - 48) break;
+
+        new assist_steamid[32], abuf[48];
+        get_steamid(a, assist_steamid, charsmax(assist_steamid));
+        formatex(abuf, charsmax(abuf), "%s^"%s^"", assist_count > 0 ? "," : "", assist_steamid);
+        add(assist_json, charsmax(assist_json), abuf);
+        assist_ids[assist_count++] = a;
+    }
+
+    // Victim's life is over — clear their damage-taken row.
+    for (new a = 0; a <= MAX_PLAYERS; a++) {
+        g_dmg_taken[victim][a] = 0;
+    }
+
+    new json[1024];
     formatex(json, charsmax(json),
-        "{^"event^":^"kill^",^"killer_id^":^"%s^",^"victim_id^":^"%s^",^"weapon^":^"%s^",^"kill_type^":^"%s^",^"headshot^":%s,^"victim_prone^":%s,^"killer_prone^":%s}",
+        "{^"event^":^"kill^",^"killer_id^":^"%s^",^"victim_id^":^"%s^",^"weapon^":^"%s^",^"kill_type^":^"%s^",^"kill_class^":^"%s^",^"headshot^":%s,^"victim_prone^":%s,^"killer_prone^":%s,^"killer_tk_count^":%d,^"assist_ids^":[%s]}",
         killer_steamid, victim_steamid, weapon, kill_type,
+        nade_kill ? "nade" : "gun",
         headshot ? "true" : "false",
         victim_prone ? "true" : "false",
-        killer_prone ? "true" : "false");
+        killer_prone ? "true" : "false",
+        g_player_teamkills[killer],
+        assist_json);
     post_event(json);
 
     // Track kill/death counts locally and emit player_score for both players.
@@ -724,15 +899,37 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
     //
     // Killer: +1 normal, -1 teamkill, 0 suicide (mirrors DoD frag semantics).
     if (killer != victim && is_user_connected(killer)) {
-        if (TK) g_player_kills[killer]--;
-        else    g_player_kills[killer]++;
+        if (TK) {
+            g_player_kills[killer]--;
+        } else {
+            g_player_kills[killer]++;
+            // HS / nade-vs-gun buckets count normal kills only, matching frag
+            // semantics — a TK'd headshot shouldn't pad anyone's HS%.
+            if (headshot)  g_player_hs_kills[killer]++;
+            if (nade_kill) g_player_nade_kills[killer]++;
+            else           g_player_gun_kills[killer]++;
+            // Kill streak (normal kills only); track the half's best.
+            g_player_cur_streak[killer]++;
+            if (g_player_cur_streak[killer] > g_player_best_streak[killer]) {
+                g_player_best_streak[killer] = g_player_cur_streak[killer];
+            }
+        }
         emit_player_score(killer);
     }
 
     // Victim: count every death (suicides included — DoD scoreboard does too).
+    // Death breaks the victim's current streak (best is preserved).
     if (is_user_connected(victim)) {
         g_player_deaths[victim]++;
+        g_player_cur_streak[victim] = 0;
         emit_player_score(victim);
+    }
+
+    // Assisters: bump and emit so the HUD updates without waiting for their
+    // next kill (same pattern as the cap credit in dod_score_event).
+    for (new i = 0; i < assist_count; i++) {
+        g_player_assists[assist_ids[i]]++;
+        emit_player_score(assist_ids[i]);
     }
 }
 
@@ -745,10 +942,80 @@ stock emit_player_score(id) {
     new score    = dod_get_user_score(id);
     new objscore = g_player_objscore[id];
 
-    new json[256];
+    new json[512];
     formatex(json, charsmax(json),
-        "{^"event^":^"player_score^",^"user_id^":^"%s^",^"kills^":%d,^"deaths^":%d,^"score^":%d,^"obj_score^":%d}",
-        steamid, kills, deaths, score, objscore);
+        "{^"event^":^"player_score^",^"user_id^":^"%s^",^"kills^":%d,^"deaths^":%d,^"score^":%d,^"obj_score^":%d,^"damage^":%d,^"assists^":%d,^"hs_kills^":%d,^"nade_kills^":%d,^"gun_kills^":%d,^"hits^":%d,^"hs_hits^":%d,^"caps^":%d,^"best_streak^":%d}",
+        steamid, kills, deaths, score, objscore,
+        g_player_damage[id], g_player_assists[id], g_player_hs_kills[id],
+        g_player_nade_kills[id], g_player_gun_kills[id],
+        g_player_hits[id], g_player_hs_hits[id],
+        g_player_caps[id], g_player_best_streak[id]);
+    post_event(json);
+}
+
+// One batched stats snapshot for every connected on-team player. Fired at
+// discrete boundaries only (capout / half end / match end / rcon) — never from
+// a repeating task, so it stays immune to the half-1 changelevel wedge. The
+// per-reason dedupe collapses double triggers (e.g. capout + ev_round_end for
+// the same round).
+// capout_team / capout_by are only meaningful for SUMMARY_ROUND_END (a full
+// capout): they title the board "ALLIES CAPOUT BY <names>". capout_by must
+// already be JSON-escaped by the caller (build_captor_names does this).
+stock emit_stats_summary(reason, const capout_team[] = "", const capout_by[] = "") {
+    if (!g_cvar_url[0]) return;
+
+    new Float:now = get_gametime();
+    if (g_lastSummaryAt[reason] > 0.0 && now - g_lastSummaryAt[reason] < 2.0) return;
+    g_lastSummaryAt[reason] = now;
+
+    static json[BUFFER_SIZE];
+    if (capout_team[0]) {
+        formatex(json, charsmax(json),
+            "{^"event^":^"player_stats_summary^",^"reason^":^"%s^",^"capout_team^":^"%s^",^"capout_by^":^"%s^",^"players^":[",
+            g_summaryReasonStr[reason], capout_team, capout_by);
+    } else {
+        formatex(json, charsmax(json),
+            "{^"event^":^"player_stats_summary^",^"reason^":^"%s^",^"players^":[",
+            g_summaryReasonStr[reason]);
+    }
+
+    new maxp = get_maxplayers();
+    new bool:first = true;
+    for (new id = 1; id <= maxp && id <= MAX_PLAYERS; id++) {
+        if (!is_user_connected(id)) continue;
+        if (is_user_hltv(id)) continue;
+
+        new team = get_user_team(id);
+        if (team != TEAM_ALLIES && team != TEAM_AXIS) continue;
+
+        // Whole entries only. Reserve room for this player's row (<=512) PLUS
+        // post_event's envelope prefix, which rides on the SAME BUFFER_SIZE
+        // payload buffer and is worst-case ~290 (full-length match_id + map).
+        // 1024 covers row + envelope + slack so the wrapped payload can never
+        // exceed BUFFER_SIZE and truncate into invalid JSON. 6v6 never trips it;
+        // on a 32-slot server the summary caps at ~17 whole rows (graceful).
+        if (strlen(json) > BUFFER_SIZE - 1024) break;
+
+        new steamid[32], name[64], name_esc[128], team_str[16];
+        get_steamid(id, steamid, charsmax(steamid));
+        get_user_name(id, name, charsmax(name));
+        escape_json(name, name_esc, charsmax(name_esc));
+        get_team_str(team, team_str, charsmax(team_str));
+
+        static pbuf[512];
+        formatex(pbuf, charsmax(pbuf),
+            "%s{^"user_id^":^"%s^",^"name^":^"%s^",^"team^":^"%s^",^"kills^":%d,^"deaths^":%d,^"assists^":%d,^"damage^":%d,^"hs_kills^":%d,^"nade_kills^":%d,^"gun_kills^":%d,^"hits^":%d,^"hs_hits^":%d,^"obj_score^":%d,^"caps^":%d,^"best_streak^":%d}",
+            first ? "" : ",", steamid, name_esc, team_str,
+            g_player_kills[id], g_player_deaths[id], g_player_assists[id],
+            g_player_damage[id], g_player_hs_kills[id],
+            g_player_nade_kills[id], g_player_gun_kills[id],
+            g_player_hits[id], g_player_hs_hits[id], g_player_objscore[id],
+            g_player_caps[id], g_player_best_streak[id]);
+        add(json, charsmax(json), pbuf);
+        first = false;
+    }
+
+    add(json, charsmax(json), "]}");
     post_event(json);
 }
 
@@ -1118,13 +1385,16 @@ public dod_score_event(id, score_delta, total_score, cp_index) {
         if (g_flag_pending_captor_ids[cp_index][i] == id) return;
     }
 
-    g_flag_pending_captor_ids[cp_index][n] = id;
-    g_flag_pending_captor_count[cp_index]  = n + 1;
+    g_flag_pending_captor_ids[cp_index][n]   = id;
+    g_flag_pending_captor_score[cp_index][n] = score_delta;
+    g_flag_pending_captor_count[cp_index]    = n + 1;
 
-    // Credit the captor's objective score and push an updated player_score
-    // immediately so the HUD doesn't have to wait for the next kill.
-    g_player_objscore[id] += score_delta;
-    emit_player_score(id);
+    // NOTE: obj_score / caps are NOT credited here. dod_score_event can fire for
+    // a player on the team that does NOT end up owning the CP (savedScore drift,
+    // mid-cap team switch). Crediting now would permanently inflate that player's
+    // caps/obj_score even though they're filtered out of the captor display.
+    // The credit happens in dod_control_point_captured (credit_pending_captors),
+    // gated by the same owning-team filter as the captor list.
 }
 
 // DODX forward: control point captured
@@ -1140,9 +1410,17 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
     //      restart polluted the HUD feed with phantom events. Real caps always
     //      transition straight from one team to the other; an in-game flag
     //      never goes neutral mid-round.
-    if (g_flag_owner[cp_index] == new_owner) return;
+    // Clear any pending captor batch on these non-credit paths so a stale batch
+    // can't later mis-credit caps/obj_score when the flag is genuinely captured.
+    // (Before caps were credited at capture time this was display-only; now it
+    // matters.) A real cap always processed/credited before these fire.
+    if (g_flag_owner[cp_index] == new_owner) {
+        g_flag_pending_captor_count[cp_index] = 0;
+        return;
+    }
     if (new_owner != TEAM_ALLIES && new_owner != TEAM_AXIS) {
         g_flag_owner[cp_index] = new_owner;
+        g_flag_pending_captor_count[cp_index] = 0;
         return;
     }
 
@@ -1159,17 +1437,64 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
     new captor_json[256];
     build_pending_captor_list(cp_index, new_owner, captor_json, charsmax(captor_json));
 
+    // Display names of this flag's captors (escaped) — used for the capout
+    // board title ("ALLIES CAPOUT BY <names>"). Built before the count resets.
+    new capout_by[256];
+    build_captor_names(cp_index, new_owner, capout_by, charsmax(capout_by));
+
     new json[512];
     formatex(json, charsmax(json),
         "{^"event^":^"flag_captured^",^"flag_id^":%d,^"flag_name^":^"%s^",^"new_owner^":^"%s^",^"captor_ids^":[%s]}",
         cp_index, flag_name, owner_str, captor_json);
     post_event(json);
 
+    // Credit caps + obj_score now that the owning team is known — only to
+    // captors that pass the team filter (mirrors build_pending_captor_list).
+    // Must run before the count reset below; emits updated player_score so the
+    // capout summary that follows reads the fresh caps/obj_score.
+    credit_pending_captors(cp_index, new_owner);
+
     g_flag_owner[cp_index]                = new_owner;
     g_flag_capping_team[cp_index]         = 0;
     g_flag_contested[cp_index]            = false;
     g_flag_last_progress[cp_index]        = -1;
     g_flag_pending_captor_count[cp_index] = 0;
+
+    // Capout = round end on cap maps, and the only reliable round-end trigger
+    // in prod (the Round_End logevent never fires in DoD). The capout board
+    // shows half-cumulative stats; per-single-flag-cap popups were dropped —
+    // the flag feed already announces each cap. ev_round_end below is kept for
+    // completeness; the dedupe guard collapses doubles if both ever fire.
+    if (g_flag_count > 0) {
+        new bool:capout = true;
+        for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
+            if (g_flag_owner[f] != new_owner) {
+                capout = false;
+                break;
+            }
+        }
+        if (capout) {
+            // Pass the capping team + the final flag's captor names so the
+            // board titles "ALLIES CAPOUT BY <names>".
+            emit_stats_summary(SUMMARY_ROUND_END, owner_str, capout_by);
+        }
+    }
+}
+
+// Credit obj_score + caps to each pending captor that's actually on the team
+// now owning the CP, then push an updated player_score. The team filter mirrors
+// build_pending_captor_list so a drifted/cross-team score event can't inflate a
+// non-captor's stats. Called once per capture, before the count is reset.
+stock credit_pending_captors(cp_index, owning_team) {
+    new n = g_flag_pending_captor_count[cp_index];
+    for (new i = 0; i < n; i++) {
+        new id = g_flag_pending_captor_ids[cp_index][i];
+        if (!is_user_connected(id)) continue;
+        if (get_user_team(id) != owning_team) continue;
+        g_player_objscore[id] += g_flag_pending_captor_score[cp_index][i];
+        g_player_caps[id]++;
+        emit_player_score(id);
+    }
 }
 
 stock build_pending_captor_list(cp_index, owning_team, out[], len) {
@@ -1186,6 +1511,29 @@ stock build_pending_captor_list(cp_index, owning_team, out[], len) {
         new steamid[32];
         get_steamid(id, steamid, charsmax(steamid));
         formatex(tmp, charsmax(tmp), "%s^"%s^"", written > 0 ? "," : "", steamid);
+        add(out, len, tmp);
+        written++;
+    }
+}
+
+// Comma-joined, JSON-escaped display names of a flag's pending captors — for
+// the capout board title. Same team filter as build_pending_captor_list.
+stock build_captor_names(cp_index, owning_team, out[], len) {
+    out[0] = '^0';
+    new n = g_flag_pending_captor_count[cp_index];
+    new written = 0;
+    for (new i = 0; i < n; i++) {
+        new id = g_flag_pending_captor_ids[cp_index][i];
+        if (!is_user_connected(id)) continue;
+        if (get_user_team(id) != owning_team) continue;
+        // Whole entries only — a name cut mid-escape-sequence would leave a
+        // dangling ^" / backslash and corrupt the summary JSON. Reserve room
+        // for one full escaped name (128) + ", " separator.
+        if (strlen(out) > len - 132) break;
+        new name[64], name_esc[128], tmp[160];
+        get_user_name(id, name, charsmax(name));
+        escape_json(name, name_esc, charsmax(name_esc));
+        formatex(tmp, charsmax(tmp), "%s%s", written > 0 ? ", " : "", name_esc);
         add(out, len, tmp);
         written++;
     }
@@ -1213,6 +1561,14 @@ public cmd_dump_zones(id, level, cid) {
             f, g_flag_name_cache[f], ot, isc, ct, ac, an, xc, xn,
             tr, ct_total, g_flag_capping_team[f]);
     }
+    return PLUGIN_HANDLED;
+}
+
+public cmd_statsboard(id, level, cid) {
+    if (!cmd_access(id, ADMIN_RCON, cid, 1)) return PLUGIN_HANDLED;
+
+    emit_stats_summary(SUMMARY_MANUAL);
+    console_print(id, "[HUD] stats summary emitted (reason=manual)");
     return PLUGIN_HANDLED;
 }
 

@@ -381,6 +381,141 @@ describe('player_score obj_score round-trip', () => {
     });
 });
 
+describe('stats fields round-trip (player_score extension + player_stats_summary)', () => {
+    let tmpDir: string;
+    let recorder: MatchRecorder;
+    let io: SocketServer;
+    let app: Application;
+
+    beforeEach(() => {
+        tmpDir = makeTmpDir();
+        recorder = new MatchRecorder(tmpDir);
+        io = new SocketServer(createServer());
+        app = makeApp('key', recorder, io);
+    });
+
+    afterEach(() => {
+        recorder.close();
+        io.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    async function post(body: Record<string, unknown>, hostname: string): Promise<void> {
+        await request(app)
+            .post('/ingest')
+            .set('X-Auth-Key', 'key')
+            .set('X-Server-Hostname', hostname)
+            .send(body);
+    }
+
+    const STATS = { damage: 240, assists: 2, hs_kills: 1, nade_kills: 1, gun_kills: 2, hits: 9, hs_hits: 2, caps: 3, best_streak: 4 };
+
+    it('replays extended player_score stat fields in the snapshot', async () => {
+        const host = 'KTP - Stats RT';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:10', name: 'Statser', team: 'allies' }, host);
+        await post({ event: 'player_score', user_id: 'STEAM_0:0:10', kills: 3, deaths: 1, score: 9, obj_score: 0, ...STATS }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const replayed = snapshot.find(e => e.event === 'player_score' && e.user_id === 'STEAM_0:0:10');
+        expect(replayed).toMatchObject({ kills: 3, deaths: 1, ...STATS });
+    });
+
+    it('defaults stat fields to 0 for old-plugin player_score events', async () => {
+        const host = 'KTP - Stats Compat';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:11', name: 'OldPlugin', team: 'axis' }, host);
+        await post({ event: 'player_score', user_id: 'STEAM_0:0:11', kills: 1, deaths: 0, score: 1 }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const replayed = snapshot.find(e => e.event === 'player_score' && e.user_id === 'STEAM_0:0:11');
+        expect(replayed).toMatchObject({
+            kills: 1, damage: 0, assists: 0, hs_kills: 0, nade_kills: 0, gun_kills: 0, hits: 0, hs_hits: 0, caps: 0, best_streak: 0,
+        });
+    });
+
+    it('zeroes stat fields on half_start', async () => {
+        const host = 'KTP - Stats HalfReset';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:12', name: 'Halfer', team: 'allies' }, host);
+        await post({ event: 'player_score', user_id: 'STEAM_0:0:12', kills: 4, deaths: 2, score: 14, obj_score: 0, ...STATS }, host);
+        await post({ event: 'half_start', half: 2, timeleft: 1200 }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const replayed = snapshot.find(e => e.event === 'player_score' && e.user_id === 'STEAM_0:0:12');
+        expect(replayed).toMatchObject({
+            kills: 0, damage: 0, assists: 0, hs_kills: 0, nade_kills: 0, gun_kills: 0, hits: 0, hs_hits: 0, caps: 0, best_streak: 0,
+        });
+    });
+
+    it('merges player_stats_summary rows into the cache by user_id', async () => {
+        const host = 'KTP - Summary Merge';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:13', name: 'Merged', team: 'allies' }, host);
+        await post({
+            event: 'player_stats_summary', reason: 'round_end',
+            players: [{ user_id: 'STEAM_0:0:13', name: 'Merged', team: 'allies', kills: 2, deaths: 1, obj_score: 5, ...STATS }],
+        }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const replayed = snapshot.find(e => e.event === 'player_score' && e.user_id === 'STEAM_0:0:13');
+        expect(replayed).toMatchObject({ kills: 2, deaths: 1, obj_score: 5, ...STATS });
+    });
+
+    it('replays the half_end summary to late joiners, and drops it on ktp_match_start', async () => {
+        const host = 'KTP - Halftime Replay';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:14', name: 'Half', team: 'axis' }, host);
+        const summary = {
+            event: 'player_stats_summary', reason: 'half_end',
+            players: [{ user_id: 'STEAM_0:0:14', name: 'Half', team: 'axis', kills: 5, deaths: 3, obj_score: 0, ...STATS }],
+        };
+        await post(summary, host);
+
+        let snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const replayed = snapshot.find(e => e.event === 'player_stats_summary');
+        expect(replayed).toMatchObject({ reason: 'half_end' });
+        expect(replayed.players).toHaveLength(1);
+
+        // A fresh half/match clears the cached board so it can't replay stale.
+        await post({ event: 'ktp_match_start', match_id: 'KTP-half-replay-1', map: 'dod_anzio', match_type: 1, half: 2 }, host);
+        snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        expect(snapshot.find(e => e.event === 'player_stats_summary')).toBeUndefined();
+    });
+
+    it('evicts the cached half_end summary on a half_start-only boundary (dropped ktp_match_start)', async () => {
+        // Guards the path where the half-2 ktp_match_start POST is lost (or, in
+        // the mocker, never sent) but half_start(half:2) arrives — without
+        // eviction the stale half-1 board would replay over live half 2.
+        const host = 'KTP - Halftime HalfStartEvict';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:16', name: 'HalfOnly', team: 'allies' }, host);
+        await post({
+            event: 'player_stats_summary', reason: 'half_end',
+            players: [{ user_id: 'STEAM_0:0:16', name: 'HalfOnly', team: 'allies', kills: 5, deaths: 3, obj_score: 0, ...STATS }],
+        }, host);
+
+        let snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        expect(snapshot.find(e => e.event === 'player_stats_summary')).toBeDefined();
+
+        // half_start with NO preceding ktp_match_start must still evict the cache.
+        await post({ event: 'half_start', half: 2, timeleft: 1200 }, host);
+        snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        expect(snapshot.find(e => e.event === 'player_stats_summary')).toBeUndefined();
+    });
+
+    it('persists player_stats_summary and half_end to events.jsonl (not socket-only)', async () => {
+        const host = 'KTP - Stats Disk';
+        const matchId = 'KTP-stats-disk-1';
+        await post({ event: 'ktp_match_start', match_id: matchId, map: 'dod_anzio', match_type: 1, half: 1 }, host);
+        await post({ event: 'half_end', match_id: matchId, half: 1, allies_score: 2, axis_score: 1 }, host);
+        await post({
+            event: 'player_stats_summary', match_id: matchId, reason: 'half_end',
+            players: [{ user_id: 'STEAM_0:0:15', name: 'Disk', team: 'allies', kills: 1, deaths: 0, obj_score: 0, ...STATS }],
+        }, host);
+        await post({ event: 'ktp_match_end', match_id: matchId }, host);
+
+        const events = fs.readFileSync(path.join(tmpDir, matchId, 'events.jsonl'), 'utf-8')
+            .trim().split('\n').filter(l => l).map(l => JSON.parse(l));
+        expect(events.map(e => e.event)).toEqual(
+            ['ktp_match_start', 'half_end', 'player_stats_summary', 'ktp_match_end']);
+    });
+});
+
 describe('getServerPlayerCount', () => {
     let tmpDir: string;
     let recorder: MatchRecorder;

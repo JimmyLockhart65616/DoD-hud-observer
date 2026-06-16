@@ -166,9 +166,12 @@ export default [
 
     { "flag_cap_progress": { "time": 8500, "flag_id": 1, "progress": 10, "capping_team": "axis" } },
 
-    // Damage before kill
+    // Damage before kill.
+    // Kills carry kill_class (nade|gun, from the plugin's is_nade_wpn) and
+    // assist_ids (players who dealt 50+ enemy damage to the victim this life,
+    // excluding the killer) — both NEW with the stats-popup feature.
     { "damage": { "time": 8800, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1003", "damage": 100, "weapon": "kar", "hitplace": 1, "victim_health": 0 } },
-    { "kill":   { "time": 9000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1003", "weapon": "kar",    "kill_type": "normal", "headshot": true,  "victim_prone": false, "killer_prone": false } },
+    { "kill":   { "time": 9000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1003", "weapon": "kar",    "kill_type": "normal", "kill_class": "gun", "headshot": true,  "victim_prone": false, "killer_prone": false, "assist_ids": [] } },
 
     { "flag_cap_progress": { "time": 9200, "flag_id": 1, "progress": 25, "capping_team": "axis" } },
 
@@ -184,7 +187,7 @@ export default [
     // Raphinha kills omenator on the point
     { "damage": { "time": 9950, "attacker_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2002", "damage": 55, "weapon": "garand", "hitplace": 2, "victim_health": 45 } },
     { "damage": { "time": 10000, "attacker_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2002", "damage": 55, "weapon": "garand", "hitplace": 3, "victim_health": 0 } },
-    { "kill":   { "time": 10000, "killer_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2002", "weapon": "garand", "kill_type": "normal", "headshot": false, "victim_prone": false, "killer_prone": false } },
+    { "kill":   { "time": 10000, "killer_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2002", "weapon": "garand", "kill_type": "normal", "kill_class": "gun", "headshot": false, "victim_prone": false, "killer_prone": false, "assist_ids": [] } },
 
     // Cap interrupted — last axis leaves zone
     { "flag_zone_players": { "time": 10300, "zones": [
@@ -212,7 +215,7 @@ export default [
 
     // ian still prone — killed while proning
     { "damage": { "time": 13900, "attacker_id": "STEAM_0:0:1004", "victim_id": "STEAM_0:0:2006", "damage": 100, "weapon": "spring", "hitplace": 1, "victim_health": 0 } },
-    { "kill":   { "time": 14000, "killer_id": "STEAM_0:0:1004", "victim_id": "STEAM_0:0:2006", "weapon": "spring", "kill_type": "normal", "headshot": true, "victim_prone": true, "killer_prone": false } },
+    { "kill":   { "time": 14000, "killer_id": "STEAM_0:0:1004", "victim_id": "STEAM_0:0:2006", "weapon": "spring", "kill_type": "normal", "kill_class": "gun", "headshot": true, "victim_prone": true, "killer_prone": false, "assist_ids": [] } },
 
     { "flag_cap_progress": { "time": 14200, "flag_id": 1, "progress": 60, "capping_team": "allies" } },
     { "flag_cap_progress": { "time": 14700, "flag_id": 1, "progress": 90, "capping_team": "allies" } },
@@ -231,40 +234,55 @@ export default [
     ]}},
 
     // Per-player score updates (ScoreShort event in plugin)
-    // Captors of the Street cap (1001, 1002) get +5 obj_score, mirroring the
-    // dod_score_event score_delta the live plugin accumulates.
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2001", "kills": 1, "deaths": 0, "score": 1, "obj_score": 0 } },
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1001", "kills": 1, "deaths": 0, "score": 7, "obj_score": 5 } },
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1002", "kills": 0, "deaths": 0, "score": 5, "obj_score": 5 } },
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1004", "kills": 1, "deaths": 0, "score": 1, "obj_score": 0 } },
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1003", "kills": 0, "deaths": 1, "score": 0, "obj_score": 0 } },
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2002", "kills": 0, "deaths": 1, "score": 0, "obj_score": 0 } },
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2006", "kills": 0, "deaths": 1, "score": 0, "obj_score": 0 } },
+    // Captors of the Street cap (1001, 1002) get +5 obj_score + caps:1, mirroring
+    // dod_score_event. player_score carries the stat accumulators (incl. caps +
+    // best_streak); old-plugin events without them still work (?? 0 fallback).
+    // NOTE: per-single-flag-cap stats popups were REMOVED — cumulative stats now
+    // appear on the capout board (round_end) and at half/match end.
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2001", "kills": 1, "deaths": 0, "score": 1, "obj_score": 0, "damage": 100, "assists": 0, "hs_kills": 1, "nade_kills": 0, "gun_kills": 1, "hits": 1, "hs_hits": 1, "caps": 0, "best_streak": 1 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1001", "kills": 1, "deaths": 0, "score": 7, "obj_score": 5, "damage": 110, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 1, "hits": 2, "hs_hits": 0, "caps": 1, "best_streak": 1 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1002", "kills": 0, "deaths": 0, "score": 5, "obj_score": 5, "damage": 0, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "caps": 1, "best_streak": 0 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1004", "kills": 1, "deaths": 0, "score": 1, "obj_score": 0, "damage": 100, "assists": 0, "hs_kills": 1, "nade_kills": 0, "gun_kills": 1, "hits": 1, "hs_hits": 1 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1003", "kills": 0, "deaths": 1, "score": 0, "obj_score": 0, "damage": 0, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2002", "kills": 0, "deaths": 1, "score": 0, "obj_score": 0, "damage": 0, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2006", "kills": 0, "deaths": 1, "score": 0, "obj_score": 0, "damage": 0, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0 } },
 
     // Tick-scoring re-broadcast — DoD periodically re-emits TeamScore for a
     // held flag with the same value, mostly as a sync nudge. The frontend
     // should be idempotent (same value → no visible change).
     { "team_score": { "time": 17000, "allies_score": 1, "axis_score": 0 } },
 
-    // More fighting
-    { "damage": { "time": 17800, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "damage": 35, "weapon": "mp44", "hitplace": 2, "victim_health": 65 } },
-    { "damage": { "time": 17900, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "damage": 35, "weapon": "mp44", "hitplace": 3, "victim_health": 30 } },
-    { "damage": { "time": 18000, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "damage": 35, "weapon": "mp44", "hitplace": 2, "victim_health": 0 } },
-    { "kill":   { "time": 18000, "killer_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "weapon": "mp44",   "kill_type": "normal", "headshot": false, "victim_prone": false, "killer_prone": false } },
+    // More fighting — assist sequence: "E t" softens bud with 55, "bad" finishes
+    // him → the kill carries assist_ids ["STEAM_0:0:2003"] and the kill feed
+    // shows "bad + E t".
+    { "damage": { "time": 17700, "attacker_id": "STEAM_0:0:2003", "victim_id": "STEAM_0:0:1002", "damage": 55, "weapon": "kar",  "hitplace": 2, "victim_health": 45 } },
+    { "damage": { "time": 17800, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "damage": 25, "weapon": "mp44", "hitplace": 3, "victim_health": 20 } },
+    { "damage": { "time": 18000, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "damage": 20, "weapon": "mp44", "hitplace": 2, "victim_health": 0 } },
+    { "kill":   { "time": 18000, "killer_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1002", "weapon": "mp44",   "kill_type": "normal", "kill_class": "gun", "headshot": false, "victim_prone": false, "killer_prone": false, "assist_ids": ["STEAM_0:0:2003"] } },
+    // Plugin emits player_score for the assister too (same pattern as cap credit).
+    { "player_score": { "time": 18100, "user_id": "STEAM_0:0:2003", "kills": 0, "deaths": 0, "score": 0, "obj_score": 0, "damage": 55, "assists": 1, "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 1, "hs_hits": 0 } },
     { "damage": { "time": 18900, "attacker_id": "STEAM_0:0:1006", "victim_id": "STEAM_0:0:2003", "damage": 100, "weapon": "garand", "hitplace": 1, "victim_health": 0 } },
-    { "kill":   { "time": 19000, "killer_id": "STEAM_0:0:1006", "victim_id": "STEAM_0:0:2003", "weapon": "garand", "kill_type": "normal", "headshot": true,  "victim_prone": false, "killer_prone": false } },
+    { "kill":   { "time": 19000, "killer_id": "STEAM_0:0:1006", "victim_id": "STEAM_0:0:2003", "weapon": "garand", "kill_type": "normal", "kill_class": "gun", "headshot": true,  "victim_prone": false, "killer_prone": false, "assist_ids": [] } },
     // mogers 2nd kill this round — streak
     { "damage": { "time": 19900, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1005", "damage": 100, "weapon": "kar", "hitplace": 2, "victim_health": 0 } },
-    { "kill":   { "time": 20000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1005", "weapon": "kar",    "kill_type": "normal", "headshot": false, "victim_prone": false, "killer_prone": false } },
+    { "kill":   { "time": 20000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1005", "weapon": "kar",    "kill_type": "normal", "kill_class": "gun", "headshot": false, "victim_prone": false, "killer_prone": false, "assist_ids": [] } },
 
-    // Teamkill
-    { "kill":     { "time": 21000, "killer_id": "STEAM_0:0:2005", "victim_id": "STEAM_0:0:2004", "weapon": "kar",  "kill_type": "teamkill", "headshot": false, "victim_prone": false, "killer_prone": false } },
+    // Teamkill — kill carries killer_tk_count (Polak's running TK total this
+    // half). The kill feed shows "Polak (TK x1)". Polak TKs again at 21800 →
+    // "(TK x2)", demonstrating the running count the caster asked for.
+    { "kill":     { "time": 21000, "killer_id": "STEAM_0:0:2005", "victim_id": "STEAM_0:0:2004", "weapon": "kar",  "kill_type": "teamkill", "kill_class": "gun", "headshot": false, "victim_prone": false, "killer_prone": false, "killer_tk_count": 1, "assist_ids": [] } },
     { "user_say": { "time": 21500, "user_id": "STEAM_0:0:2004", "team_only": true, "message": "WTF POLAK" } },
+    { "kill":     { "time": 21800, "killer_id": "STEAM_0:0:2005", "victim_id": "STEAM_0:0:2002", "weapon": "kar",  "kill_type": "teamkill", "kill_class": "gun", "headshot": false, "victim_prone": false, "killer_prone": false, "killer_tk_count": 2, "assist_ids": [] } },
 
     // Self-frag — BitchX cooks a grenade too long and blows himself up. DODX
     // attributes the nade (weapon "grenade", killer == victim), so the kill feed
     // shows skull + grenade icon, not a bare generic suicide.
-    { "kill": { "time": 23000, "killer_id": "STEAM_0:0:1006", "victim_id": "STEAM_0:0:1006", "weapon": "grenade", "kill_type": "suicide", "headshot": false, "victim_prone": false, "killer_prone": false } },
+    { "kill": { "time": 23000, "killer_id": "STEAM_0:0:1006", "victim_id": "STEAM_0:0:1006", "weapon": "grenade", "kill_type": "suicide", "kill_class": "nade", "headshot": false, "victim_prone": false, "killer_prone": false, "assist_ids": [] } },
+
+    // Nade kill — mogers lands a stick grenade on storm (kill_class "nade",
+    // feeds the nade-kills column on the stats boards).
+    { "damage": { "time": 24400, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1004", "damage": 97, "weapon": "grenade2", "hitplace": 0, "victim_health": 0 } },
+    { "kill":   { "time": 24500, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1004", "weapon": "grenade2", "kill_type": "normal", "kill_class": "nade", "headshot": false, "victim_prone": false, "killer_prone": false, "assist_ids": [] } },
 
     // Zone re-poll mid-round
     { "flag_zone_players": { "time": 22000, "zones": [
@@ -306,15 +324,15 @@ export default [
 
     // Axis push hard — quick kills
     { "damage": { "time": 41900, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "damage": 100, "weapon": "kar", "hitplace": 1, "victim_health": 0 } },
-    { "kill":   { "time": 42000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "weapon": "kar",  "kill_type": "normal", "headshot": true,  "victim_prone": false, "killer_prone": false } },
+    { "kill":   { "time": 42000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "weapon": "kar",  "kill_type": "normal", "kill_class": "gun", "headshot": true,  "victim_prone": false, "killer_prone": false, "assist_ids": [] } },
     { "damage": { "time": 42800, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1006", "damage": 40, "weapon": "mp44", "hitplace": 4, "victim_health": 60 } },
     { "damage": { "time": 42900, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1006", "damage": 40, "weapon": "mp44", "hitplace": 2, "victim_health": 20 } },
     { "damage": { "time": 43000, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1006", "damage": 40, "weapon": "mp44", "hitplace": 3, "victim_health": 0 } },
-    { "kill":   { "time": 43000, "killer_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1006", "weapon": "mp44", "kill_type": "normal", "headshot": false, "victim_prone": false, "killer_prone": true } },
+    { "kill":   { "time": 43000, "killer_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1006", "weapon": "mp44", "kill_type": "normal", "kill_class": "gun", "headshot": false, "victim_prone": false, "killer_prone": true, "assist_ids": [] } },
     { "damage": { "time": 43900, "attacker_id": "STEAM_0:0:2002", "victim_id": "STEAM_0:0:1005", "damage": 30, "weapon": "mp40", "hitplace": 5, "victim_health": 70 } },
     { "damage": { "time": 44000, "attacker_id": "STEAM_0:0:2002", "victim_id": "STEAM_0:0:1005", "damage": 30, "weapon": "mp40", "hitplace": 2, "victim_health": 40 } },
     { "damage": { "time": 44000, "attacker_id": "STEAM_0:0:2002", "victim_id": "STEAM_0:0:1005", "damage": 40, "weapon": "mp40", "hitplace": 2, "victim_health": 0 } },
-    { "kill":   { "time": 44000, "killer_id": "STEAM_0:0:2002", "victim_id": "STEAM_0:0:1005", "weapon": "mp40", "kill_type": "normal", "headshot": false, "victim_prone": false, "killer_prone": false } },
+    { "kill":   { "time": 44000, "killer_id": "STEAM_0:0:2002", "victim_id": "STEAM_0:0:1005", "weapon": "mp40", "kill_type": "normal", "kill_class": "gun", "headshot": false, "victim_prone": false, "killer_prone": false, "assist_ids": [] } },
 
     // Axis cap the Street back. captor_ids: [] until flag_captured fires.
     { "flag_zone_players": { "time": 44500, "zones": [
@@ -334,11 +352,33 @@ export default [
     // Axis recap: their first +1 against allies' 2 (1 cap + 1 tick) = 2-1.
     { "team_score":        { "time": 48000, "allies_score": 2, "axis_score": 1 } },
 
-    // Captors of the Street recap (2001, 2004) get +5 obj_score from dod_score_event.
-    { "player_score": { "time": 48200, "user_id": "STEAM_0:0:2001", "kills": 2, "deaths": 0, "score": 7, "obj_score": 5 } },
-    { "player_score": { "time": 48200, "user_id": "STEAM_0:0:2004", "kills": 2, "deaths": 0, "score": 7, "obj_score": 5 } },
+    // Captors of the Street recap (2001, 2004) get +5 obj_score + caps:1.
+    // mogers (2001) strung 4 kills → best_streak 4.
+    { "player_score": { "time": 48200, "user_id": "STEAM_0:0:2001", "kills": 4, "deaths": 0, "score": 9, "obj_score": 5, "damage": 397, "assists": 0, "hs_kills": 2, "nade_kills": 1, "gun_kills": 3, "hits": 4, "hs_hits": 2, "caps": 1, "best_streak": 4 } },
+    { "player_score": { "time": 48200, "user_id": "STEAM_0:0:2004", "kills": 2, "deaths": 1, "score": 7, "obj_score": 5, "damage": 165, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 2, "hits": 5, "hs_hits": 0, "caps": 1, "best_streak": 2 } },
 
     { "time_sync": { "time": 56000, "timeleft": 1145 } },
+
+    // half_end (NEW): the plugin detects KTPMatchHandler's KTP_HALF_END log line
+    // (fires only at half-1 end, at the moment gameplay ends, before the
+    // changelevel) and emits half_end + a half_end stats summary. The frontend
+    // auto-shows the halftime stats board off the summary, then dismisses it
+    // when half 2 goes live (half_start below).
+    { "half_end": { "time": 57000, "half": 1, "allies_score": 2, "axis_score": 1 } },
+    { "player_stats_summary": { "time": 57050, "reason": "half_end", "players": [
+        { "user_id": "STEAM_0:0:1001", "name": "Raphinha", "team": "allies", "kills": 1, "deaths": 1, "assists": 0, "damage": 110, "hs_kills": 0, "nade_kills": 0, "gun_kills": 1, "hits": 2, "hs_hits": 0, "obj_score": 5, "caps": 1, "best_streak": 1 },
+        { "user_id": "STEAM_0:0:1002", "name": "bud",      "team": "allies", "kills": 0, "deaths": 1, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 5, "caps": 1, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1003", "name": "ORTIN",    "team": "allies", "kills": 0, "deaths": 1, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0, "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1004", "name": "storm",    "team": "allies", "kills": 1, "deaths": 1, "assists": 0, "damage": 100, "hs_kills": 1, "nade_kills": 0, "gun_kills": 1, "hits": 1, "hs_hits": 1, "obj_score": 0, "caps": 0, "best_streak": 1 },
+        { "user_id": "STEAM_0:0:1005", "name": "MaT*",     "team": "allies", "kills": 0, "deaths": 2, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0, "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1006", "name": "BitchX",   "team": "allies", "kills": 1, "deaths": 2, "assists": 0, "damage": 140, "hs_kills": 1, "nade_kills": 0, "gun_kills": 1, "hits": 2, "hs_hits": 1, "obj_score": 0, "caps": 0, "best_streak": 1 },
+        { "user_id": "STEAM_0:0:2001", "name": "mogers",   "team": "axis",   "kills": 4, "deaths": 0, "assists": 0, "damage": 397, "hs_kills": 2, "nade_kills": 1, "gun_kills": 3, "hits": 4, "hs_hits": 2, "obj_score": 5, "caps": 1, "best_streak": 4 },
+        { "user_id": "STEAM_0:0:2002", "name": "omenator", "team": "axis",   "kills": 1, "deaths": 1, "assists": 0, "damage": 100, "hs_kills": 0, "nade_kills": 0, "gun_kills": 1, "hits": 3, "hs_hits": 0, "obj_score": 0, "caps": 0, "best_streak": 1 },
+        { "user_id": "STEAM_0:0:2003", "name": "E t",      "team": "axis",   "kills": 0, "deaths": 1, "assists": 1, "damage": 55,  "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 1, "hs_hits": 0, "obj_score": 0, "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:2004", "name": "bad",      "team": "axis",   "kills": 2, "deaths": 1, "assists": 0, "damage": 165, "hs_kills": 0, "nade_kills": 0, "gun_kills": 2, "hits": 5, "hs_hits": 0, "obj_score": 5, "caps": 1, "best_streak": 2 },
+        { "user_id": "STEAM_0:0:2005", "name": "Polak",    "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0, "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:2006", "name": "ian",      "team": "axis",   "kills": 0, "deaths": 1, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0, "caps": 0, "best_streak": 0 },
+    ]}},
 
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -395,18 +435,65 @@ export default [
 
     // Some half 2 action
     { "damage": { "time": 69900, "attacker_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2003", "damage": 100, "weapon": "kar", "hitplace": 2, "victim_health": 0 } },
-    { "kill":   { "time": 70000, "killer_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2003", "weapon": "kar",    "kill_type": "normal", "headshot": false, "victim_prone": false, "killer_prone": false } },
+    { "kill":   { "time": 70000, "killer_id": "STEAM_0:0:1001", "victim_id": "STEAM_0:0:2003", "weapon": "kar",    "kill_type": "normal", "kill_class": "gun", "headshot": false, "victim_prone": false, "killer_prone": false, "assist_ids": [] } },
 
     // Production: player_team_change to "spectator" (someone going to ref/spec mid-half).
     // Also shows team="spectator" is a real production value (CLAUDE.md schema says allies|axis only).
     { "player_team_change": { "time": 70500, "user_id": "STEAM_0:0:1003", "team": "spectator" } },
 
-    { "damage": { "time": 71900, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "damage": 120, "weapon": "garand", "hitplace": 1, "victim_health": -20 } },
-    { "kill":   { "time": 72000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "weapon": "garand", "kill_type": "normal", "headshot": true,  "victim_prone": false, "killer_prone": false } },
+    // Assisted kill: bad softens Raphinha with 60, mogers headshots him.
+    { "damage": { "time": 71500, "attacker_id": "STEAM_0:0:2004", "victim_id": "STEAM_0:0:1001", "damage": 60, "weapon": "thompson", "hitplace": 2, "victim_health": 40 } },
+    { "damage": { "time": 71900, "attacker_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "damage": 120, "weapon": "garand", "hitplace": 1, "victim_health": -80 } },
+    { "kill":   { "time": 72000, "killer_id": "STEAM_0:0:2001", "victim_id": "STEAM_0:0:1001", "weapon": "garand", "kill_type": "normal", "kill_class": "gun", "headshot": true,  "victim_prone": false, "killer_prone": false, "assist_ids": ["STEAM_0:0:2004"] } },
 
     // Player rejoins from spec
     { "player_team_change": { "time": 72500, "user_id": "STEAM_0:0:1003", "team": "axis" } },
 
-    { "time_sync": { "time": 75000, "timeleft": 1187 } },
+    // ── Half-2 capout: allies (mogers' team this half) sweep all 5 flags ──────
+    // A full capout is the round-end trigger; the plugin emits a round_end
+    // summary → the cumulative CAPOUT board (half-2 stats so far). Per-single-
+    // flag-cap popups are gone; the flag feed still announces each cap.
+    { "flag_captured": { "time": 73000, "flag_id": 0, "flag_name": "POINT_ANZIO_PLAZA",   "new_owner": "allies", "captor_ids": ["STEAM_0:0:2001"] } },
+    { "flag_captured": { "time": 73050, "flag_id": 1, "flag_name": "POINT_ANZIO_STREET",  "new_owner": "allies", "captor_ids": ["STEAM_0:0:2004"] } },
+    { "flag_captured": { "time": 73100, "flag_id": 2, "flag_name": "POINT_ANZIO_HILL",    "new_owner": "allies", "captor_ids": ["STEAM_0:0:2001", "STEAM_0:0:2002"] } },
+    { "flag_captured": { "time": 73150, "flag_id": 3, "flag_name": "POINT_BRIDGE",        "new_owner": "allies", "captor_ids": ["STEAM_0:0:2005"] } },
+    { "flag_captured": { "time": 73200, "flag_id": 4, "flag_name": "POINT_ANZIO_LAUNDRY", "new_owner": "allies", "captor_ids": ["STEAM_0:0:2002"] } },
+    // Capout wins the round: allies 2 → 3.
+    { "team_score":    { "time": 73250, "allies_score": 3, "axis_score": 1 } },
+    { "player_stats_summary": { "time": 73300, "reason": "round_end", "capout_team": "allies", "capout_by": "omenator", "players": [
+        { "user_id": "STEAM_0:0:2001", "name": "mogers",   "team": "allies", "kills": 1, "deaths": 0, "assists": 0, "damage": 120, "hs_kills": 1, "nade_kills": 0, "gun_kills": 1, "hits": 1, "hs_hits": 1, "obj_score": 10, "caps": 2, "best_streak": 1 },
+        { "user_id": "STEAM_0:0:2002", "name": "omenator", "team": "allies", "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 10, "caps": 2, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:2003", "name": "E t",      "team": "allies", "kills": 0, "deaths": 1, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:2004", "name": "bad",      "team": "allies", "kills": 0, "deaths": 0, "assists": 1, "damage": 60,  "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 1, "hs_hits": 0, "obj_score": 5,  "caps": 1, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:2005", "name": "Polak",    "team": "allies", "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 5,  "caps": 1, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:2006", "name": "ian",      "team": "allies", "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1001", "name": "Raphinha", "team": "axis",   "kills": 1, "deaths": 1, "assists": 0, "damage": 100, "hs_kills": 0, "nade_kills": 0, "gun_kills": 1, "hits": 1, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 1 },
+        { "user_id": "STEAM_0:0:1002", "name": "bud",      "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1003", "name": "ORTIN",    "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1004", "name": "storm",    "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1005", "name": "MaT*",     "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1006", "name": "BitchX",   "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+    ]}},
+
+    { "time_sync": { "time": 76000, "timeleft": 1187 } },
+
+    // match_end stats summary (NEW): emitted from the plugin's ktp_match_end
+    // handler before the ktp_match_end event itself. Carries final-half stats;
+    // the frontend sums it with the cached half-1 totals for the FINAL STATS
+    // board. (mocker.ts POSTs the actual ktp_match_end after the sequence.)
+    { "player_stats_summary": { "time": 77000, "reason": "match_end", "players": [
+        { "user_id": "STEAM_0:0:2001", "name": "mogers",   "team": "allies", "kills": 1, "deaths": 0, "assists": 0, "damage": 120, "hs_kills": 1, "nade_kills": 0, "gun_kills": 1, "hits": 1, "hs_hits": 1, "obj_score": 10, "caps": 2, "best_streak": 1 },
+        { "user_id": "STEAM_0:0:2002", "name": "omenator", "team": "allies", "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 10, "caps": 2, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:2003", "name": "E t",      "team": "allies", "kills": 0, "deaths": 1, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:2004", "name": "bad",      "team": "allies", "kills": 0, "deaths": 0, "assists": 1, "damage": 60,  "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 1, "hs_hits": 0, "obj_score": 5,  "caps": 1, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:2005", "name": "Polak",    "team": "allies", "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 5,  "caps": 1, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:2006", "name": "ian",      "team": "allies", "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1001", "name": "Raphinha", "team": "axis",   "kills": 1, "deaths": 1, "assists": 0, "damage": 100, "hs_kills": 0, "nade_kills": 0, "gun_kills": 1, "hits": 1, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 1 },
+        { "user_id": "STEAM_0:0:1002", "name": "bud",      "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1003", "name": "ORTIN",    "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1004", "name": "storm",    "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1005", "name": "MaT*",     "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+        { "user_id": "STEAM_0:0:1006", "name": "BitchX",   "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
+    ]}},
 
 ]

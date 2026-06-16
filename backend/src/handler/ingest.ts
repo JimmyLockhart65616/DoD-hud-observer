@@ -24,6 +24,14 @@ const PLAYER_STALE_MS = 5 * 60 * 1000;
 // They still fan out to sockets + metrics — just skipped on disk.
 const SOCKET_ONLY_EVENTS = new Set(['player_state', 'weapon_active']);
 
+// Per-player stat fields introduced by the stats-popup feature. Shared by the
+// player_score copy, the half_start reset, and the snapshot replay so the
+// three can never drift apart.
+const PLAYER_STAT_FIELDS = [
+    'damage', 'assists', 'hs_kills', 'nade_kills', 'gun_kills', 'hits', 'hs_hits',
+    'caps', 'best_streak',
+] as const;
+
 interface ServerState {
     players: Map<string, any>;    // user_id → latest player_connect/spawn/score state
     team_score: any | null;       // latest team_score event
@@ -31,6 +39,9 @@ interface ServerState {
     timeleft: any | null;         // latest time_sync event
     half: number | null;          // current half (1, 2, 101+) from latest half_start
     round_phase: 'freeze' | 'live' | 'end' | null;  // latest round_start_freeze/round_start/round_end
+    halftime_summary: any | null; // latest player_stats_summary with reason half_end —
+                                  // replayed to late joiners so a freshly-loaded OBS
+                                  // page at halftime still auto-shows the stats board
 }
 
 const serverStates = new Map<string, ServerState>();
@@ -44,6 +55,7 @@ function getOrCreateState(server: string): ServerState {
             timeleft: null,
             half: null,
             round_phase: null,
+            halftime_summary: null,
         });
     }
     return serverStates.get(server)!;
@@ -61,6 +73,7 @@ function updateServerState(server: string, event: any): void {
             state.players.clear();
             state.team_score = null;
             state.round_phase = null;
+            state.halftime_summary = null;
             if (event.event === 'ktp_match_start' && event.half != null) {
                 state.half = event.half;
             }
@@ -130,6 +143,24 @@ function updateServerState(server: string, event: any): void {
                 p.deaths = event.deaths;
                 p.score = event.score;
                 p.obj_score = event.obj_score ?? 0;
+                // Stat fields absent from old-plugin events default to 0.
+                PLAYER_STAT_FIELDS.forEach(f => { p[f] = event[f] ?? 0; });
+            }
+            break;
+        case 'player_stats_summary':
+            // Batched per-player stats from the plugin — merge each row into
+            // the cache by user_id (rows are authoritative for stat fields).
+            (event.players ?? []).forEach((row: any) => {
+                if (!state.players.has(row.user_id)) return;
+                const p = state.players.get(row.user_id);
+                p.kills = row.kills ?? p.kills;
+                p.deaths = row.deaths ?? p.deaths;
+                p.obj_score = row.obj_score ?? p.obj_score;
+                PLAYER_STAT_FIELDS.forEach(f => { p[f] = row[f] ?? 0; });
+                p.lastSeen = now;
+            });
+            if (event.reason === 'half_end') {
+                state.halftime_summary = event;
             }
             break;
         case 'kill':
@@ -177,11 +208,17 @@ function updateServerState(server: string, event: any): void {
                 p.kills = 0; p.deaths = 0; p.score = 0; p.obj_score = 0;
                 p.alive = true; p.class_id = null; p.health = 100;
                 p.prone_state = 'standing'; p.prone_since = null;
+                PLAYER_STAT_FIELDS.forEach(f => { p[f] = 0; });
                 p.lastSeen = now;
             });
             if (event.half != null) state.half = event.half;
             state.round_phase = null;
             state.timeleft = event;
+            // Evict the cached halftime board so it can't replay over live play.
+            // Normally ktp_match_start (fired just before half_start) already
+            // cleared it, but a dropped ktp_match_start POST — or a half_start-
+            // only boundary — would otherwise strand the prior half's board.
+            state.halftime_summary = null;
             break;
     }
 
@@ -270,13 +307,21 @@ export function getServerSnapshot(server: string): string[] {
             prone_since: p.prone_since ?? null,
         }));
         if (p.kills != null || p.deaths != null) {
-            events.push(JSON.stringify({
+            const score: any = {
                 event: 'player_score', user_id: p.user_id,
                 kills: p.kills ?? 0, deaths: p.deaths ?? 0,
                 score: p.score ?? 0, obj_score: p.obj_score ?? 0,
-            }));
+            };
+            PLAYER_STAT_FIELDS.forEach(f => { score[f] = p[f] ?? 0; });
+            events.push(JSON.stringify(score));
         }
     });
+
+    // Replay the halftime stats summary last so a freshly-loaded OBS page at
+    // halftime auto-shows the stats board (players are already seeded above).
+    if (state.halftime_summary) {
+        events.push(JSON.stringify(state.halftime_summary));
+    }
 
     return events;
 }

@@ -197,6 +197,36 @@ describe('mocker lifecycle — scripted match round-trips through ingest → dis
             .find((e: { event: string; weapon?: string }) =>
                 e.event === 'kill' && e.weapon === 'garand');
         expect(killWithGarand).toBeDefined();
+
+        // ── Stats-popup feature events round-trip to disk ────────────────
+        const parsed = lines.map(l => JSON.parse(l));
+
+        // player_stats_summary is persisted (NOT socket-only) — one per
+        // authored reason: half_end, match_end, round_end (the H2 capout).
+        // The per-single-flag-cap summary was removed.
+        const summaries = parsed.filter((e: any) => e.event === 'player_stats_summary');
+        expect(summaries.map((s: any) => s.reason).sort()).toEqual(
+            ['half_end', 'match_end', 'round_end']);
+        expect(summaries.some((s: any) => s.reason === 'flag_captured')).toBe(false);
+        // Rows carry the full stat shape (incl. caps + best_streak).
+        expect(summaries[0].players[0]).toMatchObject({
+            user_id: expect.any(String), team: expect.any(String),
+            kills: expect.any(Number), damage: expect.any(Number),
+            assists: expect.any(Number), hs_kills: expect.any(Number),
+            nade_kills: expect.any(Number), gun_kills: expect.any(Number),
+            caps: expect.any(Number), best_streak: expect.any(Number),
+        });
+
+        // half_end marker is persisted.
+        const halfEnd = parsed.find((e: any) => e.event === 'half_end');
+        expect(halfEnd).toMatchObject({ half: 1, allies_score: 2, axis_score: 1 });
+
+        // Kills carry kill_class + assist_ids; at least one authored assist.
+        const kills = parsed.filter((e: any) => e.event === 'kill');
+        expect(kills.every((k: any) => k.kill_class === 'gun' || k.kill_class === 'nade')).toBe(true);
+        expect(kills.every((k: any) => Array.isArray(k.assist_ids))).toBe(true);
+        expect(kills.some((k: any) => k.assist_ids.length > 0)).toBe(true);
+        expect(kills.some((k: any) => k.kill_class === 'nade' && k.kill_type === 'normal')).toBe(true);
     }, 30000);
 
     it('does not emit production-impossible events', async () => {

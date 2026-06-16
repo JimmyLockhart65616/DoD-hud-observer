@@ -15,6 +15,15 @@ class Welcome extends React.Component {
                             <li><a href="/help">Viewer Guide</a> — how to set up and use the HUD in OBS</li>
                         </ul>
                         <h5 style={{ marginTop: '32px' }}>
+                            What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-06-13</small>
+                        </h5>
+                        <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>
+                            <li>Stats board on every full capout, at halftime, and at match end — cumulative per-player kills/deaths/assists, damage, headshot %, flag caps, grenade kills, and best kill streak, with team totals and an MVP highlight</li>
+                            <li>The capout board is titled by who swept the last flag (e.g. "ALLIES CAPOUT BY mogers")</li>
+                            <li>Assists tracked (50+ damage to a victim someone else finishes) and shown inline in the kill feed</li>
+                            <li>Teamkill count surfaced in the kill feed (e.g. "TK ×2")</li>
+                        </ul>
+                        <h5 style={{ marginTop: '32px' }}>
                             What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-06-10</small>
                         </h5>
                         <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>

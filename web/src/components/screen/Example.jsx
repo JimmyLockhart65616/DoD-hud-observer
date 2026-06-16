@@ -8,6 +8,7 @@ import PlayersLeft from '../core/PlayersLeft/PlayersLeft';
 import PlayersRight from '../core/PlayersRight/PlayersRight';
 import Flags from '../core/Flags/Flags';
 import FlagFeed from '../core/FlagFeed/FlagFeed';
+import StatsBoard from '../core/StatsBoard/StatsBoard';
 // PlayerObserved disabled: no HLTV signal yet to know which player the caster is watching.
 // import PlayerObserved from '../core/PlayerObserved/PlayerObserved';
 
@@ -39,6 +40,7 @@ function Example() {
     const flagFeed      = useHudStore(s => s.flag_feed);
     const timeleft      = useHudStore(s => s.timeleft);
     const timeleftAt    = useHudStore(s => s.timeleft_at);
+    const statsBoard    = useHudStore(s => s.stats_board);
 
     return (
         <div className="grid-container">
@@ -79,7 +81,9 @@ function Example() {
                 </span>
             </div>
 
-            <div className="hud-middle" />
+            <div className="hud-middle">
+                <StatsBoard board={statsBoard} settings={hudconfig.settings} />
+            </div>
 
             {/* <div className="observed-bar">
                 <PlayerObserved players={[...alliesPlayers, ...axisPlayers]} />

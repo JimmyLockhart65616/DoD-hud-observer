@@ -52,6 +52,93 @@ let flagEventSeq = 0;
 let killSeq = 0;
 let dmgSeq = 0;
 
+// Per-player stat fields streamed by the plugin (player_score extension +
+// player_stats_summary rows). Shared so defaults/resets/copies can't drift.
+// `best_streak` is special-cased in addStatRows (max, not sum) for match totals.
+const STAT_FIELDS = ['damage', 'assists', 'hs_kills', 'nade_kills', 'gun_kills', 'hits', 'hs_hits', 'caps', 'best_streak'];
+
+// True once an authoritative stats board (reason half_end/match_end) was shown
+// for the current half boundary — suppresses the snapshot fallback at the next
+// half boundary so the board doesn't re-show over live play.
+let boundaryBoardShown = false;
+
+// Per-completed-half stat contributions for the cumulative match-end board,
+// keyed by half number → { user_id → statRow }. Stored per-half (not eagerly
+// summed) so the AUTHORITATIVE half_end/match_end summary can OVERRIDE a
+// store-snapshot fallback for the same half. halfSource records which won.
+// The plugin emits the half_end marker event slightly before the half_end
+// summary on the same socket, so the snapshot would otherwise lock the fold
+// first; preferring 'summary' honors the intended authoritative-summary design.
+// Reset on half 1 (fresh match).
+let halfRows = {};      // { [half]: { [user_id]: statRow } }
+let halfSource = {};    // { [half]: 'snapshot' | 'summary' }
+
+// The prod plugin emits ktp_match_start AND half_start at every half boundary;
+// the mocker emits only half_start after half 1. Boundary work (record carry,
+// dismiss/fallback board) must run exactly once per boundary from whichever
+// event arrives first.
+let boundaryHandledForHalf = null;
+
+// Record a completed half's contribution. A 'summary' source (authoritative
+// plugin stats) overrides an earlier 'snapshot' (store-derived fallback) for
+// the same half; a 'snapshot' never overrides a 'summary'.
+function recordHalf(rows, endingHalf, source) {
+    if (endingHalf == null) return;
+    if (halfSource[endingHalf] === 'summary' && source !== 'summary') return;
+    const byId = {};
+    rows.forEach(r => { byId[r.user_id] = r; });
+    halfRows[endingHalf] = byId;
+    halfSource[endingHalf] = source;
+}
+
+// Sum all recorded prior-half contributions by user_id (best_streak takes max
+// via addStatRows). Consumed by the match_end board for full-match totals.
+function carrySoFar() {
+    const merged = {};
+    Object.keys(halfRows).forEach(h => {
+        Object.values(halfRows[h]).forEach(r => {
+            merged[r.user_id] = merged[r.user_id] ? addStatRows(merged[r.user_id], r) : r;
+        });
+    });
+    return merged;
+}
+
+function handleHalfBoundary(newHalf) {
+    if (newHalf == null || boundaryHandledForHalf === newHalf) return;
+    boundaryHandledForHalf = newHalf;
+
+    const { allies_players, axis_players, stats_board, setStatsBoard, half } = useHudStore.getState();
+    const preReset = [...allies_players, ...axis_players].map(statRow);
+
+    if (newHalf === 1) {
+        // Fresh match — drop carryover and any lingering board.
+        halfRows = {};
+        halfSource = {};
+        setStatsBoard(null);
+    } else if (newHalf >= 2) {
+        // Record the completed half's stats from the store snapshot (a no-op if
+        // the authoritative half_end summary already recorded this half).
+        recordHalf(preReset, half, 'snapshot');
+
+        if (boundaryBoardShown) {
+            // The halftime board ran through warmup — the new half going live
+            // dismisses it.
+            setStatsBoard(null);
+        } else if (preReset.some(r => r.kills || r.deaths || r.damage)) {
+            // Universal fallback: no half_end/match_end signal made it through
+            // (lost POST, or the signal-less H2→OT boundary). Show the
+            // pre-reset snapshot; the shorter fallback TTL dismisses it.
+            setStatsBoard({
+                reason: 'half_end', fallback: true,
+                players: preReset, addedAt: Date.now(),
+            });
+        }
+    } else if (stats_board?.reason === 'round_end') {
+        setStatsBoard(null);
+    }
+    boundaryBoardShown = false;
+}
+
 // ─── Zustand Store ────────────────────────────────────────────────────────────
 
 export const useHudStore = create(set => ({
@@ -80,6 +167,10 @@ export const useHudStore = create(set => ({
 
     // Kill streaks: { [user_id]: number } — consecutive kills without dying (resets on death/round)
     kill_streaks: {},
+
+    // Full stats board: null | { reason, fallback, players, addedAt }
+    // reason: round_end (capout) | half_end | match_end | manual — TTL varies by reason
+    stats_board: null,
 
     // Chat messages: [{ user_id, name, team, team_only, message, timestamp }]
     chat: [],
@@ -146,6 +237,8 @@ export const useHudStore = create(set => ({
 
     setRoundState: (info) => set({ round_state: { ...info } }),
 
+    setStatsBoard: (board) => set({ stats_board: board }),
+
     // Reset kill streaks (on round start)
     resetStreaks: () => set({ kill_streaks: {} }),
 
@@ -153,26 +246,29 @@ export const useHudStore = create(set => ({
     // Team scores deliberately preserved — the match score carries across halves;
     // the plugin re-emits team_score immediately after half_start to seed the
     // correct cumulative value (carryover for half 2/OT, 0/0 for half 1).
-    resetHalf: () => set(state => ({
-        kills: [],
-        flag_feed: [],
-        chat: [],
-        kill_streaks: {},
-        timeleft: null,
-        timeleft_at: null,
-        allies_players: state.allies_players.map(p => ({
+    // stats_board deliberately survives both resets — boards shown at a half
+    // boundary must persist into the next half's warmup; dismissal is handled
+    // explicitly in the ktp_match_start handler + render-time TTL.
+    resetHalf: () => set(state => {
+        const wipe = p => ({
             ...p, health: 100, dead: false, prone_state: 'standing', prone_since: null,
             kills: 0, deaths: 0, score: 0, obj_score: 0,
+            damage: 0, assists: 0, hs_kills: 0, nade_kills: 0, gun_kills: 0, hits: 0, hs_hits: 0,
+            caps: 0, best_streak: 0,
             weapon_primary: null, weapon_secondary: null, class_id: null,
             weapon_active: null, nades: null, last_damage: null, last_damage_at: null,
-        })),
-        axis_players: state.axis_players.map(p => ({
-            ...p, health: 100, dead: false, prone_state: 'standing', prone_since: null,
-            kills: 0, deaths: 0, score: 0, obj_score: 0,
-            weapon_primary: null, weapon_secondary: null, class_id: null,
-            weapon_active: null, nades: null, last_damage: null, last_damage_at: null,
-        })),
-    })),
+        });
+        return {
+            kills: [],
+            flag_feed: [],
+            chat: [],
+            kill_streaks: {},
+            timeleft: null,
+            timeleft_at: null,
+            allies_players: state.allies_players.map(wipe),
+            axis_players: state.axis_players.map(wipe),
+        };
+    }),
 
     // Hard reset on a brand-new match. Clears player arrays so the plugin's
     // roster dump rebuilds them from scratch — kills any stale ghosts left
@@ -217,8 +313,42 @@ function makeDefaultPlayer(user_id, name, team) {
         deaths:           0,
         score:            0,
         obj_score:        0,
+        damage:           0,
+        assists:          0,
+        hs_kills:         0,
+        nade_kills:       0,
+        gun_kills:        0,
+        hits:             0,
+        hs_hits:          0,
+        caps:             0,
+        best_streak:      0,
         spectate:         false,
     };
+}
+
+// Snapshot the stat row a popup/board needs from a live store player.
+function statRow(p) {
+    const row = {
+        user_id: p.user_id, name: p.name, team: p.team,
+        kills: p.kills ?? 0, deaths: p.deaths ?? 0, obj_score: p.obj_score ?? 0,
+    };
+    STAT_FIELDS.forEach(f => { row[f] = p[f] ?? 0; });
+    return row;
+}
+
+// Combine b's stats into a (both statRow-shaped); used for cumulative match-end
+// totals across halves. Additive fields sum; best_streak takes the max (a
+// streak doesn't carry across the half boundary).
+function addStatRows(a, b) {
+    const out = { ...a, name: b.name ?? a.name, team: b.team ?? a.team };
+    ['kills', 'deaths', 'obj_score', ...STAT_FIELDS].forEach(f => {
+        if (f === 'best_streak') {
+            out[f] = Math.max(a[f] ?? 0, b[f] ?? 0);
+        } else {
+            out[f] = (a[f] ?? 0) + (b[f] ?? 0);
+        }
+    });
+    return out;
 }
 
 function updatePlayer(players, user_id, updater) {
@@ -371,7 +501,14 @@ export const SocketStoreComponent = () => {
                 ?? playerDirectory[e.victim_id]
                 ?? { name: e.victim_id, team: 'unknown' };
 
-            addKill({ ...e, killer, victim });
+            // Assister names for the kill feed (50+ damage, attributed by the plugin)
+            const assisters = (e.assist_ids || []).map(id =>
+                allPlayers.find(p => p.user_id === id)
+                ?? playerDirectory[id]
+                ?? { name: id, team: killer.team }
+            );
+
+            addKill({ ...e, killer, victim, assisters });
 
             // Mark victim dead, clear prone shame + live weapon/nades
             const deadState = { health: 0, dead: true, prone_state: 'standing', prone_since: null,
@@ -501,12 +638,92 @@ export const SocketStoreComponent = () => {
 
         gameEvents.on('player_score', (raw) => {
             const e = JSON.parse(raw);
-            const scoreUpdate = () => ({
-                kills: e.kills, deaths: e.deaths,
-                score: e.score, obj_score: e.obj_score ?? 0,
-            });
+            const scoreUpdate = () => {
+                const update = {
+                    kills: e.kills, deaths: e.deaths,
+                    score: e.score, obj_score: e.obj_score ?? 0,
+                };
+                // Stat fields absent from old-plugin events default to 0.
+                STAT_FIELDS.forEach(f => { update[f] = e[f] ?? 0; });
+                return update;
+            };
             setAlliesPlayers(prev => updatePlayer(prev, e.user_id, scoreUpdate));
             setAxisPlayers(prev => updatePlayer(prev, e.user_id, scoreUpdate));
+        });
+
+        // ── Stats summary / boards ────────────────────────────────────────────
+
+        // Batched per-player stats from the plugin at discrete boundaries
+        // (cap / round end / half end / match end / rcon amx_hud_statsboard).
+        // Always merge stats into the team arrays; board-worthy reasons also
+        // set the centered stats board.
+        gameEvents.on('player_stats_summary', (raw) => {
+            const e = JSON.parse(raw);
+            const rows = e.players ?? [];
+            const byId = {};
+            rows.forEach(r => { byId[r.user_id] = r; });
+
+            const apply = prev => prev.map(pl => {
+                const r = byId[pl.user_id];
+                if (!r) return pl;
+                const update = {
+                    kills: r.kills ?? pl.kills,
+                    deaths: r.deaths ?? pl.deaths,
+                    obj_score: r.obj_score ?? pl.obj_score,
+                };
+                STAT_FIELDS.forEach(f => { update[f] = r[f] ?? 0; });
+                return { ...pl, ...update };
+            });
+            setAlliesPlayers(apply);
+            setAxisPlayers(apply);
+
+            if (e.reason === 'half_end') {
+                boundaryBoardShown = true;
+                // Authoritative — overrides any store-snapshot fold for this half.
+                recordHalf(rows.map(r => statRow(r)), useHudStore.getState().half, 'summary');
+                useHudStore.getState().setStatsBoard({
+                    reason: 'half_end', players: rows.map(r => statRow(r)), addedAt: Date.now(),
+                });
+            } else if (e.reason === 'match_end') {
+                // Full-match totals: recorded prior halves + this (final) half.
+                // OT caveat: no summary fires at the H2→OT boundary, so OT
+                // matches sum whatever boundary snapshots were recorded.
+                boundaryBoardShown = true;
+                const merged = carrySoFar();
+                rows.forEach(r => {
+                    merged[r.user_id] = merged[r.user_id]
+                        ? addStatRows(merged[r.user_id], statRow(r))
+                        : statRow(r);
+                });
+                useHudStore.getState().setStatsBoard({
+                    reason: 'match_end', players: Object.values(merged), addedAt: Date.now(),
+                });
+            } else if (e.reason === 'round_end' || e.reason === 'manual') {
+                // round_end fires on a full capout — the cumulative capout board.
+                // capout_team/capout_by title it "ALLIES CAPOUT BY <names>".
+                useHudStore.getState().setStatsBoard({
+                    reason: e.reason, players: rows.map(r => statRow(r)), addedAt: Date.now(),
+                    capout_team: e.capout_team ?? null, capout_by: e.capout_by ?? null,
+                });
+            }
+        });
+
+        // Best-effort half-end marker from the plugin (KTP_HALF_END log line).
+        // The summary normally lands in the same instant and overwrites this
+        // store-derived board; if the half_end POST is the only survivor of the
+        // changelevel, this still auto-shows the halftime board.
+        gameEvents.on('half_end', () => {
+            const { allies_players, axis_players, stats_board, setStatsBoard, half } = getState();
+            const players = [...allies_players, ...axis_players].map(statRow);
+            if (players.length === 0) return;
+            // Snapshot fallback for the carry — the authoritative summary, if it
+            // arrives, overrides this via recordHalf's source precedence.
+            recordHalf(players, half, 'snapshot');
+            // The two POSTs (half_end + summary) can arrive in either order —
+            // never clobber an authoritative board that just landed.
+            if (stats_board?.reason === 'half_end' && Date.now() - stats_board.addedAt < 5000) return;
+            boundaryBoardShown = true;
+            setStatsBoard({ reason: 'half_end', players, addedAt: Date.now() });
         });
 
         gameEvents.on('team_score', (raw) => {
@@ -527,6 +744,10 @@ export const SocketStoreComponent = () => {
             if (e.timeleft != null) setTimeleft(e.timeleft);
             setRoundState({ round_end: false, round_freeze: false, round_start: true });
             resetStreaks();
+
+            // A new live round dismisses any round-end mini board early.
+            const { stats_board, setStatsBoard } = getState();
+            if (stats_board?.reason === 'round_end') setStatsBoard(null);
         });
 
         gameEvents.on('round_end', (raw) => {
@@ -548,6 +769,8 @@ export const SocketStoreComponent = () => {
 
         gameEvents.on('half_start', (raw) => {
             const e = JSON.parse(raw);
+            // Boundary bookkeeping (no-op when ktp_match_start already ran it).
+            handleHalfBoundary(e.half);
             setHalf(e.half);
             resetHalf();
             if (e.timeleft != null) setTimeleft(e.timeleft);
@@ -560,6 +783,8 @@ export const SocketStoreComponent = () => {
         // race where do_roster_dump runs while a player is still spawn-pending.
         gameEvents.on('ktp_match_start', (raw) => {
             const e = typeof raw === 'string' ? JSON.parse(raw) : (raw ?? {});
+            // Boundary bookkeeping runs BEFORE resetMatch wipes stats.
+            handleHalfBoundary(e.half);
             resetMatch(e.half);
             if (e.half != null) setHalf(e.half);
         });
@@ -670,6 +895,8 @@ export const SocketStoreComponent = () => {
                 allPlayers.find(p => p.user_id === id) ?? playerDirectory[id]
             ).filter(Boolean);
 
+            // The flag feed announces every cap. Cumulative per-player stats are
+            // shown on the capout board (round_end summary), not per single cap.
             addFlagEvent({
                 kind: 'captured',
                 flag_name: e.flag_name,

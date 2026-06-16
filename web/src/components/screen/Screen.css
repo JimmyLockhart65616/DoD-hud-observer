@@ -414,6 +414,151 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+   STATS BOARD (centered overlay — capout / halftime / match end)
+   ═══════════════════════════════════════════════════════════════════ */
+.stats-board {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  background-color: rgba(20, 22, 40, 0.94);
+  border-radius: 6px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+  padding: 14px 18px 16px;
+  pointer-events: none;
+  animation: statsboard-fade-in 0.3s ease-out;
+}
+
+@keyframes statsboard-fade-in {
+  from { opacity: 0; transform: translate(-50%, -48%); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+.stats-board-title {
+  text-align: center;
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  color: #fff;
+  text-shadow: 1px 1px 4px rgba(0, 0, 0, 0.7);
+  margin-bottom: 12px;
+}
+
+.stats-board-teams {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.stats-board-team {
+  border-radius: 4px;
+  overflow: hidden;
+  border-top: 3px solid transparent;
+}
+
+.stats-board-allies { border-top-color: #8FA847; background-color: rgba(65, 85, 30, 0.35); }
+.stats-board-axis   { border-top-color: #C43030; background-color: rgba(130, 28, 28, 0.35); }
+
+.stats-board-team-name {
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  padding: 5px 0 3px;
+}
+
+.stats-board-allies .stats-board-team-name { color: #c8e090; }
+.stats-board-axis   .stats-board-team-name { color: #ffb8b8; }
+
+.stats-board-table {
+  border-collapse: collapse;
+}
+
+.stats-board-table th,
+.stats-board-table td {
+  padding: 3px 9px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #d8dae8;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-board-table th {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  color: #9aa0c0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.stats-board-table tbody tr:nth-child(odd) {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.stats-board-player-col {
+  text-align: left !important;
+  min-width: 110px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-board-allies td.stats-board-player-col { color: #c8e090; }
+.stats-board-axis   td.stats-board-player-col { color: #ffb8b8; }
+
+.stats-board-dmg { color: #FFD700; }
+
+.stats-board-nade-icon {
+  height: 13px;
+  width: auto;
+  vertical-align: middle;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.7));
+}
+
+/* MVP row — top damage on each team */
+.stats-board-table tbody tr.stats-board-mvp {
+  background-color: rgba(255, 215, 0, 0.14);
+}
+
+.stats-board-table tbody tr.stats-board-mvp td.stats-board-player-col {
+  color: #FFD700;
+  font-weight: 800;
+}
+
+.stats-board-mvp-tag {
+  display: inline-block;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+  color: #2a2200;
+  background-color: #FFD700;
+  border-radius: 2px;
+  padding: 0 3px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+/* Team totals footer row */
+.stats-board-table tfoot tr.stats-board-totals td {
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: 11px;
+  font-weight: 800;
+  color: #aeb3d0;
+  letter-spacing: 0.4px;
+}
+
+.stats-board-table tfoot tr.stats-board-totals td.stats-board-player-col {
+  color: #8990b5;
+}
+
+.stats-board-table tfoot tr.stats-board-totals td.stats-board-dmg {
+  color: #d9bd4d;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    KILL FEED (top-right absolute)
    ═══════════════════════════════════════════════════════════════════ */
 .box-right {
@@ -485,6 +630,37 @@
   margin: 0 2px;
   border-radius: 2px;
   background-color: rgba(160, 35, 35, 0.3);
+}
+
+/* ── Teamkill badge (teamkiller's running TK count) ───────────── */
+.box-right .kill-tk-badge {
+  color: #ffd0d0;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  padding: 1px 4px;
+  margin: 0 3px;
+  border-radius: 2px;
+  background-color: rgba(196, 48, 48, 0.45);
+  border: 1px solid rgba(196, 48, 48, 0.7);
+}
+
+/* ── Kill assist (Killer + Assister) ──────────────────────────── */
+.box-right .kill-assist {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.box-right .kill-assist-plus {
+  color: #9aa0c0;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.box-right .kill-assist .kill-assist-name {
+  font-size: 12px;
+  opacity: 0.9;
+  padding: 0 2px 0 3px;
 }
 
 /* ── Kill streak badge ────────────────────────────────────────── */

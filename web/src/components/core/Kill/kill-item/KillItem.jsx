@@ -27,11 +27,24 @@ const KillItem = ({ killinfo, killer, victim }) => {
                 </>
             ) : (
                 <>
-                    {killinfo.streak >= 3 &&
+                    {!isTeamkill && killinfo.streak >= 3 &&
                         <span className="kill-streak-badge">{killinfo.streak}K</span>
                     }
 
                     <span className={`${killer.team}-style`}>{killer.name}</span>
+
+                    {isTeamkill && killinfo.killer_tk_count > 0 &&
+                        <span className="kill-tk-badge" title="teamkills this half">
+                            TK ×{killinfo.killer_tk_count}
+                        </span>
+                    }
+
+                    {(killinfo.assisters ?? []).map(a => (
+                        <span key={a.user_id ?? a.name} className="kill-assist">
+                            <span className="kill-assist-plus">+</span>
+                            <span className={`${a.team ?? killer.team}-style kill-assist-name`}>{a.name}</span>
+                        </span>
+                    ))}
 
                     {killinfo.killer_prone &&
                         <span className="kill-prone-badge">PRONE</span>

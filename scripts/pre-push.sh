@@ -17,6 +17,11 @@
 #   3. Backend Jest suite (npm run test) — full ingest -> recorder -> disk
 #      -> REST round-trip. Catches schema drift and handler regressions.
 #
+#   4. Frontend store-machine Jest suite (npm run test:web) — drives the
+#      Socket.jsx event handlers (half/match boundary + cumulative-stats
+#      machine) through the gameEvents bus. Skipped if web deps aren't
+#      installed. Catches carry/precedence regressions in the stats boards.
+#
 # Requires KTPInfrastructure checked out as a sibling directory (same
 # requirement as KTPAMXX's pre-push hook).
 #
@@ -70,8 +75,9 @@ echo "[pre-push] stage 2/3: amxxpc compile (VERSION=$VERSION)"
 echo "[pre-push] (bypass with --no-verify or KTP_SKIP_PREPUSH=1)"
 
 COMPILE_LOG="$(mktemp -t prepush-compile.XXXXXX.log)"
-trap 'rm -f "$COMPILE_LOG" "$TEST_LOG"' EXIT
 TEST_LOG="$(mktemp -t prepush-test.XXXXXX.log)"
+WEB_TEST_LOG="$(mktemp -t prepush-webtest.XXXXXX.log)"
+trap 'rm -f "$COMPILE_LOG" "$TEST_LOG" "$WEB_TEST_LOG"' EXIT
 
 if ! docker run --rm --entrypoint sh \
   -v "$REPO_ROOT:/src" \
@@ -95,9 +101,9 @@ fi
 echo "[pre-push] stage 2/3: compile OK"
 
 # ============================================================
-# Stage 3/3: Backend Jest suite
+# Stage 3/4: Backend Jest suite
 # ============================================================
-echo "[pre-push] stage 3/3: backend tests (npm run test)"
+echo "[pre-push] stage 3/4: backend tests (npm run test)"
 
 cd "$REPO_ROOT"
 if ! npm run test --silent >"$TEST_LOG" 2>&1; then
@@ -106,5 +112,23 @@ if ! npm run test --silent >"$TEST_LOG" 2>&1; then
   exit 1
 fi
 
-echo "[pre-push] stage 3/3: tests OK"
+echo "[pre-push] stage 3/4: tests OK"
+
+# ============================================================
+# Stage 4/4: Frontend store-machine Jest suite (CRA)
+# ============================================================
+echo "[pre-push] stage 4/4: frontend store tests (npm run test:web)"
+
+cd "$REPO_ROOT"
+if [[ ! -x "$REPO_ROOT/web/node_modules/.bin/react-scripts" ]]; then
+  echo "[pre-push] stage 4/4: SKIPPED — web deps not installed (run 'cd web && npm install')"
+else
+  if ! npm run test:web --silent >"$WEB_TEST_LOG" 2>&1; then
+    echo "[pre-push] FRONTEND TESTS FAILED — push aborted." >&2
+    tail -60 "$WEB_TEST_LOG" >&2
+    exit 1
+  fi
+  echo "[pre-push] stage 4/4: frontend tests OK"
+fi
+
 echo "[pre-push] all checks passed"
