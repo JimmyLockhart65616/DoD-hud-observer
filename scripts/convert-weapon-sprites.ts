@@ -1,15 +1,18 @@
 /**
- * Weapon-sprite converter: BMP (dark silhouette on white) -> white-on-transparent PNG.
+ * Weapon-sprite converter: BMP (dark silhouette on white OR green-screen) -> white-on-transparent PNG.
  *
  * The source art (assets/weapons-src/*.bmp) is 512x512 32-bit BMP: a thin DARK weapon
- * silhouette (~1.4% of pixels) on a pure-WHITE background, with a dead/all-zero alpha
- * channel. The HUD overlay panels are dark (rgba(48,54,97,.9)), so we recompute alpha
- * from luminance and force the silhouette to pure WHITE — the classic DoD death-notice
+ * silhouette (~1.4% of pixels) on a flat background, with a dead/all-zero alpha channel.
+ * Most sources sit on a pure-WHITE background; a few (buttsmack) are on chroma-key GREEN
+ * (0,255,0). The HUD overlay panels are dark (rgba(48,54,97,.9)), so we recompute alpha to
+ * cut the background and force the silhouette to pure WHITE — the classic DoD death-notice
  * look, visible on the dark panels. Anti-aliased edges become partial-alpha white.
  *
- *   lum   = 0.299*R + 0.587*G + 0.114*B    // gray-on-white source
- *   alpha = 255 - lum                       // white -> transparent, dark -> opaque
- *   R = G = B = 255                          // pure-white silhouette
+ * The key is chosen per-file from a corner sample (BG_GREEN below):
+ *
+ *   white-bg:  lum       = 0.299*R + 0.587*G + 0.114*B;  alpha = 255 - lum
+ *   green-bg:  greenness = G - (R+B)/2;                   alpha = 255 - clamp(greenness,0,255)
+ *   both:      R = G = B = 255                            // pure-white silhouette
  *
  * Output filenames MUST equal the dodx `xmod_get_wpnlogname` value, because the frontend
  * does a literal `weaponImages[weapon]` key lookup against the raw string KTPHudObserver
@@ -34,10 +37,9 @@ const LONGEST = 128;       // longest side of the trimmed output (renders at 12-
 const ALPHA_BBOX = 16;     // alpha threshold for the content bounding box (ignore AA fringe)
 const PAD_FRAC = 0.06;     // breathing room around the weapon, as a fraction of bbox size
 
-// Stems to skip. buttsmack.bmp has a GRAY (not white) background, so the luminance->alpha
-// key turns the whole frame into a translucent box. Rifle-butt kills are rare (k43butt /
-// garandbutt) and text-fall-back fine; re-enable if cleaner butt-smack art arrives.
-const SKIP = new Set<string>(['buttsmack']);
+// Stems to skip. (Empty: buttsmack used to be skipped here on the belief its background was
+// gray — it is actually chroma-key GREEN, handled by the green-screen key below.)
+const SKIP = new Set<string>([]);
 
 // BMP stem -> output PNG name (= dodx logname). Stems not listed keep their own name
 // (garand, bar, k43, colt, luger, spade, amerknife are already lognames).
@@ -63,16 +65,29 @@ function outNameFor(stem: string): string {
     return RENAME[stem] || stem;
 }
 
+// A corner pixel is the background. Green-dominant (chroma key) vs everything else (white).
+function isGreenBg(img: any): boolean {
+    const idx = img.getPixelIndex(2, 2);
+    const d = img.bitmap.data;
+    const R = d[idx], G = d[idx + 1], B = d[idx + 2];
+    return G > 100 && G - (R + B) / 2 > 80;
+}
+
 async function convertOne(srcPath: string, outPath: string): Promise<void> {
     const img = await Jimp.read(srcPath);
     const W = img.bitmap.width, H = img.bitmap.height;
+    const greenBg = isGreenBg(img);
 
-    // 1) white silhouette: alpha from luminance, RGB forced white (dead source alpha ignored)
+    // 1) white silhouette: alpha cuts the background, RGB forced white (dead source alpha ignored).
+    //    white-bg: dark->opaque via luminance. green-bg: chroma key out the green.
     let minX = W, minY = H, maxX = -1, maxY = -1;
     img.scan(0, 0, W, H, function (this: any, x: number, y: number, idx: number) {
         const data = this.bitmap.data;
-        const lum = 0.299 * data[idx + 0] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-        const a = Math.round(255 - lum);
+        const R = data[idx + 0], G = data[idx + 1], B = data[idx + 2];
+        const bgness = greenBg
+            ? G - (R + B) / 2                                 // ~255 over green bg, ~0 on silhouette/white
+            : 0.299 * R + 0.587 * G + 0.114 * B;             // luminance: ~255 over white bg, ~0 on dark silhouette
+        const a = Math.round(255 - Math.max(0, Math.min(255, bgness)));
         data[idx + 0] = 255;
         data[idx + 1] = 255;
         data[idx + 2] = 255;

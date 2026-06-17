@@ -22,6 +22,10 @@ const WEAPON_ALIASES = {
     garandbutt: 'buttsmack',
     k43butt: 'buttsmack',
     enf_bayonet: 'buttsmack',
+    // primed grenade in-hand (pin pulled, mid-cook): dodx swaps the live weapon to the
+    // DODW_*_EX variant -> reuse the frag sprite (handgrenade_ex=US, stickgrenade_ex=German)
+    handgrenade_ex: 'grenade',
+    stickgrenade_ex: 'grenade2',
     // Axis combat knife shares the spade sprite
     gerknife: 'spade',
     // legacy / idealized synonyms (mocker, CLAUDE.md examples, old fixtures/replays)
