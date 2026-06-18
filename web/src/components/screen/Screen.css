@@ -689,6 +689,10 @@
 .team-cards {
   display: flex;
   flex: 1;
+  min-width: 0;     /* allow the team block to shrink so its cards pack/clip
+                       instead of overflowing the right edge at <~1537px canvas
+                       widths (e.g. 1280×720 OBS). Cards already clip via their
+                       own min-width:0 + overflow:hidden. */
   gap: 3px;
 }
 
