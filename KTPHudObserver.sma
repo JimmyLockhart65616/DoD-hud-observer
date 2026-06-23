@@ -147,6 +147,9 @@ new const g_summaryReasonStr[SummaryReason][] = {
     "round_end", "half_end", "match_end", "manual"
 };
 new Float:g_lastSummaryAt[SummaryReason];
+// Idempotency for the ktp_half_end forward marker event (the summary itself is
+// already deduped via g_lastSummaryAt). Reset on ktp_match_start.
+new Float:g_lastHalfEndFwdAt;
 
 // Flag ownership cache
 new g_flag_owner[MAX_FLAGS];
@@ -163,14 +166,24 @@ new g_flag_last_progress[MAX_FLAGS];     // last-emitted progress %, to avoid sp
 new g_flag_prev_allies_count[MAX_FLAGS];
 new g_flag_prev_axis_count[MAX_FLAGS];
 
-// Pending captor batch — populated by dod_score_event during a successful cap,
-// drained on the next dod_control_point_captured for that CP. Mirrors KTPScoreTracker.
-// _score holds each captor's score_delta so caps/obj_score are credited at
-// capture time, AFTER the owning-team filter — not eagerly in dod_score_event
-// (which can fire for opposing-team players via savedScore drift).
+// Pending captor batch — captor slots collected by dod_score_event, read by
+// build_pending_captor_list / build_captor_names for the flag_captured JSON and
+// the capout title. NOTE: dodx defers dod_score_event ~0.25s past the cap (see
+// the dod_score_event handler below), so this batch is still EMPTY when
+// dod_control_point_captured reads it — captor_ids/capout names are therefore
+// currently empty (pre-existing latent bug; needs deferred attribution to fix).
 new g_flag_pending_captor_ids[MAX_FLAGS][MAX_CAPTORS];
 new g_flag_pending_captor_score[MAX_FLAGS][MAX_CAPTORS];
 new g_flag_pending_captor_count[MAX_FLAGS];
+
+// Team (TEAM_ALLIES/TEAM_AXIS) of the most recent REAL cap per flag. Set on the
+// genuine-cap path in dod_control_point_captured and NOT cleared by the
+// neutral/same-owner guards or the post-capout round-restart. dod_score_event
+// credits obj_score/caps against THIS (stable) value instead of g_flag_owner —
+// the round-restart flips g_flag_owner to neutral inside dod_score_event's
+// ~0.25s deferral window, so filtering on the live owner would drop the credit
+// for the round-winning cap.
+new g_flag_last_capped_by[MAX_FLAGS];
 
 // Server hostname (sent as X-Server-Hostname header)
 new g_hostname[64];
@@ -220,7 +233,8 @@ public task_emit_flags() {
 public plugin_cfg() {
     // Reset flag state
     for (new i = 0; i < MAX_FLAGS; i++) {
-        g_flag_owner[i] = -1;
+        g_flag_owner[i]          = -1;
+        g_flag_last_capped_by[i] = 0;
     }
     g_flag_count = 0;
 
@@ -452,6 +466,7 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
     for (new r = 0; r < SummaryReason; r++) {
         g_lastSummaryAt[r] = 0.0;
     }
+    g_lastHalfEndFwdAt = 0.0;
 
     server_print("[HUD] Match started: %s (map=%s type=%d half=%d)", matchId, map, _:matchType, half);
 
@@ -510,35 +525,40 @@ public ktp_match_end(const matchId[], const map[], MatchType:matchType, team1Sco
     g_matchId[0] = '^0';
 }
 
-// ─── Half End (KTPMatchHandler log line) ─────────────────────────────────────
+// ─── Half End (KTPMatchHandler ktp_half_end forward) ─────────────────────────
 
-// KTPMatchHandler emits `KTP_HALF_END (matchid "...") (map "...") (half "1st")`
-// from handle_first_half_end() — the only half-1-end signal it exposes (no
-// AMXX forward exists; ktp_match_end covers half-2/OT terminal paths). The
-// line is logged at the moment gameplay ends, inside the changelevel hook;
-// amxxcurl is process-lifetime so the POST survives the map change (same
-// proven path as KTPMatchHandler's own halftime Discord embed).
-// plugin_log fires per log line even in extension mode (KTPAMXX hooks
-// AlertMessage via the ReHLDS hookchain). Prefix-match on raw logdata —
-// the custom (matchid "...") line tokenizes unpredictably via logevents.
-public plugin_log() {
-    static logline[256];
-    read_logdata(logline, charsmax(logline));
-    if (!equal(logline, "KTP_HALF_END", 12)) return PLUGIN_CONTINUE;
+// KTPMatchHandler fires ktp_half_end(matchId[], map[], matchType, half, team1Score,
+// team2Score) from handle_first_half_end() at the moment 1st-half gameplay ends,
+// BEFORE the changelevel — so our half-scoped accumulators (damage matrix, kills,
+// caps) are still intact for an authoritative summary.
+//
+// Why a forward and not plugin_log: KTPMatchHandler also writes a `KTP_HALF_END`
+// log line, but AMXX plugin_log / register_logevent do NOT fire in KTPAMXX
+// extension mode (no Metamod log hook), so the old log-line handler here emitted
+// NOTHING in production — the halftime board never had a source. The forward is
+// the same proven path ktp_match_start/ktp_match_end use. amxxcurl is process-
+// lifetime, so these POSTs survive the imminent map change.
+//
+// half is always 1 (1st-half end is the only half boundary with a pre-changelevel
+// signal; 2nd-half/OT terminal paths are covered by ktp_match_end). team1/team2 are
+// the just-saved 1st-half scores (team1=Allies, team2=Axis in the 1st half). The 2s
+// guard mirrors emit_stats_summary's dedupe so a double changelevel-hook fire emits
+// the marker once.
+public ktp_half_end(const matchId[], const map[], MatchType:matchType, half, team1Score, team2Score) {
+    new Float:now = get_gametime();
+    if (g_lastHalfEndFwdAt > 0.0 && now - g_lastHalfEndFwdAt < 2.0) return;
+    g_lastHalfEndFwdAt = now;
 
-    server_print("[HUD] KTP_HALF_END detected — emitting half_end + stats summary");
-
-    new allies = dodx_get_team_score(TEAM_ALLIES);
-    new axis   = dodx_get_team_score(TEAM_AXIS);
+    server_print("[HUD] ktp_half_end forward (%s half=%d %d-%d) — emitting half_end + stats summary",
+                 matchId, half, team1Score, team2Score);
 
     new json[160];
     formatex(json, charsmax(json),
         "{^"event^":^"half_end^",^"half^":%d,^"allies_score^":%d,^"axis_score^":%d}",
-        g_matchHalf, allies, axis);
+        half, team1Score, team2Score);
     post_event(json);
 
     emit_stats_summary(SUMMARY_HALF_END);
-    return PLUGIN_CONTINUE;
 }
 
 // ─── Roster Dump ─────────────────────────────────────────────────────────────
@@ -1345,6 +1365,7 @@ stock do_flags_init() {
         g_flag_prev_allies_count[i]     = 0;
         g_flag_prev_axis_count[i]       = 0;
         g_flag_pending_captor_count[i]  = 0;
+        g_flag_last_capped_by[i]        = 0;
 
         new owner_str[16];
         if      (owner == TEAM_ALLIES) copy(owner_str, charsmax(owner_str), "allies");
@@ -1366,8 +1387,9 @@ stock do_flags_init() {
 }
 
 // DODX forward: dod_score_event(id, score_delta, total_score, cp_index)
-// Fires once per player credited with a CP cap. We batch by cp_index and drain
-// on dod_control_point_captured. Pattern lifted from KTPScoreTracker.
+// Fires (deferred ~0.25s, from dodx PreThink) once per player credited with a CP
+// cap, after dod_control_point_captured has already set the new owner. This is
+// where obj_score/caps are credited; the per-cp batch only feeds captor identity.
 public dod_score_event(id, score_delta, total_score, cp_index) {
     if (cp_index < 0 || cp_index >= MAX_FLAGS) return;
     if (!is_user_connected(id)) return;
@@ -1389,12 +1411,23 @@ public dod_score_event(id, score_delta, total_score, cp_index) {
     g_flag_pending_captor_score[cp_index][n] = score_delta;
     g_flag_pending_captor_count[cp_index]    = n + 1;
 
-    // NOTE: obj_score / caps are NOT credited here. dod_score_event can fire for
-    // a player on the team that does NOT end up owning the CP (savedScore drift,
-    // mid-cap team switch). Crediting now would permanently inflate that player's
-    // caps/obj_score even though they're filtered out of the captor display.
-    // The credit happens in dod_control_point_captured (credit_pending_captors),
-    // gated by the same owning-team filter as the captor list.
+    // Credit obj_score + caps HERE — not in dod_control_point_captured. In DoD the
+    // engine sends the CP-owner (SetObj) message — which fires
+    // dod_control_point_captured SYNCHRONOUSLY — BEFORE it dispatches this score
+    // event: dodx arms sendScore = time + 0.25 in Client_ObjScore and fires
+    // dod_score_event ~0.25s later from PreThink (KTPAMXX usermsg.cpp:122-129,
+    // moduleconfig.cpp:1056-1074). So by now the capping team is already known.
+    // Crediting at capture time instead read an empty batch (the batch is filled
+    // right here, AFTER the capture handler ran) — that was the all-zeros bug.
+    // Filter against g_flag_last_capped_by (the last REAL capper for this CP), NOT
+    // the live g_flag_owner: the post-capout round-restart flips g_flag_owner to
+    // neutral inside this 0.25s window and would reject the round-winning cap.
+    // The team gate also drops opposing-team savedScore-drift score events.
+    if (get_user_team(id) == g_flag_last_capped_by[cp_index]) {
+        g_player_objscore[id] += score_delta;
+        g_player_caps[id]++;
+        emit_player_score(id);
+    }
 }
 
 // DODX forward: control point captured
@@ -1448,11 +1481,11 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
         cp_index, flag_name, owner_str, captor_json);
     post_event(json);
 
-    // Credit caps + obj_score now that the owning team is known — only to
-    // captors that pass the team filter (mirrors build_pending_captor_list).
-    // Must run before the count reset below; emits updated player_score so the
-    // capout summary that follows reads the fresh caps/obj_score.
-    credit_pending_captors(cp_index, new_owner);
+    // Record the capping team for the DEFERRED credit. dod_score_event fires
+    // ~0.25s after this (dodx PreThink deferral) and credits obj_score/caps
+    // against g_flag_last_capped_by — kept separate from g_flag_owner, which the
+    // round-restart neutral cascade below can flip before that score event lands.
+    g_flag_last_capped_by[cp_index]       = new_owner;
 
     g_flag_owner[cp_index]                = new_owner;
     g_flag_capping_team[cp_index]         = 0;
@@ -1465,6 +1498,9 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
     // shows half-cumulative stats; per-single-flag-cap popups were dropped —
     // the flag feed already announces each cap. ev_round_end below is kept for
     // completeness; the dedupe guard collapses doubles if both ever fire.
+    // NOTE: this board renders ~0.25s BEFORE the final flag's dod_score_event
+    // credits its cappers, so the winning flag's captors show one fewer cap here
+    // than on the live cards. Accepted; a full fix needs deferred board emission.
     if (g_flag_count > 0) {
         new bool:capout = true;
         for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
@@ -1478,22 +1514,6 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
             // board titles "ALLIES CAPOUT BY <names>".
             emit_stats_summary(SUMMARY_ROUND_END, owner_str, capout_by);
         }
-    }
-}
-
-// Credit obj_score + caps to each pending captor that's actually on the team
-// now owning the CP, then push an updated player_score. The team filter mirrors
-// build_pending_captor_list so a drifted/cross-team score event can't inflate a
-// non-captor's stats. Called once per capture, before the count is reset.
-stock credit_pending_captors(cp_index, owning_team) {
-    new n = g_flag_pending_captor_count[cp_index];
-    for (new i = 0; i < n; i++) {
-        new id = g_flag_pending_captor_ids[cp_index][i];
-        if (!is_user_connected(id)) continue;
-        if (get_user_team(id) != owning_team) continue;
-        g_player_objscore[id] += g_flag_pending_captor_score[cp_index][i];
-        g_player_caps[id]++;
-        emit_player_score(id);
     }
 }
 
