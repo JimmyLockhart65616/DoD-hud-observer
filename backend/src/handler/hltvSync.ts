@@ -284,6 +284,21 @@ export class HltvSyncService extends EventEmitter {
     /** Used by the buffer when no clock exists yet — applies fallback delay. */
     fallbackDelaySeconds(): number { return this.cfg.fallback_delay_seconds; }
 
+    /**
+     * Current HLTV broadcast delay (cvar) for a server, or null if no clock
+     * yet. Returned even when online=false: at a changelevel the clock is
+     * marked offline *before* the buffer drains the old-map tail, but
+     * delaySeconds is preserved across a failed sample (the `...prev` spread in
+     * sample()'s catch), so it still holds the delay that applied to the
+     * buffered tail — exactly what the drain must release on. The buffer uses
+     * this to release old-map events on their broadcast delay across the
+     * boundary instead of flushing them instantly.
+     */
+    delaySeconds(server: string): number | null {
+        const c = this.clocks.get(server);
+        return c ? c.delaySeconds : null;
+    }
+
     setCalibrationOffsetMs(server: string, offsetMs: number): void {
         const c = this.clocks.get(server);
         if (c) {

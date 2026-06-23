@@ -221,6 +221,39 @@ describe('HltvSyncService.broadcastNow — offline-clock guard', () => {
     });
 });
 
+describe('HltvSyncService — delaySeconds (used by the buffer to drain a boundary on the broadcast delay)', () => {
+    const cfg = {
+        enabled: true,
+        heartbeat_seconds: 0,
+        fallback_delay_seconds: 60,
+        rcon_timeout_ms: 5000,
+        api_url: '',
+        api_auth_key: '',
+        api_timeout_ms: 3000,
+        servers: { 'atl1': { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' } },
+    };
+
+    it('returns null when no clock exists yet', () => {
+        const svc = new HltvSyncService(cfg);
+        expect(svc.delaySeconds('atl1')).toBeNull();
+    });
+
+    it('returns the delay for an online clock', () => {
+        const svc = new HltvSyncService(cfg);
+        (svc as any).clocks.set('atl1', fakeClock({ delaySeconds: 45 }));
+        expect(svc.delaySeconds('atl1')).toBe(45);
+    });
+
+    // Critical for the drain: at a changelevel the clock is flipped offline
+    // BEFORE the buffer drains the old-map tail, but delaySeconds is preserved
+    // across the failed sample — so the drain must still read the old delay.
+    it('returns the last good delay even when the clock is offline', () => {
+        const svc = new HltvSyncService(cfg);
+        (svc as any).clocks.set('atl1', fakeClock({ delaySeconds: 60, online: false, lastError: 'tick_reset' }));
+        expect(svc.delaySeconds('atl1')).toBe(60);
+    });
+});
+
 describe('HltvSyncService — calibration', () => {
     const cfg = {
         enabled: true,

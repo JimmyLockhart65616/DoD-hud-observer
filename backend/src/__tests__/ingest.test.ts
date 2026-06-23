@@ -805,6 +805,49 @@ describe('POST /ingest — HLTV sync defers socket emit but records immediately'
         expect(firedEvents.map(e => e.event)).toEqual(['ktp_match_start', 'kill']);
     });
 
+    // Boundary-delay-collapse regression (the live "final minute" / halftime
+    // bug): at a changelevel the plugin tick resets from high to low. The old
+    // code instant-flushed the buffered old-half tail, snapping the overlay
+    // ~delay seconds ahead of the HLTV feed. Now the tail moves to a wall-clock
+    // drain and stays held for the broadcast delay — not flushed synchronously.
+    it('holds the old-half tail on a tick reset instead of flushing it instantly', async () => {
+        const matchId = 'KTP-sync-boundary';
+        // Online clock: broadcast = activeTime - delay = 1000. delaySeconds=30 so
+        // any drained tail waits 30s — long past the test window.
+        (sync as any).clocks.set(HOST, {
+            server: HOST, cfg: { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' },
+            delaySeconds: 30, activeTime: 1000, sampledAt: Date.now(),
+            map: 'dod_anzio', serverName: HOST, online: true, lastError: null, calibrationOffsetMs: 0,
+        });
+
+        // Half-1 tail at high ticks — held (1100,1200 > broadcast 1000).
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').set('X-Server-Hostname', HOST)
+            .send({ event: 'kill', match_id: matchId, killer_id: 'A', victim_id: 'B', weapon: 'garand', tick: 1100, map: 'dod_anzio' });
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').set('X-Server-Hostname', HOST)
+            .send({ event: 'player_stats_summary', match_id: matchId, reason: 'half_end', players: [], tick: 1200, map: 'dod_anzio' });
+        (buffer as any).tick();
+        expect(firedEvents).toHaveLength(0); // held by the broadcast clock
+
+        // Half-2 changelevel: first event arrives with a low tick. This used to
+        // instant-flush the tail; now it moves it to the delayed drain.
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').set('X-Server-Hostname', HOST)
+            .send({ event: 'ktp_match_start', match_id: matchId, map: 'dod_anzio', match_type: 1, half: 2, tick: 5 });
+
+        // NOT flushed synchronously at the reset (the regression).
+        expect(firedEvents).toHaveLength(0);
+        // Driving the buffer: tail's releaseAt is ~30s out, and the reset event
+        // is gated behind the drain — so still nothing fires in-window.
+        (buffer as any).tick();
+        expect(firedEvents).toHaveLength(0);
+        // All three are still held (2 in the drain + the reset event in main).
+        expect(buffer.queueDepth(HOST)).toBe(3);
+
+        // Disk still recorded everything in real-time order, untouched by buffering.
+        const lines = fs.readFileSync(path.join(tmpDir, matchId, 'events.jsonl'), 'utf-8')
+            .trim().split('\n').filter(l => l);
+        expect(lines).toHaveLength(3);
+    });
+
     it('falls back to fire-immediately when sync is disabled for a server', async () => {
         const otherHost = 'KTP - Not Configured';
         const matchId = 'KTP-sync-2';
