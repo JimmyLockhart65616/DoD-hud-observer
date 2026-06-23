@@ -421,13 +421,36 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  z-index: 5;
+  z-index: 51; /* above .stats-board-backdrop (50) and all in-game HUD layers */
   background-color: rgba(20, 22, 40, 0.94);
   border-radius: 6px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
   padding: 14px 18px 16px;
   pointer-events: none;
   animation: statsboard-fade-in 0.3s ease-out;
+}
+
+/* Opaque backdrop behind the halftime / match-end board — fully masks the
+   game's default DoD scoreboard (and the live view) during the intermission.
+   Starts below the top score bar so our ALLIES–AXIS score + timer stay visible
+   (the board itself has no score line). Capout boards get NO backdrop, so the
+   live game shows through mid-half. Dismissed with the board (TTL or the next
+   half/match going live). */
+.stats-board-backdrop {
+  position: fixed;
+  top: 72px;   /* == .top-bar height — keep the score bar uncovered */
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  background-color: rgba(8, 9, 18, 0.97);
+  pointer-events: none;
+  animation: statsboard-backdrop-fade 0.3s ease-out;
+}
+
+@keyframes statsboard-backdrop-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 @keyframes statsboard-fade-in {

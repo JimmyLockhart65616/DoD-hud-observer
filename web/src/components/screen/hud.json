@@ -4,7 +4,8 @@
     "settings": {
         "kill_displaytime": 20000,
         "statsboard_round_displaytime": 12000,
-        "statsboard_half_displaytime": 90000,
+        "statsboard_half_displaytime": 240000,
+        "statsboard_match_displaytime": 90000,
         "statsboard_fallback_displaytime": 20000,
         "stats_board_on_round_end": true
     }
