@@ -36,7 +36,10 @@ interface ServerState {
     players: Map<string, any>;    // user_id → latest player_connect/spawn/score state
     team_score: any | null;       // latest team_score event
     flags: any | null;            // latest flags_init event
-    timeleft: any | null;         // latest time_sync event
+    timeleft: any | null;         // latest time_sync / half_start event (carries .timeleft)
+    timeleftReleasedAt: number;   // Date.now() when `timeleft` was cached (post-buffer release
+                                  // instant). Used to age-adjust the value for late joiners so a
+                                  // reload doesn't anchor a minutes-stale countdown at "now".
     half: number | null;          // current half (1, 2, 101+) from latest half_start
     round_phase: 'freeze' | 'live' | 'end' | null;  // latest round_start_freeze/round_start/round_end
     halftime_summary: any | null; // latest player_stats_summary with reason half_end —
@@ -53,6 +56,7 @@ function getOrCreateState(server: string): ServerState {
             team_score: null,
             flags: null,
             timeleft: null,
+            timeleftReleasedAt: 0,
             half: null,
             round_phase: null,
             halftime_summary: null,
@@ -74,6 +78,8 @@ function updateServerState(server: string, event: any): void {
             state.team_score = null;
             state.round_phase = null;
             state.halftime_summary = null;
+            state.timeleft = null;
+            state.timeleftReleasedAt = 0;
             if (event.event === 'ktp_match_start' && event.half != null) {
                 state.half = event.half;
             }
@@ -190,6 +196,7 @@ function updateServerState(server: string, event: any): void {
             break;
         case 'time_sync':
             state.timeleft = event;
+            state.timeleftReleasedAt = now;
             break;
         case 'round_start_freeze':
             state.round_phase = 'freeze';
@@ -214,6 +221,7 @@ function updateServerState(server: string, event: any): void {
             if (event.half != null) state.half = event.half;
             state.round_phase = null;
             state.timeleft = event;
+            state.timeleftReleasedAt = now;
             // Evict the cached halftime board so it can't replay over live play.
             // Normally ktp_match_start (fired just before half_start) already
             // cleared it, but a dropped ktp_match_start POST — or a half_start-
@@ -271,15 +279,25 @@ export function getServerSnapshot(server: string): string[] {
     // Replay team score
     if (state.team_score) events.push(JSON.stringify(state.team_score));
 
-    // Replay timeleft
-    if (state.timeleft) events.push(JSON.stringify(state.timeleft));
+    // Replay timeleft, AGE-ADJUSTED. The cached value was the half clock at its
+    // post-buffer release instant (timeleftReleasedAt); the half clock counts down
+    // 1:1 with wall time, so the current value is `cached − age`. Without this a
+    // late joiner anchors a stale countdown at "now" and the timer reads wrong by
+    // the cache age — minutes, when time_sync is wedged and only half_start refreshed
+    // it. Always emit a fresh `time_sync` (never the raw cached object, which may be
+    // a half_start that would re-trigger boundary handling on replay).
+    const adjustedTimeleft = state.timeleft
+        ? Math.max(0, (state.timeleft.timeleft ?? 0) - Math.floor((Date.now() - state.timeleftReleasedAt) / 1000))
+        : null;
+    if (adjustedTimeleft != null) {
+        events.push(JSON.stringify({ event: 'time_sync', timeleft: adjustedTimeleft }));
+    }
 
     // Replay round phase so a late joiner knows whether a round is live/freeze/end.
     if (state.round_phase === 'freeze') {
         events.push(JSON.stringify({ event: 'round_start_freeze' }));
     } else if (state.round_phase === 'live') {
-        const tl = state.timeleft?.timeleft;
-        events.push(JSON.stringify({ event: 'round_start', ...(tl != null ? { timeleft: tl } : {}) }));
+        events.push(JSON.stringify({ event: 'round_start', ...(adjustedTimeleft != null ? { timeleft: adjustedTimeleft } : {}) }));
     }
     // 'end' is intentionally omitted — replaying it would trigger the frontend's
     // 5s revive timer for an already-completed round; harmless but visually odd.

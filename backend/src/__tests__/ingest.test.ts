@@ -629,6 +629,54 @@ describe('snapshot — sync invariants for late-joining clients', () => {
         expect(rs).toBeDefined();
     });
 
+    // Multi-minute timer drift: a late joiner replays the cached timeleft. Without
+    // age-adjustment it anchors a stale value at "now" — wrong by the cache age
+    // (minutes when time_sync is wedged and only half_start refreshes the cache).
+    it('age-adjusts the cached timeleft so a late joiner is not anchored stale', async () => {
+        const host = 'KTP - Timeleft Age';
+        await post({ event: 'time_sync', timeleft: 600 }, host);
+        const t0 = Date.now();
+        // 90s pass before a fresh OBS source connects. The half clock counts down
+        // 1:1, so the snapshot must report ~510, not the cached 600.
+        const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(t0 + 90_000);
+        try {
+            const ts = getServerSnapshot(host).map(s => JSON.parse(s)).find(e => e.event === 'time_sync');
+            expect(ts).toBeDefined();
+            expect(ts.timeleft).toBe(510);
+        } finally {
+            nowSpy.mockRestore();
+        }
+    });
+
+    // The cache may hold a half_start object (the wedge case where time_sync never
+    // fired). The snapshot must still emit a clean `time_sync` (not re-emit the
+    // half_start, which would re-trigger boundary handling), and the boundary
+    // half_start replay carries the half number only.
+    it('emits the snapshot timer as time_sync even when half_start set the cache', async () => {
+        const host = 'KTP - Half Timeleft';
+        await post({ event: 'half_start', half: 1, timeleft: 1200 }, host);
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const hs = snapshot.find(e => e.event === 'half_start');
+        expect(hs).toMatchObject({ half: 1 });
+        expect(hs.timeleft).toBeUndefined();
+        const ts = snapshot.find(e => e.event === 'time_sync');
+        expect(ts).toBeDefined();
+        expect(ts.timeleft).toBe(1200); // age ~0 in-test
+    });
+
+    it('clamps the age-adjusted timeleft to 0 when the cache outlives the value', async () => {
+        const host = 'KTP - Timeleft Clamp';
+        await post({ event: 'time_sync', timeleft: 30 }, host);
+        const t0 = Date.now();
+        const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(t0 + 120_000); // 120s later, only 30s were left
+        try {
+            const ts = getServerSnapshot(host).map(s => JSON.parse(s)).find(e => e.event === 'time_sync');
+            expect(ts.timeleft).toBe(0);
+        } finally {
+            nowSpy.mockRestore();
+        }
+    });
+
     it('caches victim health from damage events and includes it in roster_player replay', async () => {
         const host = 'KTP - Health Cache';
         await post({ event: 'player_connect', user_id: 'STEAM_0:0:1', name: 'Hurt', team: 'allies' }, host);
@@ -753,6 +801,7 @@ describe('POST /ingest — HLTV sync defers socket emit but records immediately'
             enabled: true,
             heartbeat_seconds: 0,
             fallback_delay_seconds: 60,
+            coast_grace_seconds: 120,
             rcon_timeout_ms: 5000,
             api_url: '',
             api_auth_key: '',
