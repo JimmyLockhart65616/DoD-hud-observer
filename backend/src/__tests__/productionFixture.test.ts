@@ -32,6 +32,7 @@ import { createServer } from 'http';
 import { createIngestRouter } from '../handler/ingest';
 import { MatchRecorder } from '../handler/matchRecorder';
 import { MetricsCollector } from '../handler/metrics';
+import { checkEventStream } from '../invariants/eventInvariants';
 
 import 'jest';
 
@@ -289,5 +290,26 @@ describe('production fixture replay (NY1 dod_thunder2 12MAN)', () => {
         // common case (every spawn fires one). Tests/mocker shouldn't assume
         // prone_change is only for prone/deployed transitions.
         expect(standing.length).toBeGreaterThan(500);
+    });
+
+    // ── Event-stream invariants ───────────────────────────────────────────────
+    // The real stream must satisfy every correctness invariant (no false
+    // positives), AND the cap-credit invariant must CATCH the regression when we
+    // corrupt the same real stream the way the bug did. Both directions, on real
+    // data, gated by every `npm run test` / pre-push.
+
+    it('the real production stream satisfies all event invariants', () => {
+        expect(checkEventStream(events)).toEqual([]);
+    });
+
+    it('the cap-credit invariant catches the regression on a corrupted copy', () => {
+        // Reproduce 487f472: flags still get captured, but every player_score
+        // reports obj_score 0 (the deferred dod_score_event never credited).
+        const corrupted = events.map(e =>
+            (e as { event: string }).event === 'player_score' ? { ...e, obj_score: 0 } : e,
+        );
+        const violations = checkEventStream(corrupted);
+        // One per half that had captures (this match: half 1 and half 2).
+        expect(violations.filter(v => v.invariant === 'cap-credit-objscore').length).toBe(2);
     });
 });

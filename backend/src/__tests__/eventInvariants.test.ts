@@ -1,0 +1,105 @@
+/**
+ * Unit tests for the event-stream invariant library. These drive synthetic
+ * clean + deliberately-corrupted streams to prove each invariant fires in the
+ * bug direction and stays quiet on valid data. The companion check against the
+ * REAL production fixture (no false positives) lives in productionFixture.test.ts.
+ */
+import {
+    capCreditObjScore,
+    capCreditCaps,
+    enumSanity,
+    checkEventStream,
+    StreamEvent,
+} from '../invariants/eventInvariants';
+
+import 'jest';
+
+// Minimal stream builders.
+const cap = (half: number, team: 'allies' | 'axis' | 'neutral'): StreamEvent =>
+    ({ event: 'flag_captured', half, new_owner: team, flag_id: 0, captor_ids: [] });
+const score = (half: number, obj_score: number, extra: Partial<StreamEvent> = {}): StreamEvent =>
+    ({ event: 'player_score', half, user_id: 'STEAM_0:0:1', kills: 0, deaths: 0, score: 0, obj_score, ...extra });
+
+describe('cap-credit (obj_score)', () => {
+    it('passes when a captured half also credits obj_score', () => {
+        const events = [cap(1, 'allies'), score(1, 5)];
+        expect(capCreditObjScore(events)).toEqual([]);
+    });
+
+    it('fires when a half has captures but obj_score stays 0 (the 487f472 regression)', () => {
+        const events = [cap(1, 'allies'), cap(1, 'axis'), score(1, 0), score(1, 0)];
+        const v = capCreditObjScore(events);
+        expect(v).toHaveLength(1);
+        expect(v[0].invariant).toBe('cap-credit-objscore');
+        expect(v[0].message).toContain('half 1');
+    });
+
+    it('is per-half: a good half-1 does not mask a broken half-2', () => {
+        const events = [cap(1, 'allies'), score(1, 5), cap(2, 'axis'), score(2, 0)];
+        const v = capCreditObjScore(events);
+        expect(v.map(x => x.message)).toEqual([expect.stringContaining('half 2')]);
+    });
+
+    it('is a no-op when no real captures happened', () => {
+        expect(capCreditObjScore([score(1, 0), cap(1, 'neutral')])).toEqual([]);
+    });
+
+    it('accepts obj_score credited via a player_stats_summary row', () => {
+        const summary: StreamEvent = {
+            event: 'player_stats_summary', half: 1, reason: 'half_end',
+            players: [{ user_id: 'STEAM_0:0:1', obj_score: 5, caps: 1 }],
+        };
+        expect(capCreditObjScore([cap(1, 'allies'), summary])).toEqual([]);
+    });
+});
+
+describe('cap-credit (caps) — guarded, forward-looking', () => {
+    it('is a no-op on a pre-caps stream (no caps field anywhere)', () => {
+        // April-era data: player_score has no caps field at all.
+        expect(capCreditCaps([cap(1, 'allies'), score(1, 5)])).toEqual([]);
+    });
+
+    it('passes when caps is emitted and credited', () => {
+        expect(capCreditCaps([cap(1, 'allies'), score(1, 5, { caps: 1 })])).toEqual([]);
+    });
+
+    it('fires when caps is emitted but every player stays at caps 0', () => {
+        const events = [cap(1, 'allies'), score(1, 5, { caps: 0 }), score(1, 7, { caps: 0 })];
+        const v = capCreditCaps(events);
+        expect(v).toHaveLength(1);
+        expect(v[0].invariant).toBe('cap-credit-caps');
+    });
+});
+
+describe('enum sanity', () => {
+    it('passes on valid team / owner vocab', () => {
+        const events = [
+            { event: 'player_team_change', team: 'spectator', user_id: 'x' },
+            cap(1, 'allies'),
+        ];
+        expect(enumSanity(events)).toEqual([]);
+    });
+
+    it('flags an invalid team value once per distinct value', () => {
+        const events = [
+            { event: 'player_spawn', team: 'british', user_id: 'x' },
+            { event: 'player_spawn', team: 'british', user_id: 'y' },
+        ];
+        const v = enumSanity(events);
+        expect(v).toHaveLength(1);
+        expect(v[0].invariant).toBe('enum-team');
+        expect(v[0].message).toContain('british');
+    });
+});
+
+describe('checkEventStream', () => {
+    it('aggregates violations across invariants', () => {
+        const events = [cap(1, 'allies'), score(1, 0, { caps: 0 }), { event: 'player_spawn', team: 'british', user_id: 'x' }];
+        const ids = checkEventStream(events).map(v => v.invariant).sort();
+        expect(ids).toEqual(['cap-credit-caps', 'cap-credit-objscore', 'enum-team']);
+    });
+
+    it('returns no violations for a clean stream', () => {
+        expect(checkEventStream([cap(1, 'allies'), score(1, 5, { caps: 1 })])).toEqual([]);
+    });
+});
