@@ -204,6 +204,11 @@ export interface HltvSyncConfig {
     enabled: boolean;
     heartbeat_seconds: number;       // 0 disables the heartbeat
     fallback_delay_seconds: number;  // used when no successful sample exists yet
+    // How long to keep coasting the last good clock across transient RCON sample
+    // failures before giving up to the fixed fallback delay. While coasting, the
+    // clock stays online and frozen so broadcastNow() keeps advancing 1:1 — the
+    // buffer never drops to fallback and there's no step when sampling resumes.
+    coast_grace_seconds: number;
     rcon_timeout_ms: number;
     servers: Record<string, HltvServerConfig>;  // keyed on game-server hostname (matches X-Server-Hostname)
     // hltv-api integration (KTPInfrastructure scripts/hltv-api.py, v2.2+).
@@ -219,6 +224,12 @@ export interface HltvSyncConfig {
 // local constant so this module stays self-contained — they describe the same
 // game-server clock event from two angles (queue tail vs. last-seen-tick).
 const TICK_RESET_THRESHOLD_S = 30;
+
+// When a good sample lands after a coast/gap, log a "resync step" if the fresh
+// sample's broadcast clock disagrees with the coasted projection by more than
+// this. Normal heartbeats agree to well under 1s; only a genuine HLTV clock snap
+// (proxy "forcing client delay", or recovery after a long outage) trips it.
+const RESYNC_STEP_THRESHOLD_S = 2;
 
 function formatRecordingStateLog(state: RecordingState | null, err: string | null): string {
     if (err) return ` recording=err:${err}`;
@@ -254,6 +265,13 @@ export class HltvSyncService extends EventEmitter {
         } catch (err: any) {
             return [null, err.message];
         }
+    }
+
+    // Seam for tests: the real UDP RCON `status` fetch. Overridable (via the
+    // usual `(svc as any).fetchStatus = …` pattern) so unit tests can drive
+    // sample() success/failure deterministically without network I/O.
+    protected fetchStatus(cfg: HltvServerConfig): Promise<RconStatus> {
+        return rconStatus(cfg, this.cfg.rcon_timeout_ms);
     }
 
     isActive(server: string): boolean {
@@ -357,7 +375,7 @@ export class HltvSyncService extends EventEmitter {
         const promise = (async (): Promise<HltvClock | null> => {
             const sampledAt = Date.now();
             try {
-                const status = await rconStatus(cfg, this.cfg.rcon_timeout_ms);
+                const status = await this.fetchStatus(cfg);
                 const [recordingState, recordingStateError] = await this.observeRecordingState(cfg.hltv_port);
                 const prev = this.clocks.get(server);
                 const clock: HltvClock = {
@@ -374,6 +392,17 @@ export class HltvSyncService extends EventEmitter {
                     recordingState,
                     recordingStateError,
                 };
+                // Reconcile: if the previous clock was live (healthy or coasting),
+                // compare its projection at this instant to the fresh sample. We
+                // always adopt the fresh sample (ground truth), but a large gap means
+                // HLTV's clock moved while we weren't watching — log it so the step is
+                // observable instead of a silent jump in the overlay.
+                if (prev && prev.online) {
+                    const stepSec = broadcastNow(clock, sampledAt) - broadcastNow(prev, sampledAt);
+                    if (Math.abs(stepSec) > RESYNC_STEP_THRESHOLD_S) {
+                        console.warn(`[hltv-sync] ${server} resync step ${stepSec.toFixed(1)}s on ${reason} (HLTV clock moved during coast/gap; sample age was ${Math.round((sampledAt - prev.sampledAt) / 1000)}s)`);
+                    }
+                }
                 this.clocks.set(server, clock);
                 console.log(`[hltv-sync] ${server} sample (${reason}): delay=${clock.delaySeconds}s gameTime=${clock.activeTime}s map=${clock.map}${formatRecordingStateLog(recordingState, recordingStateError)}`);
                 if (recordingState?.already_recording_warning) {
@@ -383,23 +412,42 @@ export class HltvSyncService extends EventEmitter {
                 return clock;
             } catch (err: any) {
                 const prev = this.clocks.get(server);
-                const clock: HltvClock = prev
-                    ? { ...prev, online: false, lastError: err.message }
-                    : {
-                        server, cfg,
-                        delaySeconds: this.cfg.fallback_delay_seconds,
-                        activeTime: 0,
-                        sampledAt,
-                        map: null,
-                        serverName: null,
-                        online: false,
-                        lastError: err.message,
-                        calibrationOffsetMs: 0,
-                        recordingState: null,
-                        recordingStateError: null,
-                    };
+                // Coast across a TRANSIENT failure during steady play: keep the last
+                // good clock online and frozen. broadcastNow() advances 1:1 off the
+                // preserved (activeTime, sampledAt), so the buffer keeps releasing
+                // normally and there's no step when sampling resumes. Excluded:
+                //  - boundaries: tick_reset already set online=false above, and
+                //    map_change's activeTime is now for the wrong map (must fall to
+                //    fallback), so neither coasts.
+                //  - stale: once we've been failing longer than coast_grace_seconds
+                //    (measured from the last GOOD sample, which stays frozen across
+                //    coasts), give up to fallback as before.
+                const ageMs = sampledAt - (prev?.sampledAt ?? 0);
+                const canCoast = !!prev && prev.online && reason !== 'map_change'
+                    && ageMs <= this.cfg.coast_grace_seconds * 1000;
+                let clock: HltvClock;
+                if (canCoast) {
+                    clock = { ...prev!, lastError: err.message }; // online stays true; clock frozen → coasts
+                    console.warn(`[hltv-sync] ${server} sample failed (${reason}): ${err.message} — coasting (last good sample ${Math.round(ageMs / 1000)}s ago)`);
+                } else {
+                    clock = prev
+                        ? { ...prev, online: false, lastError: err.message }
+                        : {
+                            server, cfg,
+                            delaySeconds: this.cfg.fallback_delay_seconds,
+                            activeTime: 0,
+                            sampledAt,
+                            map: null,
+                            serverName: null,
+                            online: false,
+                            lastError: err.message,
+                            calibrationOffsetMs: 0,
+                            recordingState: null,
+                            recordingStateError: null,
+                        };
+                    console.warn(`[hltv-sync] ${server} sample failed (${reason}): ${err.message}`);
+                }
                 this.clocks.set(server, clock);
-                console.warn(`[hltv-sync] ${server} sample failed (${reason}): ${err.message}`);
                 this.emit('clock', clock);
                 return clock;
             } finally {
@@ -441,6 +489,8 @@ export class HltvSyncService extends EventEmitter {
                 sampledAt: c.sampledAt,
                 sampleAgeMs: Date.now() - c.sampledAt,
                 broadcastNow: broadcastNow(c),
+                lastEventTick: this.highestEventTick.get(server) ?? null,
+                coastGraceSeconds: this.cfg.coast_grace_seconds,
                 online: c.online,
                 lastError: c.lastError,
                 calibrationOffsetMs: c.calibrationOffsetMs,

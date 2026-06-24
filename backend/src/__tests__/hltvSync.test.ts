@@ -55,6 +55,7 @@ describe('HltvSyncService — trigger logic', () => {
         enabled: true,
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
+        coast_grace_seconds: 120,
         rcon_timeout_ms: 5000,
         api_url: '',
         api_auth_key: '',
@@ -149,6 +150,7 @@ describe('HltvSyncService — getStatus', () => {
         enabled: true,
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
+        coast_grace_seconds: 120,
         rcon_timeout_ms: 5000,
         api_url: '',
         api_auth_key: '',
@@ -178,6 +180,15 @@ describe('HltvSyncService — getStatus', () => {
         });
         expect(typeof status[0].broadcastNow).toBe('number');
     });
+
+    it('reports lastEventTick (high-water mark) and coastGraceSeconds', () => {
+        const svc = new HltvSyncService(cfg);
+        (svc as any).clocks.set('atl1', fakeClock());
+        (svc as any).highestEventTick.set('atl1', 1234);
+        const status = svc.getStatus();
+        expect(status[0].lastEventTick).toBe(1234);
+        expect(status[0].coastGraceSeconds).toBe(120);
+    });
 });
 
 describe('HltvSyncService.broadcastNow — offline-clock guard', () => {
@@ -185,6 +196,7 @@ describe('HltvSyncService.broadcastNow — offline-clock guard', () => {
         enabled: true,
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
+        coast_grace_seconds: 120,
         rcon_timeout_ms: 5000,
         api_url: '',
         api_auth_key: '',
@@ -226,6 +238,7 @@ describe('HltvSyncService — delaySeconds (used by the buffer to drain a bounda
         enabled: true,
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
+        coast_grace_seconds: 120,
         rcon_timeout_ms: 5000,
         api_url: '',
         api_auth_key: '',
@@ -254,11 +267,95 @@ describe('HltvSyncService — delaySeconds (used by the buffer to drain a bounda
     });
 });
 
+describe('HltvSyncService — clock-continuity coasting', () => {
+    const cfg = {
+        enabled: true,
+        heartbeat_seconds: 0,
+        fallback_delay_seconds: 60,
+        coast_grace_seconds: 120,
+        rcon_timeout_ms: 5000,
+        api_url: '',
+        api_auth_key: '',
+        api_timeout_ms: 3000,
+        servers: { 'atl1': { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' } },
+    };
+
+    const okStatus = { delaySeconds: 60, activeTime: 220, map: 'dod_anzio', serverName: 'KTP - Atlanta 1' };
+
+    function makeService(fetchImpl: () => Promise<any>) {
+        const svc = new HltvSyncService(cfg);
+        (svc as any).fetchStatus = fetchImpl;
+        return svc;
+    }
+
+    it('coasts a transient failure within grace: clock stays online, broadcastNow keeps advancing', async () => {
+        const svc = makeService(async () => { throw new Error('rcon timeout'); });
+        // Healthy clock from 30s ago (within the 120s grace).
+        (svc as any).clocks.set('atl1', fakeClock({ online: true, sampledAt: Date.now() - 30_000 }));
+        await svc.sample('atl1', 'heartbeat');
+        expect(svc.getClock('atl1')?.online).toBe(true);          // coasting, not flipped offline
+        expect(svc.broadcastNow('atl1')).not.toBeNull();          // buffer stays on the broadcast path
+    });
+
+    it('gives up to fallback once a failure outlasts the grace window', async () => {
+        const svc = makeService(async () => { throw new Error('rcon timeout'); });
+        // Last good sample 130s ago (> 120s grace).
+        (svc as any).clocks.set('atl1', fakeClock({ online: true, sampledAt: Date.now() - 130_000 }));
+        await svc.sample('atl1', 'heartbeat');
+        expect(svc.getClock('atl1')?.online).toBe(false);         // fallback engages
+        expect(svc.broadcastNow('atl1')).toBeNull();
+    });
+
+    it('never coasts a map_change failure (its activeTime is for the wrong map)', async () => {
+        const svc = makeService(async () => { throw new Error('rcon timeout'); });
+        (svc as any).clocks.set('atl1', fakeClock({ online: true, sampledAt: Date.now() - 1_000 }));
+        await svc.sample('atl1', 'map_change');
+        expect(svc.getClock('atl1')?.online).toBe(false);
+    });
+
+    // Boundary-fix regression guard: tick_reset flips online=false in onIngestEvent
+    // BEFORE the resample runs, so a failed tick_reset resample must NOT coast back
+    // online (that would defeat the delay-buffer drain at a changelevel).
+    it('does not coast back online when the previous clock was already offline (tick_reset)', async () => {
+        const svc = makeService(async () => { throw new Error('rcon timeout'); });
+        (svc as any).clocks.set('atl1', fakeClock({ online: false, sampledAt: Date.now() - 1_000 }));
+        await svc.sample('atl1', 'tick_reset');
+        expect(svc.getClock('atl1')?.online).toBe(false);
+    });
+
+    it('logs a resync step when a fresh sample disagrees with the coasted projection', async () => {
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            // prev projects to 40 now; fresh sample's activeTime is +10s → projects to 50.
+            const svc = makeService(async () => ({ ...okStatus, activeTime: 110, delaySeconds: 60 }));
+            (svc as any).clocks.set('atl1', fakeClock({ online: true, activeTime: 100, delaySeconds: 60, sampledAt: Date.now() }));
+            await svc.sample('atl1', 'heartbeat');
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining('resync step'));
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    it('does NOT log a resync step for a normal heartbeat that advanced consistently', async () => {
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            // 60s ago activeTime=160; a healthy sample now reads 220 (advanced 60s) → step ~0.
+            const svc = makeService(async () => ({ ...okStatus, activeTime: 220, delaySeconds: 60 }));
+            (svc as any).clocks.set('atl1', fakeClock({ online: true, activeTime: 160, delaySeconds: 60, sampledAt: Date.now() - 60_000 }));
+            await svc.sample('atl1', 'heartbeat');
+            expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('resync step'));
+        } finally {
+            warn.mockRestore();
+        }
+    });
+});
+
 describe('HltvSyncService — calibration', () => {
     const cfg = {
         enabled: true,
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
+        coast_grace_seconds: 120,
         rcon_timeout_ms: 5000,
         api_url: '',
         api_auth_key: '',

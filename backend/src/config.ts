@@ -79,6 +79,7 @@ function loadHltvSync(file: any): HltvSyncConfig {
         enabled:                bool(process.env.HUD_HLTV_SYNC_ENABLED,            file?.enabled            ?? false),
         heartbeat_seconds:      int(process.env.HUD_HLTV_SYNC_HEARTBEAT_SECONDS,   file?.heartbeat_seconds  ?? 60),
         fallback_delay_seconds: int(process.env.HUD_HLTV_SYNC_FALLBACK_SECONDS,    file?.fallback_delay_seconds ?? 60),
+        coast_grace_seconds:    int(process.env.HUD_HLTV_SYNC_COAST_GRACE_SECONDS, file?.coast_grace_seconds ?? 120),
         rcon_timeout_ms:        int(process.env.HUD_HLTV_SYNC_RCON_TIMEOUT_MS,     file?.rcon_timeout_ms    ?? 5000),
         api_url:                process.env.HUD_HLTV_API_URL                    ?? file?.api_url        ?? '',
         api_auth_key:           process.env.HUD_HLTV_API_AUTH_KEY               ?? file?.api_auth_key   ?? '',

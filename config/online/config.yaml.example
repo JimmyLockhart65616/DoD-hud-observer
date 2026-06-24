@@ -40,6 +40,10 @@ hltv_sync:
   enabled: true
   heartbeat_seconds: 60
   fallback_delay_seconds: 60
+  # Coast the last good clock across transient RCON failures for this long (seconds)
+  # before falling to the fixed fallback delay — a brief proxy hiccup then neither
+  # collapses the broadcast delay nor steps the overlay clock on recovery.
+  coast_grace_seconds: 120
   rcon_timeout_ms: 5000
   # hltv-api 2.2 integration (KTPInfrastructure scripts/hltv-api.py).
   # On the data server hltv-api binds 127.0.0.1:8087. Pull the matching auth

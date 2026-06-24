@@ -16,6 +16,7 @@
 #   HUD_HLTV_SYNC_ENABLED            → hltv_sync.enabled (true/false)
 #   HUD_HLTV_SYNC_HEARTBEAT_SECONDS  → hltv_sync.heartbeat_seconds (0 disables)
 #   HUD_HLTV_SYNC_FALLBACK_SECONDS   → hltv_sync.fallback_delay_seconds
+#   HUD_HLTV_SYNC_COAST_GRACE_SECONDS → hltv_sync.coast_grace_seconds
 #   HUD_HLTV_SYNC_RCON_TIMEOUT_MS    → hltv_sync.rcon_timeout_ms
 #   HUD_HLTV_API_URL                 → hltv_sync.api_url (empty disables /state)
 #   HUD_HLTV_API_AUTH_KEY            → hltv_sync.api_auth_key
@@ -54,6 +55,11 @@ hltv_sync:
   enabled: false
   heartbeat_seconds: 60
   fallback_delay_seconds: 60
+  # Keep coasting the last good clock across transient RCON failures for this long
+  # (seconds, measured from the last good sample) before falling to the fixed
+  # fallback delay. Spans ~2 missed 60s heartbeats so a brief proxy hiccup doesn't
+  # collapse the delay or step the clock on recovery.
+  coast_grace_seconds: 120
   rcon_timeout_ms: 5000
   # hltv-api 2.2 integration. When api_url is non-empty, each successful RCON
   # sample also fetches GET /hltv/<port>/state for diagnostic correlation with
