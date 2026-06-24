@@ -540,7 +540,12 @@ export const SocketStoreComponent = () => {
             const e = JSON.parse(raw);
             const proneUpdate = () => ({
                 prone_state: e.state,
-                prone_since: e.state !== 'standing' ? e.timestamp : null,
+                // Anchor on the client RECEIPT instant, not the plugin's server
+                // timestamp (e.timestamp). The event is delay-buffered ~60s, so
+                // receipt ≈ the broadcast instant the player went prone — making the
+                // shame timer broadcast-relative. e.timestamp would inflate it by the
+                // full delay plus any server↔browser clock skew (clocks not NTP-locked).
+                prone_since: e.state !== 'standing' ? Date.now() : null,
             });
             setAlliesPlayers(prev => updatePlayer(prev, e.user_id, proneUpdate));
             setAxisPlayers(prev => updatePlayer(prev, e.user_id, proneUpdate));
@@ -811,7 +816,11 @@ export const SocketStoreComponent = () => {
                 health:           e.health ?? (e.alive ? 100 : 0),
                 dead:             !e.alive,
                 prone_state:      e.prone_state ?? 'standing',
-                prone_since:      e.prone_since ?? null,
+                // Snapshot replay: the cached prone_since is the old server timestamp
+                // and isn't broadcast-relative. Re-anchor on receipt so the shame
+                // timer restarts from ~0 on reload (bounded, acceptable) rather than
+                // showing an inflated elapsed.
+                prone_since:      (e.prone_state && e.prone_state !== 'standing') ? Date.now() : null,
                 disconnected:     false,
             };
 
