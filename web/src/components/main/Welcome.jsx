@@ -15,6 +15,13 @@ class Welcome extends React.Component {
                             <li><a href="/help">Viewer Guide</a> — how to set up and use the HUD in OBS</li>
                         </ul>
                         <h5 style={{ marginTop: '32px' }}>
+                            What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-06-25</small>
+                        </h5>
+                        <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>
+                            <li>Flag captures now name the players who made the cap — in the cap feed and in the capout board title</li>
+                            <li>New cap break stat: kill an enemy while they're standing on a flag mid-capture and you're credited with a cap break (new BRK column on the stats board), with a live callout in the flag feed</li>
+                        </ul>
+                        <h5 style={{ marginTop: '32px' }}>
                             What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-06-13</small>
                         </h5>
                         <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>
