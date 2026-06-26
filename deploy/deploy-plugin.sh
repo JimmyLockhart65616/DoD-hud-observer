@@ -110,12 +110,18 @@ if [[ ! -f "$PLUGIN_FILE" ]]; then
     exit 1
 fi
 
-# Staleness guard: warn (don't fail) if the binary predates its own source.
-# Cheap insurance against shipping a forgotten old compile.
+# Staleness guard: ABORT (fail-closed) if the binary predates its own source — a
+# recompile was almost certainly forgotten, so deploying would ship a STALE plugin
+# (the exact landmine that shipped an old captor-only build to DEN5, 2026-06-26).
+# A non-zero exit can't be missed the way a warning can (filtered logs, LGSM spam).
+# Override (intentional): HUD_ALLOW_STALE=1  (HUD_SKIP_STALE_WARN kept as alias).
 SMA_SRC="$REPO_ROOT/KTPHudObserver.sma"
-# HUD_SKIP_STALE_WARN=1 suppresses this (e.g. a wrapper that already warned once).
-if [[ -f "$SMA_SRC" && "$PLUGIN_FILE" -ot "$SMA_SRC" && "${HUD_SKIP_STALE_WARN:-0}" != 1 ]]; then
-    echo "WARNING: $PLUGIN_FILE is OLDER than KTPHudObserver.sma — recompile before deploying?" >&2
+if [[ -f "$SMA_SRC" && "$PLUGIN_FILE" -ot "$SMA_SRC" && "${HUD_ALLOW_STALE:-${HUD_SKIP_STALE_WARN:-0}}" != 1 ]]; then
+    echo "error: $PLUGIN_FILE is OLDER than KTPHudObserver.sma — recompile before deploying." >&2
+    echo "       The source changed since this binary was built, so deploying now would ship a" >&2
+    echo "       STALE plugin. Recompile to the canonical path (CLAUDE.md -> 'Compiling the AMXX" >&2
+    echo "       Plugin'), then re-run. Override (intentional): HUD_ALLOW_STALE=1." >&2
+    exit 1
 fi
 if [[ "$DO_CFG" == 1 && ! -f "$CFG_FILE" ]]; then
     echo "error: $CFG_FILE not found (gitignored — copy from .example and fill in)" >&2

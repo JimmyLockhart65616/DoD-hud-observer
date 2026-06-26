@@ -73,10 +73,17 @@ if [[ ! -f "$PLUGIN_FILE" ]]; then
     exit 1
 fi
 
-# Staleness guard: warn (don't fail) if the binary predates its own source.
+# Staleness guard: ABORT (fail-closed) if the binary predates its own source.
+# Fleet-wide distribution of a stale build is worse than a single-server canary,
+# so fail hard rather than warn (a missed warning shipped an old build to DEN5,
+# 2026-06-26). Override (intentional): HUD_ALLOW_STALE=1.
 SMA_SRC="$REPO_ROOT/KTPHudObserver.sma"
-if [[ -f "$SMA_SRC" && "$PLUGIN_FILE" -ot "$SMA_SRC" ]]; then
-    echo "WARNING: $PLUGIN_FILE is OLDER than KTPHudObserver.sma — recompile before distributing?" >&2
+if [[ -f "$SMA_SRC" && "$PLUGIN_FILE" -ot "$SMA_SRC" && "${HUD_ALLOW_STALE:-0}" != 1 ]]; then
+    echo "error: $PLUGIN_FILE is OLDER than KTPHudObserver.sma — recompile before distributing." >&2
+    echo "       Deploying now would push a STALE plugin to the whole fleet. Recompile to the" >&2
+    echo "       canonical path (CLAUDE.md -> 'Compiling the AMXX Plugin'), then re-run." >&2
+    echo "       Override (intentional): HUD_ALLOW_STALE=1." >&2
+    exit 1
 fi
 
 DEST="$DIST_WATCH/$DIST_SUBPATH/KTPHudObserver.amxx"
