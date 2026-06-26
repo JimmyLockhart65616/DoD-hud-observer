@@ -14,15 +14,23 @@
 #   --bootstrap      Full first-time install (implies --cfg, edits plugins.ini
 #                    and dodserver.cfg). Idempotent — safe to re-run.
 #   --cfg            Also push deploy/hud_observer.cfg (URL + auth key).
+#   --stage          Install the binary as KTPHudObserver.amxx.new (NOT live) and
+#                    skip the restart. The nightly 3 AM restart swaps every
+#                    *.new in the plugins dir into place — safe during live play,
+#                    no mid-match bounce. Mutually exclusive with --bootstrap.
 #   --no-restart     Skip the LGSM restart at the end (e.g. staging multiple
 #                    plugins before a single restart).
-#   --plugin <path>  Override the plugin file shipped (default: KTPHudObserver.amxx
-#                    in the repo root).
+#   --plugin <path>  Override the plugin file shipped (default: the compiled
+#                    artifact at ../KTPInfrastructure/local/plugins/KTPHudObserver.amxx
+#                    — the documented compile output, NOT the gitignored repo-root
+#                    copy, which is frequently stale).
 #   --dry-run        Print every remote command, run nothing.
 #
 # Env overrides:
-#   LGSM_ROOT=/home/dodserver        — parent dir of the LGSM instance scripts
-#   LGSM_USER=dodserver              — owner of the gameserver files (chown target)
+#   LGSM_ROOT=/home/dodserver           — parent dir of the LGSM instance scripts
+#   LGSM_USER=dodserver                 — owner of the gameserver files (chown target)
+#   KTP_INFRA_ROOT=../KTPInfrastructure — sibling infra repo (default plugin source)
+#   PLUGIN_FILE=<path>                  — same effect as --plugin
 #
 # Layout assumed on the target host:
 #   $LGSM_ROOT/<instance>                                                # LGSM script
@@ -49,6 +57,7 @@ set -euo pipefail
 DO_BOOTSTRAP=0
 DO_CFG=0
 DO_RESTART=1
+DO_STAGE=0
 DRY_RUN=0
 PLUGIN_FILE=""
 
@@ -57,14 +66,22 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --bootstrap)   DO_BOOTSTRAP=1; DO_CFG=1; shift ;;
         --cfg)         DO_CFG=1; shift ;;
+        --stage)       DO_STAGE=1; DO_RESTART=0; shift ;;
         --no-restart)  DO_RESTART=0; shift ;;
         --dry-run)     DRY_RUN=1; shift ;;
         --plugin)      PLUGIN_FILE="$2"; shift 2 ;;
-        --help|-h)     sed -n '3,30p' "$0"; exit 0 ;;
+        --help|-h)     sed -n '3,33p' "$0"; exit 0 ;;
         --*)           echo "unknown flag: $1" >&2; exit 1 ;;
         *)             POSITIONAL+=("$1"); shift ;;
     esac
 done
+
+if [[ "$DO_STAGE" == 1 && "$DO_BOOTSTRAP" == 1 ]]; then
+    echo "error: --stage and --bootstrap are mutually exclusive" >&2
+    echo "       bootstrap installs plugins.ini + cfg and needs a restart to load;" >&2
+    echo "       stage only drops a .new binary for the nightly swap." >&2
+    exit 1
+fi
 
 if [[ ${#POSITIONAL[@]} -ne 2 ]]; then
     echo "usage: $0 [flags] <user@host> <instance>" >&2
@@ -78,13 +95,27 @@ LGSM_ROOT="${LGSM_ROOT:-/home/dodserver}"
 LGSM_USER="${LGSM_USER:-dodserver}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PLUGIN_FILE="${PLUGIN_FILE:-$REPO_ROOT/KTPHudObserver.amxx}"
+# Default to the documented compile output in the sibling infra repo, NOT the
+# gitignored repo-root KTPHudObserver.amxx — that copy is a transient build
+# artifact that goes stale silently and was the source of an old "deployed an
+# old binary" landmine.
+KTP_INFRA_ROOT="${KTP_INFRA_ROOT:-$(cd "$REPO_ROOT/.." && pwd)/KTPInfrastructure}"
+PLUGIN_FILE="${PLUGIN_FILE:-$KTP_INFRA_ROOT/local/plugins/KTPHudObserver.amxx}"
 CFG_FILE="$REPO_ROOT/deploy/hud_observer.cfg"
 
 if [[ ! -f "$PLUGIN_FILE" ]]; then
     echo "error: plugin not found at $PLUGIN_FILE" >&2
-    echo "       compile it first (see CLAUDE.md → 'Compiling the AMXX Plugin')" >&2
+    echo "       compile it first (see CLAUDE.md → 'Compiling the AMXX Plugin')," >&2
+    echo "       or pass --plugin <path> / set PLUGIN_FILE=<path>." >&2
     exit 1
+fi
+
+# Staleness guard: warn (don't fail) if the binary predates its own source.
+# Cheap insurance against shipping a forgotten old compile.
+SMA_SRC="$REPO_ROOT/KTPHudObserver.sma"
+# HUD_SKIP_STALE_WARN=1 suppresses this (e.g. a wrapper that already warned once).
+if [[ -f "$SMA_SRC" && "$PLUGIN_FILE" -ot "$SMA_SRC" && "${HUD_SKIP_STALE_WARN:-0}" != 1 ]]; then
+    echo "WARNING: $PLUGIN_FILE is OLDER than KTPHudObserver.sma — recompile before deploying?" >&2
 fi
 if [[ "$DO_CFG" == 1 && ! -f "$CFG_FILE" ]]; then
     echo "error: $CFG_FILE not found (gitignored — copy from .example and fill in)" >&2
@@ -93,7 +124,15 @@ fi
 
 INSTANCE_DIR="$LGSM_ROOT/$INSTANCE"
 SERVER_DIR="$INSTANCE_DIR/serverfiles/dod"
-PLUGIN_DEST="$SERVER_DIR/addons/ktpamx/plugins/KTPHudObserver.amxx"
+PLUGIN_LIVE="$SERVER_DIR/addons/ktpamx/plugins/KTPHudObserver.amxx"
+# --stage drops the binary as *.new; the nightly 3 AM restart globs
+# plugins/*.new and mv -f's each into place (then chmod +x). No live overwrite,
+# no mid-match restart.
+if [[ "$DO_STAGE" == 1 ]]; then
+    PLUGIN_DEST="$PLUGIN_LIVE.new"
+else
+    PLUGIN_DEST="$PLUGIN_LIVE"
+fi
 CFG_DEST="$SERVER_DIR/addons/ktpamx/configs/hud_observer.cfg"
 PLUGINS_INI="$SERVER_DIR/addons/ktpamx/configs/plugins.ini"
 DODSERVER_CFG="$SERVER_DIR/dodserver.cfg"
@@ -103,9 +142,10 @@ DODSERVER_EXEC_LINE="exec addons/ktpamx/configs/hud_observer.cfg"
 
 echo "==> Target: $HOST :: $INSTANCE_DIR"
 echo "==> Plugin: $PLUGIN_FILE  ($(wc -c <"$PLUGIN_FILE") bytes)"
+[[ "$DO_STAGE" == 1 ]]     && echo "==> Mode: stage (.new — activates at next restart / nightly 3 AM swap)"
 [[ "$DO_BOOTSTRAP" == 1 ]] && echo "==> Mode: bootstrap (full install)"
 [[ "$DO_CFG" == 1 ]]       && echo "==> Will push hud_observer.cfg"
-[[ "$DO_RESTART" == 0 ]]   && echo "==> Skipping LGSM restart"
+[[ "$DO_RESTART" == 0 && "$DO_STAGE" == 0 ]] && echo "==> Skipping LGSM restart"
 
 run_remote() {
     if [[ "$DRY_RUN" == 1 ]]; then

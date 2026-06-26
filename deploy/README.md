@@ -1,8 +1,19 @@
-# Deploy to data server
+# Deploy
+
+Two independent pipelines:
+
+- **Data server** (this file, below) — Node backend + React frontend → `cadaver@74.91.112.242` via `deploy.sh`.
+- **Game-server plugin** — `KTPHudObserver.amxx` → the whole fleet via
+  `distribute-plugin.sh` (KTPFileDistributor), or one server at a time via
+  `deploy-plugin.sh` (see [Plugin deploy](#plugin-deploy)).
+
+---
+
+## Data server (backend + frontend)
 
 Target: `cadaver@74.91.112.242`, app dir `/opt/hud-observer`.
 
-## Routine deploy
+### Routine deploy
 
 ```bash
 ./deploy/deploy.sh               # backend + frontend
@@ -11,7 +22,7 @@ Target: `cadaver@74.91.112.242`, app dir `/opt/hud-observer`.
 ./deploy/deploy.sh --dry-run     # preview rsync, no remote changes
 ```
 
-## One-time setup on the data server
+### One-time setup on the data server
 
 ```bash
 ssh cadaver@74.91.112.242
@@ -38,13 +49,13 @@ sudo systemctl enable --now hud-observer hud-observer-web
 
 (`cadaver` already has `NOPASSWD: ALL` sudo, so no sudoers rule is needed.)
 
-## First-time deploy order
+### First-time deploy order
 
 1. Run `./deploy/deploy.sh` from your workstation — it will fail at the `systemctl restart` step because the unit doesn't exist yet. That's expected; files are on the server.
 2. SSH in and do the one-time setup above.
 3. Re-run `./deploy/deploy.sh` — should be clean.
 
-## Firewall (UFW)
+### Firewall (UFW)
 
 The data server exposes four HUD ports. Three are public (OBS needs them); the ingest port is locked to the game server.
 
@@ -59,7 +70,7 @@ Only Denver 5 posts events right now, so 9000 stays pinhole-only. When another g
 
 Port 9000 (not 8088) because 8088 was already bound by an unrelated "KTP AC API" on the box. Override lives in `Environment=HUD_INGEST_PORT=9000` in the systemd unit.
 
-## Config
+### Config
 
 The repo follows the KTPInfrastructure split:
 
@@ -69,7 +80,7 @@ The repo follows the KTPInfrastructure split:
 
 Which one the backend loads is controlled by `HUD_CONFIG_PATH` in the systemd unit (defaults to `/opt/hud-observer/config/online/config.yaml` per `deploy/hud-observer.service.example`). Per-secret overrides like `HUD_AUTH_KEY`, `HUD_INGEST_PORT`, etc. still work via `Environment=` lines on the unit.
 
-### One-time bootstrap of the online config
+#### One-time bootstrap of the online config
 
 ```bash
 ssh cadaver@74.91.112.242
@@ -80,10 +91,73 @@ sudo nano /opt/hud-observer/config/online/config.yaml   # fill in auth_key + rco
 sudo systemctl restart hud-observer
 ```
 
-## Logs
+### Logs
 
 ```bash
 sudo tail -f /var/log/hud-observer/backend.log
 sudo tail -f /var/log/hud-observer/web.log
 sudo journalctl -u hud-observer -f
 ```
+
+---
+
+## Plugin deploy
+
+`KTPHudObserver.amxx` is **excluded** from Tony's centralised `deploy.py`
+(KTPInfrastructure) — we own its rollout. Two paths, split by intent: keep the
+binary current everywhere, vs. choose where it actually runs.
+
+### Fleet sync — `distribute-plugin.sh` (the everyday "push my latest" path)
+
+```bash
+./deploy/distribute-plugin.sh --dry-run   # show the drop, change nothing
+./deploy/distribute-plugin.sh             # confirm, then drop to the fleet
+./deploy/distribute-plugin.sh --yes       # skip the confirm prompt
+```
+
+Drops the compiled binary into the data server's **KTPFileDistributor** watch
+dir at `/home/dod/distribute/addons/ktpamx/plugins/KTPHudObserver.amxx`. The
+`ktp-file-distributor` systemd worker on `neindataatl` (74.91.112.242) SFTPs it
+to **every** server in `servers.json` — all 25 KTP instances, all `enabled` —
+within ~5s and posts to Discord. This keeps the binary byte-identical fleet-wide
+in one command, with no per-server SSH keys on your workstation (the distributor
+holds the fan-out key).
+
+**Distributing the binary does not enable it.** A server only *loads*
+KTPHudObserver if its `plugins.ini` lists `KTPHudObserver.amxx`. Servers without
+that line hold the newest binary **dormant** on disk — intended, so the HUD stays
+opt-in per server (perf isolation / player choice). The distributor overwrites
+the live `.amxx`; a running server keeps the old bytecode in memory until its
+next restart (nightly 3 AM or manual), so there's no mid-match swap.
+
+> The drop posts a success/failure message to Tony's Discord — it's an audit
+> trail, not a private op. **Canary first** (below), then distribute fleet-wide.
+
+### Canary / enable a single server — `deploy-plugin.sh`
+
+```bash
+./deploy/deploy-plugin.sh <user@host> <instance>              # push + restart one server
+./deploy/deploy-plugin.sh --bootstrap <user@host> <instance> # first-time: also adds the
+                                                              # plugins.ini line + cfg exec
+./deploy/deploy-plugin.sh --stage <user@host> <instance>     # drop .new, swap at 3 AM (no bounce)
+```
+
+Use this to canary a new build on **one** server before a fleet drop, or to
+**enable** the HUD somewhere (`--bootstrap` writes the `KTPHudObserver.amxx debug`
+line into that server's `plugins.ini` + the `hud_observer.cfg` exec line, then
+restarts). Run with `--help` for all flags.
+
+### Enable / disable a server
+
+- **Enable:** `deploy-plugin.sh --bootstrap <user@host> <instance>` (adds the
+  `plugins.ini` line). It loads at the next restart; the dormant binary is
+  already current if you've been running fleet sync.
+- **Disable:** comment the `KTPHudObserver.amxx` line in that server's
+  `plugins.ini` and restart. Fleet sync keeps refreshing the dormant binary but
+  it won't load. Disabling is about player choice / perf isolation, not ingest
+  load — that scales with concurrent *active* matches POSTing, not server count.
+
+Both scripts default the binary to the documented compile output
+`../KTPInfrastructure/local/plugins/KTPHudObserver.amxx` (override with
+`--plugin <path>`) and warn if it's older than `KTPHudObserver.sma`. **Recompile
+before deploying** — see CLAUDE.md → "Compiling the AMXX Plugin".
