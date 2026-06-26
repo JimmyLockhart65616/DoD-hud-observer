@@ -142,7 +142,7 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
   "class_id": 0, "weapon_primary": "garand", "weapon_secondary": "colt" }
 { "event": "player_score", "user_id": "STEAM_0:0:123", "kills": 0, "deaths": 0, "score": 0, "obj_score": 0,
   "damage": 0, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0,
-  "caps": 0, "best_streak": 0 }
+  "caps": 0, "cap_breaks": 0, "best_streak": 0 }
 { "event": "kill", "killer_id": "STEAM_0:0:123", "victim_id": "STEAM_0:0:456",
   "weapon": "garand", "kill_type": "normal|suicide|teamkill", "kill_class": "gun|nade",
   "headshot": false, "victim_prone": false, "killer_prone": false,
@@ -169,7 +169,20 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
   "capping_team": "allies|axis" }
 { "event": "flag_captured", "flag_id": 0, "flag_name": "Allied Plaza",
   "new_owner": "allies|axis", "captor_ids": ["STEAM_0:0:123"] }
+{ "event": "cap_break", "flag_id": 0, "flag_name": "Allied Plaza", "reason": "kill",
+  "breaker_id": "STEAM_0:0:456", "broke_team": "allies|axis" }
 ```
+
+- `flag_captured` is emitted ~0.5s AFTER `dod_control_point_captured` (a per-CP
+  one-shot `set_task`), so `captor_ids` carries the captors that `dod_score_event`
+  credited (it fires ~0.25s deferred). Emitting synchronously read an empty batch
+  (the long-standing empty-captor_ids/capout_by bug).
+- `cap_break` (reason `kill`) = an enemy killed a capper on the point, removing
+  them from the capture zone (confirmed by an in-zone count drop the next poll).
+  `breaker_id` is the killer (credited `cap_breaks`); `broke_team` is the capping
+  team that lost the capper. The only per-player-attributable break in extension
+  mode (counts only, no zone identity) — step-off / enemy-contest are `flag_cap_stopped`
+  / `flag_cap_contested`, unattributed.
 
 ### Stats Events (popups: cap flash, round/halftime/match-end boards)
 
@@ -181,7 +194,7 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
     { "user_id": "STEAM_0:0:123", "name": "PlayerName", "team": "allies|axis",
       "kills": 0, "deaths": 0, "assists": 0, "damage": 0,
       "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,
-      "caps": 0, "best_streak": 0 }
+      "caps": 0, "cap_breaks": 0, "best_streak": 0 }
   ]
 }
 ```
@@ -192,6 +205,8 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 - Accumulators are half-scoped (reset on `ktp_match_start`), slot-scoped (reset on
   connect/disconnect). Assist = 50+ enemy damage to a victim since their last spawn,
   killed by someone else. `kill_class` "nade" = wpnindex ∈ {13,14,15,16,36} (grenades + mills bomb).
+  `cap_breaks` = defensive stat: killed an enemy capper standing on the point (separate
+  from `caps`, which is offensive). Credited via the breaker's `player_score`.
 - `half_end` + a `half_end`-reason summary fire when the plugin sees KTPMatchHandler's
   `KTP_HALF_END` log line (half-1 end only); `ktp_match_end` covers all terminal paths.
 - Summary emission is event-driven only (cap / capout / half end / match end /
