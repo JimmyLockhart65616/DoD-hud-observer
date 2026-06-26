@@ -14,6 +14,21 @@ import { humanizeFlagName } from '../Flags/humanize';
 //     by current Date.now() and stale items disappear at once.
 
 const FlagFeedItem = ({ entry }) => {
+    if (entry.kind === 'cap_break_kill') {
+        // An enemy killed a capper on the point. Styled in the breaker's team
+        // colour; names the player who made the defensive stop.
+        const team = entry.breaker_team;
+        return (
+            <div className={`flagfeed-item flagfeed-break flagfeed-${team}`}>
+                <span className="flagfeed-icon">!</span>
+                <div className="flagfeed-body">
+                    <span className="flagfeed-tag flagfeed-tag-break">CAP BREAK</span>
+                    <span className="flagfeed-flag">{humanizeFlagName(entry.flag_name)}</span>
+                    <span className={`flagfeed-team flagfeed-team-${team}`}>{entry.breaker_name}</span>
+                </div>
+            </div>
+        );
+    }
     if (entry.kind === 'cap_break') {
         const team = entry.contesting_team;
         const label = team === 'allies' ? 'Allies' : 'Axis';

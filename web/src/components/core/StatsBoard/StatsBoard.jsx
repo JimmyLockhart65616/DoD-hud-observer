@@ -38,8 +38,9 @@ function teamTotals(rows) {
         hs_kills: t.hs_kills + (p.hs_kills ?? 0),
         nade_kills: t.nade_kills + (p.nade_kills ?? 0),
         caps: t.caps + (p.caps ?? 0),
+        cap_breaks: t.cap_breaks + (p.cap_breaks ?? 0),
         best_streak: Math.max(t.best_streak, p.best_streak ?? 0),
-    }), { kills: 0, deaths: 0, assists: 0, damage: 0, hs_kills: 0, nade_kills: 0, caps: 0, best_streak: 0 });
+    }), { kills: 0, deaths: 0, assists: 0, damage: 0, hs_kills: 0, nade_kills: 0, caps: 0, cap_breaks: 0, best_streak: 0 });
 }
 
 const TeamTable = ({ team, players }) => {
@@ -69,6 +70,7 @@ const TeamTable = ({ team, players }) => {
                             {nadeIcon ? <img className="stats-board-nade-icon" src={nadeIcon} alt="nade kills" /> : 'NK'}
                         </th>
                         <th title="flag caps">CAP</th>
+                        <th title="cap breaks — killed an enemy capper on the point">BRK</th>
                         <th title="best kill streak this half">STK</th>
                     </tr>
                 </thead>
@@ -86,6 +88,7 @@ const TeamTable = ({ team, players }) => {
                             <td>{hsPct(p.kills, p.hs_kills)}</td>
                             <td>{p.nade_kills ?? 0}</td>
                             <td>{p.caps ?? 0}</td>
+                            <td>{p.cap_breaks ?? 0}</td>
                             <td>{p.best_streak ?? 0}</td>
                         </tr>
                     ))}
@@ -100,6 +103,7 @@ const TeamTable = ({ team, players }) => {
                         <td>{hsPct(tot.kills, tot.hs_kills)}</td>
                         <td>{tot.nade_kills}</td>
                         <td>{tot.caps}</td>
+                        <td>{tot.cap_breaks}</td>
                         <td>{tot.best_streak}</td>
                     </tr>
                 </tfoot>

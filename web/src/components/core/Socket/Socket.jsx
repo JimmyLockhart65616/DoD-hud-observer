@@ -55,7 +55,7 @@ let dmgSeq = 0;
 // Per-player stat fields streamed by the plugin (player_score extension +
 // player_stats_summary rows). Shared so defaults/resets/copies can't drift.
 // `best_streak` is special-cased in addStatRows (max, not sum) for match totals.
-const STAT_FIELDS = ['damage', 'assists', 'hs_kills', 'nade_kills', 'gun_kills', 'hits', 'hs_hits', 'caps', 'best_streak'];
+const STAT_FIELDS = ['damage', 'assists', 'hs_kills', 'nade_kills', 'gun_kills', 'hits', 'hs_hits', 'caps', 'cap_breaks', 'best_streak'];
 
 // True once an authoritative stats board (reason half_end/match_end) was shown
 // for the current half boundary — suppresses the snapshot fallback at the next
@@ -254,7 +254,7 @@ export const useHudStore = create(set => ({
             ...p, health: 100, dead: false, prone_state: 'standing', prone_since: null,
             kills: 0, deaths: 0, score: 0, obj_score: 0,
             damage: 0, assists: 0, hs_kills: 0, nade_kills: 0, gun_kills: 0, hits: 0, hs_hits: 0,
-            caps: 0, best_streak: 0,
+            caps: 0, cap_breaks: 0, best_streak: 0,
             weapon_primary: null, weapon_secondary: null, class_id: null,
             weapon_active: null, nades: null, last_damage: null, last_damage_at: null,
         });
@@ -321,6 +321,7 @@ function makeDefaultPlayer(user_id, name, team) {
         hits:             0,
         hs_hits:          0,
         caps:             0,
+        cap_breaks:       0,
         best_streak:      0,
         spectate:         false,
     };
@@ -899,9 +900,14 @@ export const SocketStoreComponent = () => {
             ));
 
             // Capture kill feed entry with real captor attribution from dod_score_event.
+            // Fall back to the raw steam id + capturing team when a captor isn't in
+            // the roster yet (late join / pre-connect), mirroring the kill-feed
+            // resolver — otherwise .filter(Boolean) would silently drop the name and
+            // the feed would show a nameless cap. captor_ids now arrive populated
+            // (plugin defers flag_captured until dod_score_event fills the batch).
             const allPlayers = [...allies_players, ...axis_players];
             const captors = (e.captor_ids || []).map(id =>
-                allPlayers.find(p => p.user_id === id) ?? playerDirectory[id]
+                allPlayers.find(p => p.user_id === id) ?? playerDirectory[id] ?? { name: id, team: e.new_owner }
             ).filter(Boolean);
 
             // The flag feed announces every cap. Cumulative per-player stats are
@@ -967,6 +973,27 @@ export const SocketStoreComponent = () => {
                     ? { ...f, progress: e.progress, capping_team: e.capping_team, contested: false }
                     : f
             ));
+        });
+
+        // Kill-attributed cap break: an enemy killed a capper on the point. The
+        // cap_breaks stat is credited via the breaker's player_score; this feed
+        // entry surfaces the live defensive play with the breaker's name. The
+        // breaker is on the team opposite broke_team.
+        gameEvents.on('cap_break', (raw) => {
+            const e = JSON.parse(raw);
+            const { allies_players, axis_players } = getState();
+            const allPlayers = [...allies_players, ...axis_players];
+            const breaker = allPlayers.find(p => p.user_id === e.breaker_id)
+                ?? playerDirectory[e.breaker_id]
+                ?? { name: e.breaker_id };
+            addFlagEvent({
+                kind: 'cap_break_kill',
+                flag_name: e.flag_name,
+                flag_id: e.flag_id,
+                breaker_name: breaker.name,
+                breaker_team: breaker.team ?? (e.broke_team === 'allies' ? 'axis' : 'allies'),
+                broke_team: e.broke_team,
+            });
         });
 
 

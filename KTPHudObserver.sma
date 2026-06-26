@@ -49,6 +49,12 @@
 #define TASK_ID_POLL_ZONES   9003
 #define TASK_ID_TIME_SYNC    9004
 #define TASK_ID_EMIT_FLAGS   9005
+// Per-CP deferred captor/capout emission (TASK_ID_DEFER_BASE + cp_index, one
+// per flag). dodx dispatches dod_score_event ~0.25s AFTER dod_control_point_captured,
+// so flag_captured + the capout board are emitted from this short one-shot —
+// after the captor batch has filled — instead of synchronously with an empty batch.
+#define TASK_ID_DEFER_BASE   9100
+#define DEFER_DELAY          0.5
 
 // Team IDs (dodconst.inc: ALLIES=1, AXIS=2)
 #define TEAM_UNASSIGNED 0
@@ -130,6 +136,7 @@ new g_player_nade_kills[MAX_PLAYERS + 1];  // normal kills with a grenade weapon
 new g_player_gun_kills[MAX_PLAYERS + 1];   // all other normal kills (incl. melee/rockets)
 new g_player_assists[MAX_PLAYERS + 1];     // 50+ damage to a victim killed by someone else
 new g_player_caps[MAX_PLAYERS + 1];        // flag caps participated in (dod_score_event credits)
+new g_player_cap_breaks[MAX_PLAYERS + 1];  // cap breaks: killed an enemy capper on the point (defensive)
 new g_player_teamkills[MAX_PLAYERS + 1];   // teamkills committed this half (surfaced in kill feed)
 new g_player_cur_streak[MAX_PLAYERS + 1];  // current kill streak (resets on death)
 new g_player_best_streak[MAX_PLAYERS + 1]; // longest kill streak this half
@@ -185,6 +192,42 @@ new g_flag_pending_captor_count[MAX_FLAGS];
 // for the round-winning cap.
 new g_flag_last_capped_by[MAX_FLAGS];
 
+// Deferred flag_captured / capout emission state. dod_control_point_captured
+// records the cap here and arms a per-CP one-shot (TASK_ID_DEFER_BASE+cp);
+// deferred_emit_cap fires ~DEFER_DELAY later — after dod_score_event has filled
+// the captor batch — and emits flag_captured (with captor_ids) + the capout
+// board (with capout_by). g_flag_emit_capout is the capout verdict computed
+// synchronously at cap time (g_flag_owner is current then).
+new g_flag_emit_pending[MAX_FLAGS];      // 1 while a deferred emission is armed
+new g_flag_emit_owner[MAX_FLAGS];        // captured new_owner (team)
+new g_flag_emit_name[MAX_FLAGS][64];     // captured flag display name
+new bool:g_flag_emit_capout[MAX_FLAGS];  // did this cap complete a capout
+
+// Pending cap-break candidate per flag. client_death marks the killer + the
+// capping team's in-zone count at kill time when the victim's team was actively
+// capping; the next task_poll_zones confirms a break (credits the killer) only if
+// that team's in-zone count actually DROPPED — i.e. the victim was on the point,
+// not merely on the capping team. dod_control_point_captured clears it (a
+// completed cap is not a break). No zone identity exists in extension mode, so
+// this counts-drop correlation is the attribution.
+new g_break_pending_killer[MAX_FLAGS];   // killer slot, 0 = no candidate
+new g_break_pending_team[MAX_FLAGS];     // capping team being broken (victim's team)
+new g_break_pending_was[MAX_FLAGS];      // that team's in-zone count snapshot at kill
+
+#if defined HUD_REPRO_TEST
+// Local-repro scaffolding (gated; compiles to nothing in production builds).
+// The headless docker stack has no connected clients (no bots, no fakemeta),
+// so dod_score_event can never fill the real captor batch there. These arrays
+// let amx_hud_test_cap seed a synthetic captor — standing in for the captor
+// dod_score_event would credit — so the deferred flag_captured / capout board
+// can be observed carrying populated captor_ids / capout_by on the real
+// engine+plugin+backend pipeline. build_pending_captor_list / build_captor_names
+// append from these after the real batch.
+new g_flag_test_sid[MAX_FLAGS][MAX_CAPTORS][32];
+new g_flag_test_name[MAX_FLAGS][MAX_CAPTORS][32];
+new g_flag_test_count[MAX_FLAGS];
+#endif
+
 // Server hostname (sent as X-Server-Hostname header)
 new g_hostname[64];
 
@@ -221,6 +264,15 @@ public plugin_init() {
     // half-end POST was lost to the changelevel race).
     register_concmd("amx_hud_statsboard", "cmd_statsboard", ADMIN_RCON, "force stats board popup on the HUD overlay");
 
+#if defined HUD_REPRO_TEST
+    // Local repro driver (gated): fire dod_control_point_captured via the dodx
+    // test-dispatch native, then seed a synthetic captor (simulating the captor
+    // dod_score_event credits ~0.25s later). Reproduces the empty-captor_ids bug
+    // and confirms the deferred-emission fix on the clientless docker stack.
+    //   amx_hud_test_cap <cp> <new_owner> <old_owner> [steamid] [name]
+    register_concmd("amx_hud_test_cap", "cmd_test_cap", ADMIN_RCON, "<cp> <new> <old> [sid] [name] — repro cap timing");
+#endif
+
     // Periodic tasks are scheduled in plugin_cfg (see below) so they get
     // re-armed on every map change — repeating tasks set here in plugin_init
     // did not survive changelevel on Denver 5.
@@ -235,6 +287,13 @@ public plugin_cfg() {
     for (new i = 0; i < MAX_FLAGS; i++) {
         g_flag_owner[i]          = -1;
         g_flag_last_capped_by[i] = 0;
+        // Cancel any in-flight deferred cap emission from the previous map.
+        g_flag_emit_pending[i]   = 0;
+        remove_task(TASK_ID_DEFER_BASE + i);
+        g_break_pending_killer[i] = 0;
+#if defined HUD_REPRO_TEST
+        g_flag_test_count[i]     = 0;
+#endif
     }
     g_flag_count = 0;
 
@@ -413,6 +472,7 @@ stock reset_player_stats_slot(id) {
     g_player_gun_kills[id]   = 0;
     g_player_assists[id]     = 0;
     g_player_caps[id]        = 0;
+    g_player_cap_breaks[id]  = 0;
     g_player_teamkills[id]   = 0;
     g_player_cur_streak[id]  = 0;
     g_player_best_streak[id] = 0;
@@ -951,6 +1011,27 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
         g_player_assists[assist_ids[i]]++;
         emit_player_score(assist_ids[i]);
     }
+
+    // Cap-break candidate. If the victim's team was actively capping a flag, an
+    // enemy kill MAY have removed a capper from the point. Record the killer +
+    // a snapshot of that team's in-zone count; the next task_poll_zones confirms
+    // a break (credits the killer) ONLY if the count actually dropped — i.e. the
+    // victim was on the point, not merely on the capping team. No per-player zone
+    // identity exists in extension mode, so this counts-drop correlation is the
+    // attribution. dod_control_point_captured clears it if the cap then succeeds
+    // (a completed cap is not a break).
+    if (killer != victim && !TK && is_user_connected(killer)) {
+        new vt = g_player_team[victim];
+        if (vt == TEAM_ALLIES || vt == TEAM_AXIS) {
+            for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
+                if (g_flag_capping_team[f] != vt) continue;
+                g_break_pending_killer[f] = killer;
+                g_break_pending_team[f]   = vt;
+                g_break_pending_was[f]    = dodx_area_get_data(f, (vt == TEAM_ALLIES) ? CA_num_allies : CA_num_axis);
+                break;  // attribute at most one flag per kill (first active cap by victim's team)
+            }
+        }
+    }
 }
 
 stock emit_player_score(id) {
@@ -964,12 +1045,12 @@ stock emit_player_score(id) {
 
     new json[512];
     formatex(json, charsmax(json),
-        "{^"event^":^"player_score^",^"user_id^":^"%s^",^"kills^":%d,^"deaths^":%d,^"score^":%d,^"obj_score^":%d,^"damage^":%d,^"assists^":%d,^"hs_kills^":%d,^"nade_kills^":%d,^"gun_kills^":%d,^"hits^":%d,^"hs_hits^":%d,^"caps^":%d,^"best_streak^":%d}",
+        "{^"event^":^"player_score^",^"user_id^":^"%s^",^"kills^":%d,^"deaths^":%d,^"score^":%d,^"obj_score^":%d,^"damage^":%d,^"assists^":%d,^"hs_kills^":%d,^"nade_kills^":%d,^"gun_kills^":%d,^"hits^":%d,^"hs_hits^":%d,^"caps^":%d,^"cap_breaks^":%d,^"best_streak^":%d}",
         steamid, kills, deaths, score, objscore,
         g_player_damage[id], g_player_assists[id], g_player_hs_kills[id],
         g_player_nade_kills[id], g_player_gun_kills[id],
         g_player_hits[id], g_player_hs_hits[id],
-        g_player_caps[id], g_player_best_streak[id]);
+        g_player_caps[id], g_player_cap_breaks[id], g_player_best_streak[id]);
     post_event(json);
 }
 
@@ -1024,13 +1105,13 @@ stock emit_stats_summary(reason, const capout_team[] = "", const capout_by[] = "
 
         static pbuf[512];
         formatex(pbuf, charsmax(pbuf),
-            "%s{^"user_id^":^"%s^",^"name^":^"%s^",^"team^":^"%s^",^"kills^":%d,^"deaths^":%d,^"assists^":%d,^"damage^":%d,^"hs_kills^":%d,^"nade_kills^":%d,^"gun_kills^":%d,^"hits^":%d,^"hs_hits^":%d,^"obj_score^":%d,^"caps^":%d,^"best_streak^":%d}",
+            "%s{^"user_id^":^"%s^",^"name^":^"%s^",^"team^":^"%s^",^"kills^":%d,^"deaths^":%d,^"assists^":%d,^"damage^":%d,^"hs_kills^":%d,^"nade_kills^":%d,^"gun_kills^":%d,^"hits^":%d,^"hs_hits^":%d,^"obj_score^":%d,^"caps^":%d,^"cap_breaks^":%d,^"best_streak^":%d}",
             first ? "" : ",", steamid, name_esc, team_str,
             g_player_kills[id], g_player_deaths[id], g_player_assists[id],
             g_player_damage[id], g_player_hs_kills[id],
             g_player_nade_kills[id], g_player_gun_kills[id],
             g_player_hits[id], g_player_hs_hits[id], g_player_objscore[id],
-            g_player_caps[id], g_player_best_streak[id]);
+            g_player_caps[id], g_player_cap_breaks[id], g_player_best_streak[id]);
         add(json, charsmax(json), pbuf);
         first = false;
     }
@@ -1270,6 +1351,28 @@ public task_poll_zones() {
             }
         }
 
+        // Confirm a pending cap-break (set in client_death). The kill removed a
+        // capper from the point IFF the capping team's in-zone count dropped below
+        // the kill-time snapshot. One-shot — clear the candidate either way (no
+        // drop = the victim wasn't on the point, so no credit).
+        if (g_break_pending_killer[f] != 0) {
+            new bt = g_break_pending_team[f];
+            new now_count = (bt == TEAM_ALLIES) ? ac : xc;
+            // Confirm only if this flag was genuinely being capped by that team as
+            // of the last poll (prev_capper) AND the kill dropped the in-zone count.
+            // The prev_capper gate rejects a stale candidate evaluated after a round
+            // restart, where the zone count starts at 0 (below any snapshot).
+            if (prev_capper == bt && now_count < g_break_pending_was[f]) {
+                new breaker = g_break_pending_killer[f];
+                if (is_user_connected(breaker)) {
+                    g_player_cap_breaks[breaker]++;
+                    emit_cap_break(f, breaker, bt);
+                    emit_player_score(breaker);
+                }
+            }
+            g_break_pending_killer[f] = 0;
+        }
+
         g_flag_prev_allies_count[f] = ac;
         g_flag_prev_axis_count[f]   = xc;
     }
@@ -1319,6 +1422,21 @@ stock emit_cap_progress(cp_index, team, progress) {
     post_event(json);
 }
 
+// A cap was broken by a kill: an enemy killed a capper on the point, removing
+// them from the capture zone (confirmed by a zone-count drop next poll).
+// breaker_id = the killer (credited the cap_break stat); broke_team = the
+// capping team that lost the capper.
+stock emit_cap_break(cp_index, breaker, broke_team) {
+    new steamid[32], team_str[16];
+    get_steamid(breaker, steamid, charsmax(steamid));
+    get_team_str(broke_team, team_str, charsmax(team_str));
+    new json[256];
+    formatex(json, charsmax(json),
+        "{^"event^":^"cap_break^",^"flag_id^":%d,^"flag_name^":^"%s^",^"reason^":^"kill^",^"breaker_id^":^"%s^",^"broke_team^":^"%s^"}",
+        cp_index, g_flag_name_cache[cp_index], steamid, team_str);
+    post_event(json);
+}
+
 // ─── Chat ────────────────────────────────────────────────────────────────────
 
 stock do_say(id, team_only) {
@@ -1364,8 +1482,16 @@ stock do_flags_init() {
         g_flag_last_progress[i]         = -1;
         g_flag_prev_allies_count[i]     = 0;
         g_flag_prev_axis_count[i]       = 0;
-        g_flag_pending_captor_count[i]  = 0;
-        g_flag_last_capped_by[i]        = 0;
+        g_break_pending_killer[i]       = 0;
+        // Don't wipe the captor batch / last-capper while a deferred cap emission
+        // is in flight (e.g. the 30s task_emit_flags or a round-start re-init
+        // landing within DEFER_DELAY of a cap) — deferred_emit_cap still needs the
+        // batch, and dod_score_event credits obj_score against g_flag_last_capped_by
+        // in that same ~0.25s window. plugin_cfg does the unconditional map-load wipe.
+        if (!g_flag_emit_pending[i]) {
+            g_flag_pending_captor_count[i]  = 0;
+            g_flag_last_capped_by[i]        = 0;
+        }
 
         new owner_str[16];
         if      (owner == TEAM_ALLIES) copy(owner_str, charsmax(owner_str), "allies");
@@ -1447,74 +1573,103 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
     // can't later mis-credit caps/obj_score when the flag is genuinely captured.
     // (Before caps were credited at capture time this was display-only; now it
     // matters.) A real cap always processed/credited before these fire.
+    // A genuine cap may already have a deferred emission pending (its captor
+    // batch is mid-fill). Don't wipe the batch on these guard paths if so —
+    // deferred_emit_cap still needs it. Otherwise clear it (display-only stale
+    // batch) as before.
     if (g_flag_owner[cp_index] == new_owner) {
-        g_flag_pending_captor_count[cp_index] = 0;
+        if (!g_flag_emit_pending[cp_index]) g_flag_pending_captor_count[cp_index] = 0;
         return;
     }
     if (new_owner != TEAM_ALLIES && new_owner != TEAM_AXIS) {
         g_flag_owner[cp_index] = new_owner;
-        g_flag_pending_captor_count[cp_index] = 0;
+        if (!g_flag_emit_pending[cp_index]) g_flag_pending_captor_count[cp_index] = 0;
         return;
     }
-
-    new owner_str[16];
-    if      (new_owner == TEAM_ALLIES) copy(owner_str, charsmax(owner_str), "allies");
-    else if (new_owner == TEAM_AXIS)   copy(owner_str, charsmax(owner_str), "axis");
-    else                               copy(owner_str, charsmax(owner_str), "neutral");
 
     new flag_name[64];
     dodx_objective_get_data(cp_index, CP_name, flag_name, charsmax(flag_name));
     if (flag_name[0] == '^0') formatex(flag_name, charsmax(flag_name), "flag_%d", cp_index);
 
-    // Captors collected via dod_score_event during this cap.
-    new captor_json[256];
-    build_pending_captor_list(cp_index, new_owner, captor_json, charsmax(captor_json));
-
-    // Display names of this flag's captors (escaped) — used for the capout
-    // board title ("ALLIES CAPOUT BY <names>"). Built before the count resets.
-    new capout_by[256];
-    build_captor_names(cp_index, new_owner, capout_by, charsmax(capout_by));
-
-    new json[512];
-    formatex(json, charsmax(json),
-        "{^"event^":^"flag_captured^",^"flag_id^":%d,^"flag_name^":^"%s^",^"new_owner^":^"%s^",^"captor_ids^":[%s]}",
-        cp_index, flag_name, owner_str, captor_json);
-    post_event(json);
-
     // Record the capping team for the DEFERRED credit. dod_score_event fires
     // ~0.25s after this (dodx PreThink deferral) and credits obj_score/caps
     // against g_flag_last_capped_by — kept separate from g_flag_owner, which the
-    // round-restart neutral cascade below can flip before that score event lands.
+    // round-restart neutral cascade can flip before that score event lands.
     g_flag_last_capped_by[cp_index]       = new_owner;
 
     g_flag_owner[cp_index]                = new_owner;
     g_flag_capping_team[cp_index]         = 0;
     g_flag_contested[cp_index]            = false;
     g_flag_last_progress[cp_index]        = -1;
-    g_flag_pending_captor_count[cp_index] = 0;
+    // A completed cap is NOT a break — drop any pending break candidate so the
+    // post-cap zone-count drop (cappers leaving) can't be mis-credited as one.
+    g_break_pending_killer[cp_index]      = 0;
 
-    // Capout = round end on cap maps, and the only reliable round-end trigger
-    // in prod (the Round_End logevent never fires in DoD). The capout board
-    // shows half-cumulative stats; per-single-flag-cap popups were dropped —
-    // the flag feed already announces each cap. ev_round_end below is kept for
-    // completeness; the dedupe guard collapses doubles if both ever fire.
-    // NOTE: this board renders ~0.25s BEFORE the final flag's dod_score_event
-    // credits its cappers, so the winning flag's captors show one fewer cap here
-    // than on the live cards. Accepted; a full fix needs deferred board emission.
+    // Capout = all flags now owned by new_owner. Round end on cap maps, and the
+    // only reliable round-end trigger in prod (the Round_End logevent never fires
+    // in DoD). Computed HERE (g_flag_owner is current) but emitted from the
+    // deferred task so the board carries the winning flag's captor names + the
+    // final cap counts (dod_score_event credits them in the ~0.25s window).
+    new bool:is_capout = false;
     if (g_flag_count > 0) {
-        new bool:capout = true;
+        is_capout = true;
         for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
-            if (g_flag_owner[f] != new_owner) {
-                capout = false;
-                break;
-            }
-        }
-        if (capout) {
-            // Pass the capping team + the final flag's captor names so the
-            // board titles "ALLIES CAPOUT BY <names>".
-            emit_stats_summary(SUMMARY_ROUND_END, owner_str, capout_by);
+            if (g_flag_owner[f] != new_owner) { is_capout = false; break; }
         }
     }
+
+    // Defer flag_captured + the capout board until dod_score_event has filled the
+    // captor batch. Emitting synchronously here read an EMPTY batch (dodx hasn't
+    // dispatched the score events yet) — the long-standing empty captor_ids /
+    // capout_by bug. The per-CP one-shot reads the now-filled batch; it consumes
+    // + clears the batch when it fires.
+    g_flag_emit_owner[cp_index]   = new_owner;
+    copy(g_flag_emit_name[cp_index], charsmax(g_flag_emit_name[]), flag_name);
+    g_flag_emit_capout[cp_index]  = is_capout;
+    g_flag_emit_pending[cp_index] = 1;
+    remove_task(TASK_ID_DEFER_BASE + cp_index);
+    set_task(DEFER_DELAY, "deferred_emit_cap", TASK_ID_DEFER_BASE + cp_index);
+}
+
+// Per-CP deferred captor/capout emission. Armed by dod_control_point_captured,
+// fired ~DEFER_DELAY later — after dod_score_event has populated the captor
+// batch — so flag_captured carries captor_ids and the capout board carries
+// capout_by (the final flag's captor names). Fixes the empty-attribution bug:
+// dodx dispatches dod_score_event ~0.25s AFTER dod_control_point_captured, so a
+// synchronous emit always saw an empty batch.
+public deferred_emit_cap(task_id) {
+    new cp_index = task_id - TASK_ID_DEFER_BASE;
+    if (cp_index < 0 || cp_index >= MAX_FLAGS) return;
+    if (!g_flag_emit_pending[cp_index]) return;
+    g_flag_emit_pending[cp_index] = 0;
+
+    new new_owner = g_flag_emit_owner[cp_index];
+    new owner_str[16];
+    if      (new_owner == TEAM_ALLIES) copy(owner_str, charsmax(owner_str), "allies");
+    else if (new_owner == TEAM_AXIS)   copy(owner_str, charsmax(owner_str), "axis");
+    else                               copy(owner_str, charsmax(owner_str), "neutral");
+
+    new captor_json[256];
+    build_pending_captor_list(cp_index, new_owner, captor_json, charsmax(captor_json));
+
+    new json[512];
+    formatex(json, charsmax(json),
+        "{^"event^":^"flag_captured^",^"flag_id^":%d,^"flag_name^":^"%s^",^"new_owner^":^"%s^",^"captor_ids^":[%s]}",
+        cp_index, g_flag_emit_name[cp_index], owner_str, captor_json);
+    post_event(json);
+
+    if (g_flag_emit_capout[cp_index]) {
+        // Names of the final flag's captors so the board titles
+        // "ALLIES CAPOUT BY <names>".
+        new capout_by[256];
+        build_captor_names(cp_index, new_owner, capout_by, charsmax(capout_by));
+        emit_stats_summary(SUMMARY_ROUND_END, owner_str, capout_by);
+    }
+
+    g_flag_pending_captor_count[cp_index] = 0;
+#if defined HUD_REPRO_TEST
+    g_flag_test_count[cp_index] = 0;
+#endif
 }
 
 stock build_pending_captor_list(cp_index, owning_team, out[], len) {
@@ -1534,6 +1689,13 @@ stock build_pending_captor_list(cp_index, owning_team, out[], len) {
         add(out, len, tmp);
         written++;
     }
+#if defined HUD_REPRO_TEST
+    for (new t = 0; t < g_flag_test_count[cp_index] && t < MAX_CAPTORS; t++) {
+        formatex(tmp, charsmax(tmp), "%s^"%s^"", written > 0 ? "," : "", g_flag_test_sid[cp_index][t]);
+        add(out, len, tmp);
+        written++;
+    }
+#endif
 }
 
 // Comma-joined, JSON-escaped display names of a flag's pending captors — for
@@ -1557,7 +1719,50 @@ stock build_captor_names(cp_index, owning_team, out[], len) {
         add(out, len, tmp);
         written++;
     }
+#if defined HUD_REPRO_TEST
+    for (new t = 0; t < g_flag_test_count[cp_index] && t < MAX_CAPTORS; t++) {
+        if (strlen(out) > len - 132) break;
+        new tname_esc[128], ttmp[160];
+        escape_json(g_flag_test_name[cp_index][t], tname_esc, charsmax(tname_esc));
+        formatex(ttmp, charsmax(ttmp), "%s%s", written > 0 ? ", " : "", tname_esc);
+        add(out, len, ttmp);
+        written++;
+    }
+#endif
 }
+
+#if defined HUD_REPRO_TEST
+// Local repro: drive the dodx forward sequence + seed a synthetic captor.
+//   amx_hud_test_cap <cp> <new_owner> <old_owner> [steamid] [name]
+// Order matters: the cp_captured forward fires FIRST (a buggy synchronous
+// build sees the still-empty batch -> captor_ids:[]). The synthetic captor is
+// seeded AFTER, simulating dod_score_event's ~0.25s-deferred fill — so the
+// fixed (deferred-emission) build picks it up when the per-CP task fires.
+public cmd_test_cap(id, level, cid) {
+    if (!cmd_access(id, level, cid, 4)) return PLUGIN_HANDLED;
+
+    new acp[8], anew[8], aold[8];
+    read_argv(1, acp,  charsmax(acp));
+    read_argv(2, anew, charsmax(anew));
+    read_argv(3, aold, charsmax(aold));
+    new cp = str_to_num(acp);
+
+    // 1. Fire the real dod_control_point_captured forward (sync, like the engine).
+    dodx_test_dispatch_cp_captured(cp, str_to_num(anew), str_to_num(aold));
+
+    // 2. Seed a synthetic captor (stand-in for dod_score_event's deferred fill).
+    if (read_argc() >= 5 && cp >= 0 && cp < MAX_FLAGS) {
+        new n = g_flag_test_count[cp];
+        if (n < MAX_CAPTORS) {
+            read_argv(4, g_flag_test_sid[cp][n], charsmax(g_flag_test_sid[][]));
+            if (read_argc() >= 6) read_argv(5, g_flag_test_name[cp][n], charsmax(g_flag_test_name[][]));
+            else copy(g_flag_test_name[cp][n], charsmax(g_flag_test_name[][]), g_flag_test_sid[cp][n]);
+            g_flag_test_count[cp] = n + 1;
+        }
+    }
+    return PLUGIN_HANDLED;
+}
+#endif
 
 // ─── Caster Observed Player ──────────────────────────────────────────────────
 
