@@ -223,6 +223,107 @@ describe('Socket store machine — half/match boundary chaos (6v6)', () => {
         expect(board.players.find(p => p.user_id === 's2').kills).toBe(2);
     });
 
+    it('match_end recovers players who left after the final capout (only in the last round_end)', () => {
+        // ATL1 1782504158: the last capout summary had all 12 players; 6 quit in
+        // the ~13s before match_end, which carries only still-connected players.
+        // The departed must be recovered from the retained last round_end snapshot.
+        const { store, emit } = setup();
+        connect(emit, 'a', 'Ana', 'allies');
+        connect(emit, 'b', 'Ben', 'axis');
+        connect(emit, 'c', 'Cy', 'allies');   // top fragger — leaves before match_end
+
+        summary(emit, 'round_end', [
+            row('a', 'Ana', 'allies', 10, 5, { damage: 1000 }),
+            row('b', 'Ben', 'axis', 8, 7, { damage: 800 }),
+            row('c', 'Cy', 'allies', 20, 10, { damage: 5763 }),
+        ], { capout_team: 'allies', capout_by: 'Ana' });
+
+        emit('player_disconnect', { event: 'player_disconnect', user_id: 'c' });
+
+        summary(emit, 'match_end', [
+            row('a', 'Ana', 'allies', 10, 5, { damage: 1000 }),
+            row('b', 'Ben', 'axis', 8, 7, { damage: 800 }),
+        ]);
+
+        const board = store.getState().stats_board;
+        expect(board.reason).toBe('match_end');
+        expect(board.players).toHaveLength(3);
+        const cy = boardPlayer(store, 'c');
+        expect(cy).toBeDefined();
+        expect(cy.kills).toBe(20);
+        expect(cy.damage).toBe(5763);
+        // Still-connected rows take their authoritative match_end values.
+        expect(boardPlayer(store, 'a').damage).toBe(1000);
+    });
+
+    it('recovers the half-1 carry from the last round_end when the changelevel empties the store and no half_end fires', () => {
+        // ATL1: no half_end fired, and the H1→H2 changelevel disconnects everyone
+        // (splicing the store) BEFORE the boundary — so the store snapshot is empty.
+        // The last half-1 round_end snapshot must back the carry instead.
+        const { store, emit } = setup();
+        connect(emit, 'a', 'Ana', 'allies');
+        connect(emit, 'b', 'Ben', 'axis');
+        connect(emit, 'x', 'Xan', 'axis');   // plays half 1 only, leaves at halftime
+
+        summary(emit, 'round_end', [
+            row('a', 'Ana', 'allies', 5, 2, { damage: 400, caps: 1 }),
+            row('b', 'Ben', 'axis', 3, 4, { damage: 250 }),
+            row('x', 'Xan', 'axis', 6, 1, { damage: 600 }),
+        ], { capout_team: 'allies', capout_by: 'Ana' });
+
+        // Changelevel: every player disconnects, no half_end marker/summary survives.
+        emit('player_disconnect', { event: 'player_disconnect', user_id: 'a' });
+        emit('player_disconnect', { event: 'player_disconnect', user_id: 'b' });
+        emit('player_disconnect', { event: 'player_disconnect', user_id: 'x' });
+        emit('half_start', { event: 'half_start', half: 2, timeleft: 1200 });
+
+        // Half 2: a and b return, x does not.
+        connect(emit, 'a', 'Ana', 'allies');
+        connect(emit, 'b', 'Ben', 'axis');
+        summary(emit, 'round_end', [
+            row('a', 'Ana', 'allies', 2, 1, { damage: 150, caps: 1 }),
+            row('b', 'Ben', 'axis', 4, 2, { damage: 300 }),
+        ], { capout_team: 'allies', capout_by: 'Ana' });
+        summary(emit, 'match_end', [
+            row('a', 'Ana', 'allies', 2, 1, { damage: 150, caps: 1 }),
+            row('b', 'Ben', 'axis', 4, 2, { damage: 300 }),
+        ]);
+
+        // Both-halves player: full-match totals (H1 + H2).
+        const a = boardPlayer(store, 'a');
+        expect(a.kills).toBe(7);       // 5 + 2
+        expect(a.damage).toBe(550);    // 400 + 150
+        expect(a.caps).toBe(2);        // 1 + 1
+        // Half-1-only player survives via the recovered carry, with half-1 stats.
+        const x = boardPlayer(store, 'x');
+        expect(x).toBeDefined();
+        expect(x.kills).toBe(6);
+        expect(x.damage).toBe(600);
+    });
+
+    it('clears the retained round_end snapshots on a fresh match (no cross-match leak)', () => {
+        const { store, emit } = setup();
+        // Match A plays both halves, each ending on a capout that retains s1.
+        connect(emit, 's1', 'Alpha', 'allies');
+        summary(emit, 'round_end', [row('s1', 'Alpha', 'allies', 9, 9, { damage: 999 })],
+            { capout_team: 'allies', capout_by: 'Alpha' });
+        emit('half_start', { event: 'half_start', half: 2, timeleft: 1200 });
+        connect(emit, 's1', 'Alpha', 'allies');
+        summary(emit, 'round_end', [row('s1', 'Alpha', 'allies', 4, 3, { damage: 444 })],
+            { capout_team: 'allies', capout_by: 'Alpha' });
+        summary(emit, 'match_end', [row('s1', 'Alpha', 'allies', 4, 3, { damage: 444 })]);
+
+        // Match B begins at half 1 — must drop the retained snapshots for BOTH halves.
+        emit('ktp_match_start', { event: 'ktp_match_start', half: 1 });
+        connect(emit, 's2', 'Bravo', 'axis');
+        summary(emit, 'match_end', [row('s2', 'Bravo', 'axis', 2, 0)]);
+
+        const board = store.getState().stats_board;
+        expect(board.players.find(p => p.user_id === 's1')).toBeUndefined();   // no stale Alpha leak
+        expect(board.players).toHaveLength(1);
+        expect(boardPlayer(store, 's2').kills).toBe(2);
+    });
+
     it('titles the capout (round_end) board with capout_team / capout_by', () => {
         const { store, emit } = setup();
         connect(emit, 's1', 'omenator', 'allies');

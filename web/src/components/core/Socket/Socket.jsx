@@ -73,6 +73,15 @@ let boundaryBoardShown = false;
 let halfRows = {};      // { [half]: { [user_id]: statRow } }
 let halfSource = {};    // { [half]: 'snapshot' | 'summary' }
 
+// Most recent authoritative per-player snapshot seen for each half, keyed
+// half → { user_id → statRow }. round_end (capout) summaries fire on every
+// capout carrying ALL connected players with exact cumulative half stats, so
+// the last one is the most complete snapshot of that half. Used to (a) back the
+// carry fallback when no half_end summary survives the changelevel, and (b)
+// recover players who disconnect after the final capout but before match_end
+// (the match_end summary only carries still-connected players). Reset on half 1.
+let lastRoundEndByHalf = {};   // { [half]: { [user_id]: statRow } }
+
 // The prod plugin emits ktp_match_start AND half_start at every half boundary;
 // the mocker emits only half_start after half 1. Boundary work (record carry,
 // dismiss/fallback board) must run exactly once per boundary from whichever
@@ -114,23 +123,30 @@ function handleHalfBoundary(newHalf) {
         // Fresh match — drop carryover and any lingering board.
         halfRows = {};
         halfSource = {};
+        lastRoundEndByHalf = {};
         setStatsBoard(null);
     } else if (newHalf >= 2) {
-        // Record the completed half's stats from the store snapshot (a no-op if
-        // the authoritative half_end summary already recorded this half).
-        recordHalf(preReset, half, 'snapshot');
+        // Record the completed half's stats. Prefer the last round_end snapshot
+        // for that half — the store snapshot is empty here when the changelevel
+        // disconnects every player before the boundary fires (player_disconnect
+        // splices them out). The authoritative half_end summary, if it arrived,
+        // already recorded this half and overrides either via recordHalf's
+        // source precedence.
+        const retained = Object.values(lastRoundEndByHalf[half] ?? {});
+        const carrySnapshot = retained.length ? retained : preReset;
+        recordHalf(carrySnapshot, half, 'snapshot');
 
         if (boundaryBoardShown) {
             // The halftime board ran through warmup — the new half going live
             // dismisses it.
             setStatsBoard(null);
-        } else if (preReset.some(r => r.kills || r.deaths || r.damage)) {
+        } else if (carrySnapshot.some(r => r.kills || r.deaths || r.damage)) {
             // Universal fallback: no half_end/match_end signal made it through
             // (lost POST, or the signal-less H2→OT boundary). Show the
-            // pre-reset snapshot; the shorter fallback TTL dismisses it.
+            // snapshot; the shorter fallback TTL dismisses it.
             setStatsBoard({
                 reason: 'half_end', fallback: true,
-                players: preReset, addedAt: Date.now(),
+                players: carrySnapshot, addedAt: Date.now(),
             });
         }
     } else if (stats_board?.reason === 'round_end') {
@@ -691,15 +707,23 @@ export const SocketStoreComponent = () => {
                     reason: 'half_end', players: rows.map(r => statRow(r)), addedAt: Date.now(),
                 });
             } else if (e.reason === 'match_end') {
-                // Full-match totals: recorded prior halves + this (final) half.
-                // OT caveat: no summary fires at the H2→OT boundary, so OT
-                // matches sum whatever boundary snapshots were recorded.
+                // Full-match totals: recorded prior halves (carrySoFar) + this
+                // (final) half's contribution. The final half starts from the last
+                // round_end snapshot (every connected player at the last capout)
+                // overlaid by the match_end rows (authoritative for still-connected
+                // players) — this recovers players who disconnected after the final
+                // capout but before match_end, which the connected-only match_end
+                // summary drops. OT caveat: no summary fires at the H2→OT boundary,
+                // so OT matches sum whatever boundary snapshots were recorded.
                 boundaryBoardShown = true;
                 const merged = carrySoFar();
-                rows.forEach(r => {
+                const curHalf = useHudStore.getState().half;
+                const finalHalf = { ...(lastRoundEndByHalf[curHalf] ?? {}) };
+                rows.forEach(r => { finalHalf[r.user_id] = statRow(r); });
+                Object.values(finalHalf).forEach(r => {
                     merged[r.user_id] = merged[r.user_id]
-                        ? addStatRows(merged[r.user_id], statRow(r))
-                        : statRow(r);
+                        ? addStatRows(merged[r.user_id], r)
+                        : r;
                 });
                 useHudStore.getState().setStatsBoard({
                     reason: 'match_end', players: Object.values(merged), addedAt: Date.now(),
@@ -707,8 +731,17 @@ export const SocketStoreComponent = () => {
             } else if (e.reason === 'round_end' || e.reason === 'manual') {
                 // round_end fires on a full capout — the cumulative capout board.
                 // capout_team/capout_by title it "ALLIES CAPOUT BY <names>".
+                const boardRows = rows.map(r => statRow(r));
+                if (e.reason === 'round_end') {
+                    // Retain this half's most complete snapshot — it carries every
+                    // connected player's cumulative half stats. Recovers the lost
+                    // half-1 carry and any player who leaves before match_end.
+                    const snap = {};
+                    boardRows.forEach(r => { snap[r.user_id] = r; });
+                    lastRoundEndByHalf[useHudStore.getState().half] = snap;
+                }
                 useHudStore.getState().setStatsBoard({
-                    reason: e.reason, players: rows.map(r => statRow(r)), addedAt: Date.now(),
+                    reason: e.reason, players: boardRows, addedAt: Date.now(),
                     capout_team: e.capout_team ?? null, capout_by: e.capout_by ?? null,
                 });
             }
@@ -720,7 +753,11 @@ export const SocketStoreComponent = () => {
         // changelevel, this still auto-shows the halftime board.
         gameEvents.on('half_end', () => {
             const { allies_players, axis_players, stats_board, setStatsBoard, half } = getState();
-            const players = [...allies_players, ...axis_players].map(statRow);
+            const storeRows = [...allies_players, ...axis_players].map(statRow);
+            // Prefer the last round_end snapshot when the store is empty (the
+            // changelevel can splice every player before this marker arrives).
+            const retained = Object.values(lastRoundEndByHalf[half] ?? {});
+            const players = storeRows.length ? storeRows : retained;
             if (players.length === 0) return;
             // Snapshot fallback for the carry — the authoritative summary, if it
             // arrives, overrides this via recordHalf's source precedence.
