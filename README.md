@@ -14,12 +14,11 @@ If you just want to know what the overlay is showing on stream, see **[docs/VIEW
 
 - **Live scoreboard** — per-player kills, deaths, class, and current weapon for both teams
 - **Flag bar** — territorial cap points with live capping / owned state
-- **Match timer** — server-synced countdown with drift correction (`time_sync` every 30s)
-- **Kill feed** — scrolling notifications with weapon icons and team colors
-- **Observed player** — highlights whoever the caster is spectating
-- **Prone shame timer** — elapsed timer pinned to any player who goes prone
+- **Capout and half end scoreboards** — scoreboards with enhanced stats including assists, cap breaks, headshot %
+- **Kill feed** — enhanced kill feed showing headshots, assists, team kills, and streak tracking
 - **Flag feed** — recent captures and cap breaks, adjacent to the kill feed
-- **Match replay** — events are persisted per `matchId`, so completed matches can be replayed
+- - **Prone shame timer** — elapsed timer pinned to any player who goes prone
+- **Match replay** — events are persisted per `matchId`, so completed matches can be replayed (work in progress)
 
 ## Architecture
 
