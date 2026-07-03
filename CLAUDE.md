@@ -128,10 +128,15 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 
 ### Timer
 
-- `half_start` includes `timeleft` (seconds remaining from `get_timeleft()` / `mp_timelimit`)
-- `round_start` also includes `timeleft` as a sync point
+- `half_start` includes `timeleft`; `round_start` also includes `timeleft` as a sync point
 - `time_sync` fires every 30 seconds to correct frontend clock drift
 - Frontend stores `timeleft` + `timeleft_at` (browser `Date.now()`) and counts down locally
+- All `timeleft` values come from `hud_timeleft()`, NOT raw `get_timeleft()`: in a match the
+  half clock is anchored at the `ktp_match_start` forward (`gametime + mp_timelimit·60`),
+  because DoD rebases the real half end at KTPMatchHandler's go-live `mp_clan_restartround`
+  while `get_timeleft()` counts from map load (its restart rebase only parses CS TextMsg
+  tokens). Raw `get_timeleft()` would run ahead by the ready-up duration and pin the HUD at
+  0:00 for minutes at half end. Pubs (no anchor) fall back to `get_timeleft()`.
 
 ### Player Events
 ```json

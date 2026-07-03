@@ -136,3 +136,35 @@ curl -X PUT 'http://74.91.112.242:3001/api/hltv/calibration/KTP%20-%20Atlanta%20
 
 Verify after: re-run `segment-probe.cjs` — `calibMs` reflects it and `broadcastNow` drops by
 `|offset|/1000`; the HUD timer should now match your client within a few seconds.
+
+---
+
+## RESOLVED (2026-07-03) — it was never an HLTV delay problem
+
+The 4.5-day monitor soak + a live ATL1 report closed this. The delay pipeline is **healthy**
+(`relayVsOverlay` p50 = −2.3s across CHI1/NY1/ATL1; kill/cap events match footage). The "overlay off
+by minutes / pinned at 0:00" symptom is the **timer's source value**, not its delivery:
+
+- AMXX `get_timeleft()` counts from **map load** (`amxmodx.cpp:2235`, clamps <0 → 0). Its round-restart
+  rebase (`emsg.cpp Client_TextMsg`) only parses **CS** tokens (`#Game_C`/`#Game_w`) — DoD never sends
+  them.
+- KTPMatchHandler goes live via `mp_clan_restartround 1` after ready-up, and DoD's gamerules rebase the
+  real half end to **restart + mp_timelimit** (the client HUD clock tracks this; halves verifiably end
+  at its zero).
+- → in every match the overlay clock ran AHEAD by the ready-up duration (06-26's "131s" = that half's
+  ready-up) and pinned at 0:00 at half end. Pubs unaffected (no clan restart): 912 soak map segments,
+  pinned-at-zero median 0s.
+
+**Fix:** `hud_timeleft()` in `KTPHudObserver.sma` — anchors `g_half_end_gt = get_gametime() +
+mp_timelimit·60` in the `ktp_match_start` hook (forward fires just after the go-live restart), falls
+back to `get_timeleft()` when no match is live. **Do NOT use `calibrationOffsetMs` for this** — it
+would have skewed a correctly-delayed overlay.
+
+Validation: local docker + `amx_ktp_test_setup_match/advance_pending/advance_live` (fires
+`ktp_match_start` on an aged map) → recorded `half_start.timeleft` must equal full `mp_timelimit·60`,
+not `timelimit·60 − map_age`. Then next matchday: overlay 0:00 must coincide with the real half end.
+
+Still real, still open (separate, lower priority): `hltv-restart.timer` (03:00 **and 11:00 ET**)
+empties master buffers → reconnecting viewers get near-live footage (no spoiler delay) for one map;
+mid-map proxy-type joins land at buffer start (client joins may differ); frontend counts down through
+engine pauses until the next post-unpause `time_sync`.

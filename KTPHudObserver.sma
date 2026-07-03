@@ -94,6 +94,10 @@ new g_matchId[128];
 new g_matchMap[64];
 new g_matchType;
 new g_matchHalf;
+// Gametime when the live half's clock expires, anchored at ktp_match_start
+// (KTPMatchHandler fires it right after the go-live mp_clan_restartround).
+// 0.0 = no live half → hud_timeleft() falls back to get_timeleft() (pubs).
+new Float:g_half_end_gt = 0.0;
 
 // Player state
 new g_player_team[MAX_PLAYERS + 1];
@@ -506,11 +510,33 @@ stock do_prone_change(id, prone_state) {
     post_event(json);
 }
 
+// Half countdown for HUD timer events (half_start / round_start / time_sync /
+// round_end classification). DoD rebases the real half end to the go-live
+// mp_clan_restartround, but AMXX get_timeleft() counts from MAP LOAD — its
+// restart-rebase (emsg.cpp Client_TextMsg) only parses CS tokens (#Game_C /
+// #Game_w), which DoD never sends. So in a match, get_timeleft() runs AHEAD of
+// the real game clock by the entire ready-up duration and its <0 clamp pins the
+// HUD at 0:00 for minutes at half end. Anchor on the forward instead; without
+// an anchor (pubs), get_timeleft() is correct (no clan restart happens).
+stock hud_timeleft() {
+    if (g_half_end_gt > 0.0) {
+        new tl = floatround(g_half_end_gt - get_gametime(), floatround_floor);
+        return (tl < 0) ? 0 : tl;
+    }
+    return get_timeleft();
+}
+
 // ─── KTPMatchHandler Forwards ────────────────────────────────────────────────
 
 // half: 1=1st half, 2=2nd half, 101+=OT round
 public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) {
     g_matchActive = true;
+
+    // Anchor the half clock at go-live. mp_timelimit is already set for this
+    // half/OT round (KTPMatchHandler applies overrides BEFORE the restart).
+    new Float:limit_min = get_cvar_float("mp_timelimit");
+    g_half_end_gt = (limit_min > 0.0) ? get_gametime() + limit_min * 60.0 : 0.0;
+
     copy(g_matchId,  charsmax(g_matchId),  matchId);
     copy(g_matchMap, charsmax(g_matchMap), map);
     g_matchType = _:matchType;
@@ -540,7 +566,7 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
     post_event(json);
 
     // Send half_start event
-    new timeleft = get_timeleft();
+    new timeleft = hud_timeleft();
     formatex(json, charsmax(json),
         "{^"event^":^"half_start^",^"half^":%d,^"timeleft^":%d}",
         half, timeleft);
@@ -583,6 +609,7 @@ public ktp_match_end(const matchId[], const map[], MatchType:matchType, team1Sco
 
     g_matchActive = false;
     g_matchId[0] = '^0';
+    g_half_end_gt = 0.0;
 }
 
 // ─── Half End (KTPMatchHandler ktp_half_end forward) ─────────────────────────
@@ -680,7 +707,7 @@ stock do_roster_dump() {
 // ─── Round Events ────────────────────────────────────────────────────────────
 
 public ev_round_start() {
-    new timeleft = get_timeleft();
+    new timeleft = hud_timeleft();
 
     new json[128];
     formatex(json, charsmax(json),
@@ -755,7 +782,7 @@ stock classify_round_end(out[], len) {
     }
 
     // Time limit if the half clock has run out.
-    if (get_timeleft() <= 0) {
+    if (hud_timeleft() <= 0) {
         copy(out, len, "time_limit");
         return;
     }
@@ -1247,7 +1274,7 @@ public ev_team_score() {
 }
 
 public task_time_sync() {
-    new timeleft = get_timeleft();
+    new timeleft = hud_timeleft();
 
     new json[128];
     formatex(json, charsmax(json),
