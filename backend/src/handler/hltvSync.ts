@@ -58,6 +58,18 @@ export interface HltvClock {
     recordingStateError: string | null;
 }
 
+// Snapshot of the broadcast clock captured just before a changelevel. The delay
+// buffer projects the old-map tail's release times off this healthy pre-reset
+// basis (broadcastNow inverted) instead of the post-reset live clock, which is
+// re-anchored to the new map and can briefly report an inflated Delay. See
+// HltvSyncService.tailBasis / HltvDelayBuffer.drainTail.
+export interface ClockBasis {
+    activeTime: number;
+    sampledAt: number;
+    delaySeconds: number;
+    calibrationOffsetMs: number;
+}
+
 /**
  * HLTV's broadcast clock at this moment, in the same units as event.tick
  * (seconds since map load on the game server).
@@ -204,6 +216,13 @@ export interface HltvSyncConfig {
     enabled: boolean;
     heartbeat_seconds: number;       // 0 disables the heartbeat
     fallback_delay_seconds: number;  // used when no successful sample exists yet
+    // Extra late-bias (seconds) added to the release of BOARD events
+    // (player_stats_summary / half_end) at a changelevel, so the halftime /
+    // match-end stats board errs slightly late rather than early relative to the
+    // experienced footage delay (the reported Delay underestimates it — RunClocks
+    // sags the client clock toward delay+10). UX bias only; the base release is
+    // the dynamic broadcast-clock projection. 0 = exact projection.
+    board_release_lag_seconds: number;
     // How long to keep coasting the last good clock across transient RCON sample
     // failures before giving up to the fixed fallback delay. While coasting, the
     // clock stays online and frozen so broadcastNow() keeps advancing 1:1 — the
@@ -224,6 +243,15 @@ export interface HltvSyncConfig {
 // local constant so this module stays self-contained — they describe the same
 // game-server clock event from two angles (queue tail vs. last-seen-tick).
 const TICK_RESET_THRESHOLD_S = 30;
+
+// Old-epoch straggler classification (oldEpochTick): how long after a detected
+// boundary a late-arriving old-level POST is still recognized, and how close
+// its tick must sit to the old level's final tick. Both windows exist to
+// reject the look-alike: a long warmup silence on the NEW map eventually
+// produces a legitimate forward tick jump too, but its tick is far below the
+// old level's tail (and typically outside the wall window).
+const STRAGGLER_WALL_WINDOW_MS = 120_000;
+const STRAGGLER_TICK_WINDOW_S = 120;
 
 // When a good sample lands after a coast/gap, log a "resync step" if the fresh
 // sample's broadcast clock disagrees with the coasted projection by more than
@@ -249,6 +277,21 @@ export class HltvSyncService extends EventEmitter {
     // (changelevel / half-2 / OT) we drop this to the new low value so the
     // next legitimate event doesn't re-trigger the reset path.
     private highestEventTick = new Map<string, number>();
+    // Broadcast clock as of the last NORMAL (non-boundary) ingest event, per
+    // server. Promoted to resetBasis when a changelevel is detected. Pairing the
+    // snapshot with event flow — instead of reading the live clock at reset
+    // detection — matters because a heartbeat can land mid-changelevel and
+    // re-anchor the live clock to the new map before the first new-map event
+    // arrives; the last-event snapshot is guaranteed pre-boundary (no events
+    // flow during the map reload).
+    private lastEventClock = new Map<string, ClockBasis>();
+    // Broadcast clock basis for the tail of the level that just ended (per
+    // server), promoted from lastEventClock at changelevel detection. The delay
+    // buffer projects the old-map tail's release times off this (tailBasis).
+    private resetBasis = new Map<string, ClockBasis>();
+    // When the last boundary was detected and where the old level's ticks
+    // topped out — the reference frame for oldEpochTick's straggler check.
+    private lastBoundary = new Map<string, { at: number; preResetHighWater: number }>();
 
     constructor(private cfg: HltvSyncConfig) { super(); }
 
@@ -302,6 +345,74 @@ export class HltvSyncService extends EventEmitter {
     /** Used by the buffer when no clock exists yet — applies fallback delay. */
     fallbackDelaySeconds(): number { return this.cfg.fallback_delay_seconds; }
 
+    /** UX late-bias (seconds) for board events released across a changelevel. */
+    boardReleaseLagSeconds(): number { return this.cfg.board_release_lag_seconds; }
+
+    /**
+     * Basis for projecting an old-level tail onto the wall clock: the boundary
+     * snapshot promoted at changelevel detection, else the last-event snapshot.
+     * The fallback covers rescues that fire BEFORE ingest-side boundary
+     * detection — e.g. a heartbeat landing mid-changelevel re-anchors the clock
+     * and strands the old tail while no new-map event has arrived to promote
+     * the basis yet. Both snapshots are anchored to each event's game-time tick
+     * (immune to POST arrival jitter) and carry the pre-boundary delay (immune
+     * to the inflated Delay a resample can read while the proxy is
+     * mid-changelevel). Null when the server has never sampled during events.
+     */
+    tailBasis(server: string): ClockBasis | null {
+        return this.resetBasis.get(server) ?? this.lastEventClock.get(server) ?? null;
+    }
+
+    // Promote the last-event clock snapshot to the reset basis at a detected
+    // changelevel. The snapshot predates the boundary by construction (it was
+    // taken while old-map events were still flowing), so it stays correct even
+    // when a heartbeat re-anchored the live clock mid-changelevel.
+    private promoteEventBasis(server: string): void {
+        const snap = this.lastEventClock.get(server);
+        if (snap) this.resetBasis.set(server, snap);
+    }
+
+    /**
+     * True when a tick belongs to the level that ended at the last detected
+     * boundary — a late old-half POST (curl stall across the changelevel)
+     * arriving after new-level events already lowered the tick clock.
+     *
+     * Left in the main flow, such a straggler poisons two things: it becomes
+     * the queue's highest-tick tail, so the next fresh event mis-triggers the
+     * enqueue-time reset and the whole queue drains against the WRONG epoch's
+     * basis (the straggler would then be held until the new broadcast clock
+     * climbed to its old tick — end of half 2); and it would raise the tick
+     * high-water mark, firing a spurious tick_reset on the next fresh event.
+     * The buffer instead routes classified ticks straight to the drain under
+     * the old-epoch basis, and onIngestEvent skips bookkeeping for them.
+     *
+     * Classification requires all three, to reject the look-alike (a long
+     * warmup silence on the new level also produces a forward tick jump, but
+     * its tick sits far below the old level's tail):
+     *   1. a boundary was detected within STRAGGLER_WALL_WINDOW_MS;
+     *   2. the tick jumps ahead of the current level's high-water mark by more
+     *      than TICK_RESET_THRESHOLD_S;
+     *   3. the tick lands within STRAGGLER_TICK_WINDOW_S of the old level's
+     *      final tick.
+     */
+    oldEpochTick(server: string, tick: number): boolean {
+        const b = this.lastBoundary.get(server);
+        if (!b || Date.now() - b.at > STRAGGLER_WALL_WINDOW_MS) return false;
+        const highWater = this.highestEventTick.get(server);
+        if (highWater !== undefined && tick - highWater <= TICK_RESET_THRESHOLD_S) return false;
+        // A tick is only UNAMBIGUOUSLY old-epoch when the current level's clock
+        // cannot have reached it yet. When the new level's game time has already
+        // climbed into the old tail's range (short halves / long quiet spells),
+        // don't classify — ambiguous events stay in the main flow, where the
+        // strand margin and heartbeat rescue still bound their lateness.
+        const c = this.clocks.get(server);
+        if (c && c.online) {
+            const currentGameTime = c.activeTime + (Date.now() - c.sampledAt) / 1000;
+            if (tick <= currentGameTime + TICK_RESET_THRESHOLD_S) return false;
+        }
+        return Math.abs(tick - b.preResetHighWater) <= STRAGGLER_TICK_WINDOW_S;
+    }
+
     /**
      * Current HLTV broadcast delay (cvar) for a server, or null if no clock
      * yet. Returned even when online=false: at a changelevel the clock is
@@ -340,9 +451,17 @@ export class HltvSyncService extends EventEmitter {
         // buffer doesn't fire post-changelevel events with stale clock math.
         const c = this.clocks.get(server);
         if (c && event.map && c.map && event.map !== c.map) {
+            const preResetHighWater = this.highestEventTick.get(server);
+            if (preResetHighWater !== undefined) {
+                this.lastBoundary.set(server, { at: Date.now(), preResetHighWater });
+            }
             this.highestEventTick.delete(server);
+            this.promoteEventBasis(server);
             void this.sample(server, 'map_change');
         } else if (typeof event.tick === 'number') {
+            // A late old-level POST (curl stall across the changelevel) must not
+            // touch the high-water mark or the clock snapshot — see oldEpochTick.
+            if (this.oldEpochTick(server, event.tick)) return;
             const prev = this.highestEventTick.get(server);
             if (prev !== undefined && prev - event.tick > TICK_RESET_THRESHOLD_S) {
                 // Same map, fresh map load (half-2 changelevel / OT). Cached
@@ -351,7 +470,12 @@ export class HltvSyncService extends EventEmitter {
                 // the buffer would fire post-reset events instantly. Mark the
                 // clock offline so the buffer takes the fallback-delay path
                 // until the resample lands, and reset the tick high-water mark
-                // so we don't re-trigger on the next event.
+                // so we don't re-trigger on the next event. Promote the
+                // last-event clock snapshot to the reset basis first so the
+                // buffer can project the old-map tail off the pre-boundary
+                // clock (see HltvDelayBuffer.drainTail).
+                this.lastBoundary.set(server, { at: Date.now(), preResetHighWater: prev });
+                this.promoteEventBasis(server);
                 if (c) c.online = false;
                 this.highestEventTick.set(server, event.tick);
                 void this.sample(server, 'tick_reset');
@@ -360,6 +484,20 @@ export class HltvSyncService extends EventEmitter {
             if (prev === undefined || event.tick > prev) {
                 this.highestEventTick.set(server, event.tick);
             }
+        }
+        // Normal (non-boundary) TICK'D event: pair the current clock with the
+        // event flow. Coasting clocks (online, frozen params) still project
+        // linearly, so they're valid snapshots; post-reset offline clocks are
+        // not. Tick-less events are excluded — they can't witness which level
+        // instance the clock belongs to, and pairing one with a just-re-anchored
+        // clock would poison the tailBasis fallback for a still-queued old tail.
+        if (c && c.online && typeof event.tick === 'number') {
+            this.lastEventClock.set(server, {
+                activeTime: c.activeTime,
+                sampledAt: c.sampledAt,
+                delaySeconds: c.delaySeconds,
+                calibrationOffsetMs: c.calibrationOffsetMs,
+            });
         }
     }
 

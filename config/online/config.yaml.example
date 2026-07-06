@@ -40,6 +40,12 @@ hltv_sync:
   enabled: true
   heartbeat_seconds: 60
   fallback_delay_seconds: 60
+  # Extra late-bias (seconds) for the halftime / match-end stats board at a
+  # changelevel. Board release is a dynamic broadcast-clock projection off the
+  # pre-reset HLTV clock; this nudges only the board a touch late (never early)
+  # so it lands around the in-game end-of-half scoreboard on the delayed feed.
+  # 0 = exact projection.
+  board_release_lag_seconds: 10
   # Coast the last good clock across transient RCON failures for this long (seconds)
   # before falling to the fixed fallback delay — a brief proxy hiccup then neither
   # collapses the broadcast delay nor steps the overlay clock on recovery.

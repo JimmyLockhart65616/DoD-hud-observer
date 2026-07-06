@@ -55,6 +55,7 @@ describe('HltvSyncService — trigger logic', () => {
         enabled: true,
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
+        board_release_lag_seconds: 10,
         coast_grace_seconds: 120,
         rcon_timeout_ms: 5000,
         api_url: '',
@@ -150,6 +151,7 @@ describe('HltvSyncService — getStatus', () => {
         enabled: true,
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
+        board_release_lag_seconds: 10,
         coast_grace_seconds: 120,
         rcon_timeout_ms: 5000,
         api_url: '',
@@ -196,6 +198,7 @@ describe('HltvSyncService.broadcastNow — offline-clock guard', () => {
         enabled: true,
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
+        board_release_lag_seconds: 10,
         coast_grace_seconds: 120,
         rcon_timeout_ms: 5000,
         api_url: '',
@@ -238,6 +241,7 @@ describe('HltvSyncService — delaySeconds (used by the buffer to drain a bounda
         enabled: true,
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
+        board_release_lag_seconds: 10,
         coast_grace_seconds: 120,
         rcon_timeout_ms: 5000,
         api_url: '',
@@ -272,6 +276,7 @@ describe('HltvSyncService — clock-continuity coasting', () => {
         enabled: true,
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
+        board_release_lag_seconds: 10,
         coast_grace_seconds: 120,
         rcon_timeout_ms: 5000,
         api_url: '',
@@ -350,11 +355,132 @@ describe('HltvSyncService — clock-continuity coasting', () => {
     });
 });
 
+describe('HltvSyncService — tail basis capture (changelevel projection anchor)', () => {
+    const cfg = {
+        enabled: true,
+        heartbeat_seconds: 0,
+        fallback_delay_seconds: 60,
+        board_release_lag_seconds: 10,
+        coast_grace_seconds: 120,
+        rcon_timeout_ms: 5000,
+        api_url: '',
+        api_auth_key: '',
+        api_timeout_ms: 3000,
+        servers: { 'atl1': { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' } },
+    };
+
+    const basisA = { activeTime: 100, sampledAt: 5_000_000, delaySeconds: 60, calibrationOffsetMs: 0 };
+
+    function makeService() {
+        const svc = new HltvSyncService(cfg);
+        const sampleCalls: string[] = [];
+        (svc as any).sample = async (server: string, reason: string) => {
+            sampleCalls.push(`${server}:${reason}`);
+            return null;
+        };
+        return { svc, sampleCalls };
+    }
+
+    // Builds the standard mid-half-1 state: clock A live, paired with tick'd
+    // events up to tick 1010.
+    function midHalf1() {
+        const { svc, sampleCalls } = makeService();
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 1000, map: 'dod_anzio' }); // lazy-init (no clock yet)
+        (svc as any).clocks.set('atl1', fakeClock({ activeTime: 100, sampledAt: 5_000_000, delaySeconds: 60, map: 'dod_anzio' }));
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 1010, map: 'dod_anzio' }); // pairs clock A
+        return { svc, sampleCalls };
+    }
+
+    it('tailBasis is null before any clock has been paired with an event', () => {
+        const { svc } = makeService();
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 1000, map: 'dod_anzio' });
+        expect(svc.tailBasis('atl1')).toBeNull();
+    });
+
+    it('pairs the online clock with tick\'d events (lastEventClock fallback)', () => {
+        const { svc } = midHalf1();
+        expect(svc.tailBasis('atl1')).toEqual(basisA);
+    });
+
+    it('tick-less events do not update the snapshot (they cannot witness the level instance)', () => {
+        const { svc } = midHalf1();
+        // Live clock re-anchors (e.g. a heartbeat mid-changelevel)…
+        (svc as any).clocks.set('atl1', fakeClock({ activeTime: 4, sampledAt: 6_000_000, map: 'dod_anzio' }));
+        // …then a tick-less event arrives. It must not pair the new clock.
+        svc.onIngestEvent('atl1', { event: 'time_sync', map: 'dod_anzio' });
+        expect(svc.tailBasis('atl1')).toEqual(basisA);
+    });
+
+    it('offline clocks do not update the snapshot (post-reset events before the resample)', () => {
+        const { svc } = midHalf1();
+        (svc as any).clocks.set('atl1', fakeClock({ online: false, activeTime: 3, sampledAt: 6_000_000, map: 'dod_anzio' }));
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 1020, map: 'dod_anzio' });
+        expect(svc.tailBasis('atl1')).toEqual(basisA);
+    });
+
+    // The heartbeat-mid-changelevel race: by the time the first half-2 event
+    // triggers tick_reset, a heartbeat may have already re-anchored the live
+    // clock to the new map. The promoted basis must be the clock as of the
+    // last OLD-map event — not the live clock at detection time.
+    it('tick_reset promotes the last-event snapshot even when the live clock already re-anchored', () => {
+        const { svc, sampleCalls } = midHalf1();
+        (svc as any).clocks.set('atl1', fakeClock({ activeTime: 4, sampledAt: 6_000_000, map: 'dod_anzio' }));
+        svc.onIngestEvent('atl1', { event: 'half_start', tick: 3, map: 'dod_anzio' });   // tick_reset
+        expect(sampleCalls).toContain('atl1:tick_reset');
+        expect(svc.tailBasis('atl1')).toEqual(basisA);
+        // New-map tick'd events refresh lastEventClock, but the promoted
+        // boundary basis keeps precedence for the old tail.
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 8, map: 'dod_anzio' });
+        expect(svc.tailBasis('atl1')).toEqual(basisA);
+    });
+
+    it('map_change promotes the snapshot too', () => {
+        const { svc, sampleCalls } = midHalf1();
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 5, map: 'dod_flash' });
+        expect(sampleCalls).toContain('atl1:map_change');
+        expect(svc.tailBasis('atl1')).toEqual(basisA);
+    });
+
+    // A late old-half POST (curl stall) arriving after half-2 began: it must
+    // be classified old-epoch, must not raise the tick high-water mark (which
+    // would fire a spurious tick_reset on the next fresh event), and must not
+    // re-pair the snapshot.
+    it('old-epoch stragglers are classified and do not pollute the high-water mark', () => {
+        const { svc, sampleCalls } = midHalf1();
+        svc.onIngestEvent('atl1', { event: 'half_start', tick: 3, map: 'dod_anzio' });   // boundary
+        // Fresh re-anchored clock: sampledAt must be "now" — oldEpochTick's
+        // ambiguity guard projects current game time from (activeTime, sampledAt).
+        (svc as any).clocks.set('atl1', fakeClock({ activeTime: 6, sampledAt: Date.now(), map: 'dod_anzio' }));
+
+        expect(svc.oldEpochTick('atl1', 1005)).toBe(true);   // near the old tail (1010)
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 1005, map: 'dod_anzio' });      // straggler
+        expect(svc.tailBasis('atl1')).toEqual(basisA);       // no re-pairing with clock B
+
+        // Next fresh event: high-water is still 3, so NO spurious tick_reset.
+        svc.onIngestEvent('atl1', { event: 'kill', tick: 10, map: 'dod_anzio' });
+        expect(sampleCalls.filter(s => s === 'atl1:tick_reset')).toHaveLength(1);
+    });
+
+    it('rejects the warmup-silence look-alike: a forward jump far below the old tail is NOT a straggler', () => {
+        const { svc } = midHalf1();
+        svc.onIngestEvent('atl1', { event: 'half_start', tick: 3, map: 'dod_anzio' });   // boundary (old tail 1010)
+        // 200s into the new level after a long quiet warmup: forward jump vs
+        // high-water 3, but nowhere near the old tail — legitimate new-level tick.
+        expect(svc.oldEpochTick('atl1', 200)).toBe(false);
+    });
+
+    it('no boundary on record → never classified (pre-boundary stragglers ride the rescue path)', () => {
+        const { svc } = midHalf1();
+        expect(svc.oldEpochTick('atl1', 1005)).toBe(false);
+    });
+});
+
 describe('HltvSyncService — calibration', () => {
     const cfg = {
         enabled: true,
         heartbeat_seconds: 0,
         fallback_delay_seconds: 60,
+        board_release_lag_seconds: 10,
         coast_grace_seconds: 120,
         rcon_timeout_ms: 5000,
         api_url: '',

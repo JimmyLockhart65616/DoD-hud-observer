@@ -7,7 +7,7 @@ import { MetricsCollector } from './handler/metrics';
 import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './handler/ingest';
 import { createSocketServer } from './socket/socket';
 import { HltvSyncService } from './handler/hltvSync';
-import { HltvDelayBuffer } from './handler/hltvDelayBuffer';
+import { HltvDelayBuffer, wireStrandedRescue } from './handler/hltvDelayBuffer';
 
 // ─── Core services ───────────────────────────────────────────────────────────
 
@@ -35,20 +35,10 @@ const fireToSockets = makeFireToSockets(io);
 const delayBuffer = new HltvDelayBuffer(hltvSync, ({ server, matchId, event }) =>
     fireToSockets(server, matchId, event));
 
-// On a confirmed map change, release events stranded under the previous map's
-// activeTime (those have ticks > new activeTime and would otherwise sit forever).
-// Trigger only when the cached `map` field actually flips — not on every sample,
-// because activeTime samples are 30s old by definition and would mis-classify
-// fresh events (tick > stale activeTime) as stranded, firing them too early.
-const lastMaps = new Map<string, string | null>();
-hltvSync.on('clock', (clock) => {
-    if (!clock.online) return;
-    const prevMap = lastMaps.get(clock.server) ?? null;
-    if (prevMap && clock.map && prevMap !== clock.map) {
-        delayBuffer.releaseStrandedEvents(clock.server, clock.activeTime);
-    }
-    lastMaps.set(clock.server, clock.map);
-});
+// Rescue events stranded by a changelevel on every fresh sample — see
+// wireStrandedRescue for the full timing story (heartbeat self-healing of
+// late-arriving old-half POSTs, coast exclusion, strand margin).
+wireStrandedRescue(hltvSync, delayBuffer);
 
 hltvSync.start();
 delayBuffer.start();

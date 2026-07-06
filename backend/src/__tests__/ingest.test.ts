@@ -801,6 +801,7 @@ describe('POST /ingest — HLTV sync defers socket emit but records immediately'
             enabled: true,
             heartbeat_seconds: 0,
             fallback_delay_seconds: 60,
+            board_release_lag_seconds: 10,
             coast_grace_seconds: 120,
             rcon_timeout_ms: 5000,
             api_url: '',
@@ -895,6 +896,39 @@ describe('POST /ingest — HLTV sync defers socket emit but records immediately'
         const lines = fs.readFileSync(path.join(tmpDir, matchId, 'events.jsonl'), 'utf-8')
             .trim().split('\n').filter(l => l);
         expect(lines).toHaveLength(3);
+    });
+
+    // Seam test for the halftime-board-late fix: the reset must snapshot the
+    // pre-reset clock (captureResetBasis) and drainTail must project the tail off
+    // it — releaseAt = sampledAt + (tick − activeTime + delay)×1000, tick-anchored
+    // (immune to POST arrival time), with the board's UX late-bias added only to
+    // the summary. Asserts the exact projected release instants through the real
+    // ingest → onIngestEvent → drainTail path.
+    it('drains the tail via the pre-reset broadcast-clock projection (board gets the lag)', async () => {
+        const matchId = 'KTP-sync-projection';
+        const T0 = Date.now();
+        (sync as any).clocks.set(HOST, {
+            server: HOST, cfg: { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' },
+            delaySeconds: 30, activeTime: 1000, sampledAt: T0,
+            map: 'dod_anzio', serverName: HOST, online: true, lastError: null, calibrationOffsetMs: 0,
+        });
+
+        // Half-1 tail: a gameplay event and the halftime board, both high-tick.
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').set('X-Server-Hostname', HOST)
+            .send({ event: 'kill', match_id: matchId, killer_id: 'A', victim_id: 'B', weapon: 'garand', tick: 1100, map: 'dod_anzio' });
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').set('X-Server-Hostname', HOST)
+            .send({ event: 'player_stats_summary', match_id: matchId, reason: 'half_end', players: [], tick: 1200, map: 'dod_anzio' });
+
+        // Half-2 changelevel (same map, tick resets) → captures the basis + drains the tail.
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').set('X-Server-Hostname', HOST)
+            .send({ event: 'ktp_match_start', match_id: matchId, map: 'dod_anzio', match_type: 1, half: 2, tick: 5 });
+
+        const drain: any[] = (buffer as any).draining.get(HOST);
+        const killItem = drain.find(d => d.event.tick === 1100);
+        const boardItem = drain.find(d => d.event.tick === 1200);
+        // Projection off the pre-reset clock (sampledAt=T0, activeTime=1000, delay=30):
+        expect(killItem.releaseAt).toBe(T0 + (1100 - 1000 + 30) * 1000);             // gameplay: no lag
+        expect(boardItem.releaseAt).toBe(T0 + (1200 - 1000 + 30) * 1000 + 10 * 1000); // board: +10s lag
     });
 
     it('falls back to fire-immediately when sync is disabled for a server', async () => {

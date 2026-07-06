@@ -1,4 +1,4 @@
-import { HltvSyncService } from './hltvSync';
+import { HltvSyncService, ClockBasis, HltvClock } from './hltvSync';
 
 // ─── HltvDelayBuffer ────────────────────────────────────────────────────────
 //
@@ -62,6 +62,17 @@ export class HltvDelayBuffer {
 
         const tick = numericTick(item.event);
 
+        // Old-epoch straggler: a late POST from the level that ended at the
+        // last boundary (curl stall across the changelevel). Route it straight
+        // to the drain — projected off the OLD epoch's basis. Inserting it in
+        // the main queue instead would make it the highest-tick tail, so the
+        // next fresh event would mis-trigger the tick-reset below and drain
+        // the whole queue (fresh events included) against mismatched bases.
+        if (this.sync.oldEpochTick(item.server, tick)) {
+            this.drainTail(item.server, [item]);
+            return;
+        }
+
         // Tick reset (mid-match changelevel: half-2 / OT, or next map at match
         // end). Old-map events queued at high ticks would never reach the new
         // (low) broadcast clock and would otherwise sit forever. Move them to
@@ -88,21 +99,46 @@ export class HltvDelayBuffer {
         q.splice(i, 0, item);
     }
 
-    // Move old-map events into the wall-clock drain queue, each stamped with
-    // releaseAt = enqueuedAt + broadcast delay. enqueuedAt ≈ the live instant
-    // the event occurred, so this reproduces the ~delay-second lag the event
-    // already had — preserving broadcast alignment across the changelevel.
-    // Uses the old clock's delaySeconds (preserved across the offline flip at
-    // reset) and falls back to the configured fallback delay.
+    // Move old-map events into the wall-clock drain queue, each stamped with the
+    // instant HLTV's broadcast clock reaches its tick — computed from the clock
+    // snapshotted just before the changelevel (broadcastNow inverted, see
+    // projectReleaseAt). This reproduces the exact broadcast lag each event had,
+    // anchored to its game-time tick (immune to POST arrival jitter) and to the
+    // healthy pre-reset delay (immune to the inflated Delay a resample can read
+    // mid-changelevel). Falls back to the arrival-anchored fallback delay only
+    // when no pre-reset basis exists yet (server never sampled).
     private drainTail(server: string, items: BufferedEvent[]): void {
         if (!items.length) return;
-        const delayMs = (this.sync.delaySeconds(server) ?? this.sync.fallbackDelaySeconds()) * 1000;
+        const basis = this.sync.tailBasis(server);
+        const lagMs = this.sync.boardReleaseLagSeconds() * 1000;
         let d = this.draining.get(server);
         if (!d) { d = []; this.draining.set(server, d); }
-        for (const it of items) d.push({ ...it, releaseAt: it.enqueuedAt + delayMs });
+        for (const it of items) {
+            d.push({ ...it, releaseAt: this.projectReleaseAt(it, basis, lagMs) });
+        }
         // Keep FIFO by release time (defensive against back-to-back resets,
         // e.g. half-2 → OT, stacking two tails).
         d.sort((a, b) => a.releaseAt - b.releaseAt);
+    }
+
+    // Wall-clock instant the broadcast clock reaches this event's tick, from the
+    // pre-reset basis: releaseAt = sampledAt + (tick − activeTime + delay)×1000 −
+    // calibrationOffsetMs (i.e. broadcastNow solved for `now`). Board events
+    // (player_stats_summary / half_end) get an extra late-bias so the halftime /
+    // match-end board errs late, not early. Without a basis (server never
+    // sampled) fall back to the arrival-anchored fallback delay. A projected
+    // instant already in the past releases on the next driver tick — correct: a
+    // very late POST shouldn't be held further.
+    private projectReleaseAt(it: BufferedEvent, basis: ClockBasis | null, lagMs: number): number {
+        const extra = isBoardEvent(it.event) ? lagMs : 0;
+        if (!basis) {
+            return it.enqueuedAt + this.sync.fallbackDelaySeconds() * 1000 + extra;
+        }
+        const tick = numericTick(it.event);
+        return basis.sampledAt
+            + (tick - basis.activeTime + basis.delaySeconds) * 1000
+            - basis.calibrationOffsetMs
+            + extra;
     }
 
     queueDepth(server: string): number {
@@ -120,18 +156,23 @@ export class HltvDelayBuffer {
     }
 
     /**
-     * Moves events whose `tick` exceeds the new sample's `activeTime` — i.e.,
-     * events from the *previous* map whose tick will never be reached on the
-     * new clock — into the wall-clock drain queue. Without this they'd sit
-     * forever, since broadcastNow resets near 0 at map change. Called from the
-     * clock listener in app.ts when a fresh sample arrives.
+     * Moves events whose `tick` is well above the new sample's `activeTime` —
+     * i.e., events from the *previous* level whose tick will never be reached on
+     * the new clock — into the wall-clock drain queue. Without this they'd sit
+     * forever, since broadcastNow resets near 0 at a changelevel. Called from the
+     * clock listener in app.ts when a fresh sample shows a map flip OR a same-map
+     * Game-Time drop (halftime / OT, where the map name doesn't change).
      *
-     * Like the enqueue-time reset, these release on their broadcast delay (not
-     * instantly), so the boundary stays delay-aligned. Idempotent with the
-     * enqueue drain: if the tail was already moved, this finds nothing.
+     * The `+ TICK_RESET_THRESHOLD_S` margin is the safety guard: old-map ticks
+     * are hundreds-to-thousands of seconds above the fresh low `activeTime`,
+     * while a genuinely fresh new-map event can momentarily sit a second or two
+     * above the just-sampled activeTime (sample age + network skew). Requiring a
+     * 30s gap strands only real old-map events and never a fresh one (which,
+     * mis-stranded, would project to a past releaseAt and fire early).
      *
-     * Events whose tick is still ≤ activeTime are left in the queue; the
-     * normal driver tick fires them on schedule under the new clock.
+     * Drained events release on the pre-reset broadcast projection (drainTail),
+     * not instantly, so the boundary stays delay-aligned. Idempotent with the
+     * enqueue-time drain: if the tail was already moved, this finds nothing.
      */
     releaseStrandedEvents(server: string, activeTime: number): void {
         const q = this.queues.get(server);
@@ -139,7 +180,7 @@ export class HltvDelayBuffer {
         const stranded: BufferedEvent[] = [];
         let i = 0;
         while (i < q.length) {
-            if (numericTick(q[i].event) > activeTime) {
+            if (numericTick(q[i].event) > activeTime + TICK_RESET_THRESHOLD_S) {
                 stranded.push(q[i]);
                 q.splice(i, 1);
             } else {
@@ -187,7 +228,42 @@ export class HltvDelayBuffer {
     }
 }
 
+/**
+ * Subscribes the buffer's stranded-event rescue to the sync service's clock
+ * emissions. Returns an unsubscribe function.
+ *
+ * After every successful fresh sample, strand-check the queue: events whose
+ * tick is far above the just-sampled Game Time belong to a previous level
+ * (halftime / OT changelevel, or the map flip at match end) and would
+ * otherwise sit until the new broadcast clock climbed to their old-level
+ * ticks — for a halftime board POST that arrived late (curl stall across the
+ * changelevel), that's the end of half 2. Running on every fresh sample (not
+ * just a detected map flip) makes the heartbeat self-heal such stragglers
+ * within one beat. Safe because activeTime is sample-fresh at emit time and
+ * releaseStrandedEvents strands only ticks > activeTime +
+ * TICK_RESET_THRESHOLD_S — a margin no legitimately queued current-level
+ * event can reach. Coasted clocks are excluded (online but lastError set):
+ * their frozen activeTime falls behind live game time, which would
+ * mis-classify fresh events as stranded.
+ */
+export function wireStrandedRescue(sync: HltvSyncService, buffer: HltvDelayBuffer): () => void {
+    const onClock = (clock: HltvClock) => {
+        if (!clock.online || clock.lastError) return;
+        buffer.releaseStrandedEvents(clock.server, clock.activeTime);
+    };
+    sync.on('clock', onClock);
+    return () => { sync.off('clock', onClock); };
+}
+
 function numericTick(event: any): number {
     const t = event?.tick;
     return typeof t === 'number' ? t : 0;
+}
+
+// Board (full-screen stats) events, which get the UX late-bias at a changelevel.
+// player_stats_summary covers the halftime, match-end, and capout boards;
+// half_end is the best-effort marker the frontend can also render a board from.
+function isBoardEvent(event: any): boolean {
+    const e = event?.event;
+    return e === 'player_stats_summary' || e === 'half_end';
 }

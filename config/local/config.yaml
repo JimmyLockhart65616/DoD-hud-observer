@@ -16,6 +16,7 @@
 #   HUD_HLTV_SYNC_ENABLED            → hltv_sync.enabled (true/false)
 #   HUD_HLTV_SYNC_HEARTBEAT_SECONDS  → hltv_sync.heartbeat_seconds (0 disables)
 #   HUD_HLTV_SYNC_FALLBACK_SECONDS   → hltv_sync.fallback_delay_seconds
+#   HUD_HLTV_SYNC_BOARD_LAG_SECONDS  → hltv_sync.board_release_lag_seconds
 #   HUD_HLTV_SYNC_COAST_GRACE_SECONDS → hltv_sync.coast_grace_seconds
 #   HUD_HLTV_SYNC_RCON_TIMEOUT_MS    → hltv_sync.rcon_timeout_ms
 #   HUD_HLTV_API_URL                 → hltv_sync.api_url (empty disables /state)
@@ -55,6 +56,12 @@ hltv_sync:
   enabled: false
   heartbeat_seconds: 60
   fallback_delay_seconds: 60
+  # Extra late-bias (seconds) for the halftime / match-end stats board at a
+  # changelevel. The board's release is a dynamic broadcast-clock projection off
+  # the pre-reset HLTV clock; this nudges ONLY the board a touch late (never
+  # early) so it lands around the in-game end-of-half scoreboard on the delayed
+  # feed, then rides the changelevel/warmup wait. 0 = exact projection.
+  board_release_lag_seconds: 10
   # Keep coasting the last good clock across transient RCON failures for this long
   # (seconds, measured from the last good sample) before falling to the fixed
   # fallback delay. Spans ~2 missed 60s heartbeats so a brief proxy hiccup doesn't
