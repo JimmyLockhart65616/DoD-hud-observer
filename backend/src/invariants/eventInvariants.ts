@@ -147,8 +147,56 @@ export const enumSanity: Invariant = (events) => {
     return out;
 };
 
+/**
+ * SUMMARY-ROSTER: a boundary stats summary (reason match_end / half_end) must
+ * carry player rows when there was still a connected on-team roster at the moment
+ * it fired. This is the exact signature of the intermission team-read bug: the
+ * plugin's emit_stats_summary filtered on the LIVE get_user_team(id), which
+ * returns non-ALLIES/AXIS for everyone during the end-of-match intermission, so
+ * every row was silently dropped and the endgame board came out EMPTY (confirmed
+ * on 1783044529-ATL1: 12 connected players, players:[]). Fixed by reading the
+ * plugin-tracked g_player_team[] instead of the live engine team.
+ *
+ * Robust by construction: the "expected roster" is reconstructed from the
+ * stream's own connect/spawn/team_change/disconnect events, so a legitimately
+ * empty summary (everyone disconnected before the boundary → roster already 0)
+ * is a no-op, never a false positive — it fires ONLY when players were
+ * demonstrably present yet the board is empty. No-op on pre-summary streams:
+ * the NY1 fixture predates the stats-summary feature (2026-06-12) and emits none,
+ * so this invariant is exercised via the injected-summary corruption test in
+ * productionFixture.test.ts rather than by the fixture directly.
+ */
+export const summaryRosterNonEmpty: Invariant = (events) => {
+    const BOUNDARY_REASONS = new Set(['match_end', 'half_end']);
+    const MIN_ROSTER = 2; // robust-but-loose: the bug collapses a full ~12-player board to 0
+    const roster = new Map<string, string>(); // user_id -> last-seen team
+    const out: InvariantViolation[] = [];
+    for (const e of events) {
+        const uid = typeof e.user_id === 'string' ? e.user_id : undefined;
+        if (uid) {
+            if (e.event === 'player_connect' || e.event === 'player_spawn' || e.event === 'player_team_change') {
+                if (typeof e.team === 'string') roster.set(uid, e.team);
+            } else if (e.event === 'player_disconnect') {
+                roster.delete(uid);
+            }
+        }
+        if (e.event === 'player_stats_summary' && BOUNDARY_REASONS.has(e.reason)) {
+            let onTeam = 0;
+            for (const t of roster.values()) if (t === 'allies' || t === 'axis') onTeam++;
+            const rows = Array.isArray(e.players) ? e.players.length : 0;
+            if (onTeam >= MIN_ROSTER && rows === 0) {
+                out.push({
+                    invariant: 'summary-roster-nonempty',
+                    message: `${e.reason} summary (half ${halfOf(e)}) carried 0 player rows while ${onTeam} connected players were on a team — the endgame/halftime board is empty despite a live roster. This is the get_user_team-at-intermission bug: emit_stats_summary must read the tracked g_player_team[], not the live engine team.`,
+                });
+            }
+        }
+    }
+    return out;
+};
+
 /** All invariants, in evaluation order. Reused by tests and (later) the audit harness. */
-export const INVARIANTS: ReadonlyArray<Invariant> = [capCreditObjScore, capCreditCaps, enumSanity];
+export const INVARIANTS: ReadonlyArray<Invariant> = [capCreditObjScore, capCreditCaps, enumSanity, summaryRosterNonEmpty];
 
 /** Run every invariant over an emitted event stream and return all violations. */
 export function checkEventStream(events: ReadonlyArray<StreamEvent>): InvariantViolation[] {

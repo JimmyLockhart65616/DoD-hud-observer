@@ -99,6 +99,16 @@ new g_matchHalf;
 // 0.0 = no live half → hud_timeleft() falls back to get_timeleft() (pubs).
 new Float:g_half_end_gt = 0.0;
 
+// Round-live re-wipe gate. KTPMatchHandler fires ktp_match_start ~0.8-1s BEFORE
+// the go-live mp_clan_restartround actually zeroes engine frags and unpauses
+// DODX (RoundState==1). Kills in that window would otherwise survive here but be
+// wiped from the real scoreboard, drifting the HUD's K/D high. Armed at
+// ktp_match_start; the first RoundState==1 within the deadline re-wipes once
+// (see msg_round_state). The deadline abandons a stale arm so a missed go-live
+// signal can't trigger a stray mid-half wipe at a later round boundary.
+new bool:g_awaiting_round_live = false;
+new Float:g_round_live_deadline = 0.0;
+
 // Player state
 new g_player_team[MAX_PLAYERS + 1];
 new g_player_prone[MAX_PLAYERS + 1];
@@ -253,6 +263,16 @@ public plugin_init() {
     // No ScoreShort hook: client_death emits player_score for both killer and
     // victim explicitly, using locally tracked g_player_kills/g_player_deaths.
     // The engine's ScoreShort broadcast was unreliable in extension mode.
+
+    // RoundState (DoD: BYTE state, 1=round live, other=freeze). Drives the
+    // go-live stat re-wipe so pre-live kills don't drift the HUD above the real
+    // scoreboard. Mirrors KTPMatchHandler's own round-live gate
+    // (KTPMatchHandler.sma:3903); get_user_msgid resolves the id in extension
+    // mode just as it does for TeamScore above.
+    new msgRoundState = get_user_msgid("RoundState");
+    if (msgRoundState > 0) {
+        register_message(msgRoundState, "msg_round_state");
+    }
 
     // Chat
     register_clcmd("say",      "ev_say");
@@ -486,6 +506,20 @@ stock reset_player_stats_slot(id) {
     }
 }
 
+// Zero every per-player stat accumulator (half-scoped). Called at go-live from
+// ktp_match_start and re-run once at the round-live boundary (msg_round_state)
+// so kills/deaths landing in the ~1s go-live window — which the engine wipes on
+// the mp_clan_restartround and DODX discards while paused — don't survive in the
+// HUD and drift K/D above the real scoreboard.
+stock wipe_all_stat_accumulators() {
+    for (new i = 1; i <= MAX_PLAYERS; i++) {
+        g_player_kills[i]    = 0;
+        g_player_deaths[i]   = 0;
+        g_player_objscore[i] = 0;
+        reset_player_stats_slot(i);
+    }
+}
+
 // Get log name for the weapon in the given DODWT_* slot
 stock get_wpn_name_for_slot(id, slot, out[], len) {
     new wpn_id = dod_weapon_type(id, slot);
@@ -543,16 +577,18 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
     g_matchHalf = half;
 
     // Reset per-player kill/death/objscore counters — stats wipe on half start.
-    for (new i = 1; i <= MAX_PLAYERS; i++) {
-        g_player_kills[i]    = 0;
-        g_player_deaths[i]   = 0;
-        g_player_objscore[i] = 0;
-        reset_player_stats_slot(i);
-    }
+    wipe_all_stat_accumulators();
     for (new r = 0; r < SummaryReason; r++) {
         g_lastSummaryAt[r] = 0.0;
     }
     g_lastHalfEndFwdAt = 0.0;
+
+    // Arm the round-live re-wipe. This forward fires ~0.8-1s BEFORE the go-live
+    // mp_clan_restartround zeroes engine frags and unpauses DODX (RoundState==1),
+    // so kills in that window leak into the HUD unless we re-wipe when the round
+    // actually goes live. msg_round_state does that once, guarded by the deadline.
+    g_awaiting_round_live = true;
+    g_round_live_deadline = get_gametime() + 10.0;
 
     server_print("[HUD] Match started: %s (map=%s type=%d half=%d)", matchId, map, _:matchType, half);
 
@@ -586,6 +622,42 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
     // Refresh flag state and send roster dump
     do_flags_init();
     do_roster_dump();
+}
+
+// RoundState message: BYTE arg 1, 1 = round live, anything else = freeze.
+// ktp_match_start armed g_awaiting_round_live ~0.8-1s before the round physically
+// restarts. When the round actually goes live we re-wipe once, snapping the HUD's
+// K/D baseline to the instant the engine zeroes frags and DODX unpauses — so any
+// kills that leaked into the go-live window are discarded. Guarded so it fires
+// ONLY at go-live: a normal mid-half freeze→live transition (g_awaiting_round_live
+// already false) must keep accumulating. PLUGIN_CONTINUE — never block the message
+// (it drives the client HUD).
+public msg_round_state() {
+    if (get_msg_arg_int(1) != 1) return PLUGIN_CONTINUE;   // freeze / pre-round
+    if (!g_awaiting_round_live)  return PLUGIN_CONTINUE;    // not a pending go-live
+
+    g_awaiting_round_live = false;
+
+    // Abandon a stale arm: if the go-live RoundState==1 never arrived, don't let a
+    // later round boundary erase mid-half stats.
+    if (get_gametime() > g_round_live_deadline) {
+        return PLUGIN_CONTINUE;
+    }
+
+    wipe_all_stat_accumulators();
+
+    // Re-push zeroed scores so the overlay scoreboard snaps to 0 at the go-live
+    // instant instead of showing the leaked pre-live counts until the next kill.
+    // Same guard as do_roster_dump (connected, non-HLTV, on a team).
+    new maxp = get_maxplayers();
+    for (new id = 1; id <= maxp; id++) {
+        if (!is_user_connected(id)) continue;
+        if (is_user_hltv(id)) continue;
+        new team = get_user_team(id);
+        if (team != TEAM_ALLIES && team != TEAM_AXIS) continue;
+        emit_player_score(id);
+    }
+    return PLUGIN_CONTINUE;
 }
 
 public ktp_match_end(const matchId[], const map[], MatchType:matchType, team1Score, team2Score) {
@@ -1113,7 +1185,12 @@ stock emit_stats_summary(reason, const capout_team[] = "", const capout_by[] = "
         if (!is_user_connected(id)) continue;
         if (is_user_hltv(id)) continue;
 
-        new team = get_user_team(id);
+        // Use the plugin-tracked team, NOT the live get_user_team(id). At the
+        // end-of-match intermission the engine team read returns non-ALLIES/AXIS
+        // for everyone, which silently dropped every row and emitted an empty
+        // match_end board (confirmed on 1783044529-ATL1). g_player_team is set on
+        // spawn/team-change and persists through intermission until disconnect.
+        new team = g_player_team[id];
         if (team != TEAM_ALLIES && team != TEAM_AXIS) continue;
 
         // Whole entries only. Reserve room for this player's row (<=512) PLUS

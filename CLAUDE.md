@@ -212,6 +212,21 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
   killed by someone else. `kill_class` "nade" = wpnindex ∈ {13,14,15,16,36} (grenades + mills bomb).
   `cap_breaks` = defensive stat: killed an enemy capper standing on the point (separate
   from `caps`, which is offensive). Credited via the breaker's `player_score`.
+- **Go-live re-wipe (RoundState gate).** `ktp_match_start` fires ~0.8–1s BEFORE the
+  go-live `mp_clan_restartround` zeroes engine frags and DODX unpauses (`RoundState==1`).
+  Because the HUD counts kills unconditionally (`client_death` has no live gate), a
+  warmup fighter still mid-engagement at `.ready` can score a kill in that window that
+  the engine wipes but the HUD would keep — drifting the HUD K/D above the in-game
+  scoreboard. The plugin hooks the `RoundState` message and re-wipes accumulators once
+  at the first `RoundState==1` after each `ktp_match_start` (guarded by
+  `g_awaiting_round_live` + a 10s deadline so a missed signal can't wipe mid-half). This
+  snaps the HUD baseline to the exact instant the engine resets. (Same signal
+  KTPMatchHandler uses to gate its own DODX unpause.)
+- **Summary team source.** `emit_stats_summary` filters players by the plugin-tracked
+  `g_player_team[]`, NOT the live `get_user_team(id)`: at the end-of-match intermission
+  the engine team read returns non-ALLIES/AXIS for everyone, which silently emptied the
+  `match_end` board (confirmed on `1783044529-ATL1`). Guarded by the
+  `summary-roster-nonempty` event invariant.
 - `half_end` + a `half_end`-reason summary fire when the plugin sees KTPMatchHandler's
   `KTP_HALF_END` log line (half-1 end only); `ktp_match_end` covers all terminal paths.
 - Summary emission is event-driven only (cap / capout / half end / match end /

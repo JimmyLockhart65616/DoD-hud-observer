@@ -8,6 +8,7 @@ import {
     capCreditObjScore,
     capCreditCaps,
     enumSanity,
+    summaryRosterNonEmpty,
     checkEventStream,
     StreamEvent,
 } from '../invariants/eventInvariants';
@@ -89,6 +90,67 @@ describe('enum sanity', () => {
         expect(v).toHaveLength(1);
         expect(v[0].invariant).toBe('enum-team');
         expect(v[0].message).toContain('british');
+    });
+});
+
+describe('summary-roster (empty match_end / half_end board)', () => {
+    const connect = (uid: string, team: 'allies' | 'axis' | 'spectator'): StreamEvent =>
+        ({ event: 'player_connect', user_id: uid, team });
+    const disconnect = (uid: string): StreamEvent => ({ event: 'player_disconnect', user_id: uid });
+    const summary = (reason: string, players: any[], half = 2): StreamEvent =>
+        ({ event: 'player_stats_summary', half, reason, players });
+
+    it('passes when a match_end summary carries rows for the live roster', () => {
+        const events = [
+            connect('STEAM_0:0:1', 'allies'), connect('STEAM_0:0:2', 'axis'),
+            summary('match_end', [{ user_id: 'STEAM_0:0:1' }, { user_id: 'STEAM_0:0:2' }]),
+        ];
+        expect(summaryRosterNonEmpty(events)).toEqual([]);
+    });
+
+    it('fires when match_end is empty but players were still connected on teams (the intermission bug)', () => {
+        const events = [
+            connect('STEAM_0:0:1', 'allies'), connect('STEAM_0:0:2', 'axis'),
+            connect('STEAM_0:0:3', 'allies'), connect('STEAM_0:0:4', 'axis'),
+            summary('match_end', []),
+        ];
+        const v = summaryRosterNonEmpty(events);
+        expect(v).toHaveLength(1);
+        expect(v[0].invariant).toBe('summary-roster-nonempty');
+        expect(v[0].message).toContain('4 connected players');
+    });
+
+    it('also guards half_end boards', () => {
+        const events = [
+            connect('STEAM_0:0:1', 'allies'), connect('STEAM_0:0:2', 'axis'),
+            summary('half_end', [], 1),
+        ];
+        expect(summaryRosterNonEmpty(events).map(x => x.invariant)).toEqual(['summary-roster-nonempty']);
+    });
+
+    it('is a no-op when the roster legitimately drained before the boundary (everyone left)', () => {
+        const events = [
+            connect('STEAM_0:0:1', 'allies'), connect('STEAM_0:0:2', 'axis'),
+            disconnect('STEAM_0:0:1'), disconnect('STEAM_0:0:2'),
+            summary('match_end', []),
+        ];
+        expect(summaryRosterNonEmpty(events)).toEqual([]);
+    });
+
+    it('does not count spectators toward the expected roster', () => {
+        const events = [
+            connect('STEAM_0:0:1', 'spectator'), connect('STEAM_0:0:2', 'spectator'),
+            summary('match_end', []),
+        ];
+        expect(summaryRosterNonEmpty(events)).toEqual([]);
+    });
+
+    it('ignores mid-match round_end capouts (only boundary reasons are checked)', () => {
+        const events = [
+            connect('STEAM_0:0:1', 'allies'), connect('STEAM_0:0:2', 'axis'),
+            summary('round_end', []),
+        ];
+        expect(summaryRosterNonEmpty(events)).toEqual([]);
     });
 });
 

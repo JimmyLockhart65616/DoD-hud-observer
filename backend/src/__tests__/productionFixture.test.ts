@@ -312,4 +312,24 @@ describe('production fixture replay (NY1 dod_thunder2 12MAN)', () => {
         // One per half that had captures (this match: half 1 and half 2).
         expect(violations.filter(v => v.invariant === 'cap-credit-objscore').length).toBe(2);
     });
+
+    // The summary-roster invariant can't be exercised by NY1 directly — this
+    // April fixture predates the stats-summary feature (2026-06-12) so it emits
+    // none. Inject the exact bug the way it appeared on 1783044529-ATL1: a
+    // match_end summary with an EMPTY players array, fired while the full 12-man
+    // roster was still connected (the get_user_team-at-intermission filter dropped
+    // every row). The invariant must catch it on this real roster.
+    it('the summary-roster invariant catches the empty-match_end regression on a corrupted copy', () => {
+        // NY1 ends its final half with all 12 players connected on teams (verified
+        // by reconstructing the roster from the stream). Splice an empty match_end
+        // summary in just before ktp_match_end — exactly where the plugin fires it.
+        const endIdx = events.findIndex(e => (e as { event: string }).event === 'ktp_match_end');
+        expect(endIdx).toBeGreaterThan(0);
+        const emptySummary = { event: 'player_stats_summary', reason: 'match_end', half: 2, players: [] };
+        const corrupted = [...events.slice(0, endIdx), emptySummary, ...events.slice(endIdx)];
+
+        const violations = checkEventStream(corrupted).filter(v => v.invariant === 'summary-roster-nonempty');
+        expect(violations).toHaveLength(1);
+        expect(violations[0].message).toContain('12 connected players');
+    });
 });
