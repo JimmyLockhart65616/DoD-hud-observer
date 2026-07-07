@@ -58,10 +58,11 @@ hltv_sync:
   fallback_delay_seconds: 60
   # Extra late-bias (seconds) for the halftime / match-end stats board at a
   # changelevel. The board's release is a dynamic broadcast-clock projection off
-  # the pre-reset HLTV clock; this nudges ONLY the board a touch late (never
-  # early) so it lands around the in-game end-of-half scoreboard on the delayed
-  # feed, then rides the changelevel/warmup wait. 0 = exact projection.
-  board_release_lag_seconds: 10
+  # the pre-reset HLTV clock; this nudges ONLY the board a touch later (never
+  # earlier). 0 = feed-aligned: the board lands exactly as the delayed broadcast
+  # reaches that moment (still never early). Raise it if you want the board to
+  # trail further as broadcaster filler through the changelevel/warmup wait.
+  board_release_lag_seconds: 0
   # Keep coasting the last good clock across transient RCON failures for this long
   # (seconds, measured from the last good sample) before falling to the fixed
   # fallback delay. Spans ~2 missed 60s heartbeats so a brief proxy hiccup doesn't
