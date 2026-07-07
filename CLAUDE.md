@@ -183,10 +183,15 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
   credited (it fires ~0.25s deferred). Emitting synchronously read an empty batch
   (the long-standing empty-captor_ids/capout_by bug).
 - `cap_break` (reason `kill`) = an enemy killed a capper on the point, removing
-  them from the capture zone (confirmed by an in-zone count drop the next poll).
-  `breaker_id` is the killer (credited `cap_breaks`); `broke_team` is the capping
-  team that lost the capper. The only per-player-attributable break in extension
-  mode (counts only, no zone identity) — step-off / enemy-contest are `flag_cap_stopped`
+  them from the capture zone. Confirmed by an in-zone count drop within a 5-poll
+  (~2.5s) window against a rolling baseline, via a per-flag FIFO queue of pending
+  killers: the engine applies the death decrement to the zone counts 0.2–2.5s
+  (p50 ~1.1s) AFTER the kill (prod-measured 2026-07-06,
+  `e2e/repro/cap-break-replay.cjs` — the original one-shot next-poll confirm
+  caught <20% of real breaks, ~1 per 2700 kills). `breaker_id` is the killer
+  (credited `cap_breaks`); `broke_team` is the capping team that lost the capper.
+  The only per-player-attributable break in extension mode (counts only, no zone
+  identity) — step-off / enemy-contest are `flag_cap_stopped`
   / `flag_cap_contested`, unattributed.
 
 ### Stats Events (popups: cap flash, round/halftime/match-end boards)

@@ -195,8 +195,62 @@ export const summaryRosterNonEmpty: Invariant = (events) => {
     return out;
 };
 
+/**
+ * CAP-BREAK CONSISTENCY: the kill-on-point break event and the per-player
+ * cap_breaks accumulator must move together, half-scoped:
+ *   (a) schema: every cap_break event carries reason "kill", a breaker_id, and
+ *       broke_team allies|axis;
+ *   (b) every half with a cap_break event must show cap_breaks > 0 in some
+ *       player_score/summary row (the plugin emits the breaker's refreshed
+ *       player_score in the same code path as the event);
+ *   (c) every half where a row reports cap_breaks > 0 must contain a cap_break
+ *       event (the accumulator only increments on a credited break).
+ * Deliberately co-occurrence, not ordering: the event and the score ride
+ * separate HTTP POSTs and may arrive reordered. No-op on pre-feature streams
+ * (no cap_break events, no nonzero cap_breaks fields). Validated against the
+ * 1783302239-CHI1 / 1782879518-CHI1 prod pulls (2026-07-06 forensics).
+ */
+export const capBreakConsistency: Invariant = (events) => {
+    const out: InvariantViolation[] = [];
+    const breakHalves = new Set<number>();
+    const statHalves = new Set<number>();
+    for (const e of events) {
+        const h = halfOf(e);
+        if (e.event === 'cap_break') {
+            breakHalves.add(h);
+            if (e.reason !== 'kill' || typeof e.breaker_id !== 'string' || !e.breaker_id ||
+                (e.broke_team !== 'allies' && e.broke_team !== 'axis')) {
+                out.push({
+                    invariant: 'cap-break-schema',
+                    message: `half ${h}: malformed cap_break (reason=${JSON.stringify(e.reason)}, breaker_id=${JSON.stringify(e.breaker_id)}, broke_team=${JSON.stringify(e.broke_team)}) — expected reason "kill", a breaker steamid, and broke_team allies|axis.`,
+                });
+            }
+        }
+        const rows: any[] = e.event === 'player_score' ? [e]
+            : (e.event === 'player_stats_summary' && Array.isArray(e.players)) ? e.players : [];
+        if (rows.some(p => typeof p?.cap_breaks === 'number' && p.cap_breaks > 0)) statHalves.add(h);
+    }
+    for (const h of breakHalves) {
+        if (!statHalves.has(h)) {
+            out.push({
+                invariant: 'cap-break-credit',
+                message: `half ${h}: cap_break event(s) emitted but no player_score/summary row ever reported cap_breaks > 0 — the break event fired without crediting the breaker's accumulator.`,
+            });
+        }
+    }
+    for (const h of statHalves) {
+        if (!breakHalves.has(h)) {
+            out.push({
+                invariant: 'cap-break-orphan-stat',
+                message: `half ${h}: a player_score/summary row reports cap_breaks > 0 but the stream contains no cap_break event that half — the accumulator moved without a credited break.`,
+            });
+        }
+    }
+    return out;
+};
+
 /** All invariants, in evaluation order. Reused by tests and (later) the audit harness. */
-export const INVARIANTS: ReadonlyArray<Invariant> = [capCreditObjScore, capCreditCaps, enumSanity, summaryRosterNonEmpty];
+export const INVARIANTS: ReadonlyArray<Invariant> = [capCreditObjScore, capCreditCaps, enumSanity, summaryRosterNonEmpty, capBreakConsistency];
 
 /** Run every invariant over an emitted event stream and return all violations. */
 export function checkEventStream(events: ReadonlyArray<StreamEvent>): InvariantViolation[] {

@@ -197,6 +197,11 @@ export default [
         { "flag_id": 3, "allies_count": 0, "axis_count": 0 },
         { "flag_id": 4, "allies_count": 0, "axis_count": 0 },
     ]}},
+    // Raphinha's kill removed a capper from the point (zone count 2 -> 0 above):
+    // the plugin credits the killer once the drop shows up within the confirm
+    // window, then emits his refreshed player_score carrying cap_breaks.
+    { "cap_break": { "time": 10350, "flag_id": 1, "flag_name": "POINT_ANZIO_STREET", "reason": "kill", "breaker_id": "STEAM_0:0:1001", "broke_team": "axis" } },
+    { "player_score": { "time": 10400, "user_id": "STEAM_0:0:1001", "kills": 1, "deaths": 0, "score": 1, "obj_score": 0, "damage": 110, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 1, "hits": 2, "hs_hits": 0, "caps": 0, "cap_breaks": 1, "best_streak": 1 } },
     { "flag_cap_stopped": { "time": 10500, "flag_id": 1, "flag_name": "POINT_ANZIO_STREET", "capping_team": "axis" } },
 
     // Team chat
@@ -240,7 +245,7 @@ export default [
     // NOTE: per-single-flag-cap stats popups were REMOVED — cumulative stats now
     // appear on the capout board (round_end) and at half/match end.
     { "player_score": { "time": 15200, "user_id": "STEAM_0:0:2001", "kills": 1, "deaths": 0, "score": 1, "obj_score": 0, "damage": 100, "assists": 0, "hs_kills": 1, "nade_kills": 0, "gun_kills": 1, "hits": 1, "hs_hits": 1, "caps": 0, "best_streak": 1 } },
-    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1001", "kills": 1, "deaths": 0, "score": 7, "obj_score": 5, "damage": 110, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 1, "hits": 2, "hs_hits": 0, "caps": 1, "best_streak": 1 } },
+    { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1001", "kills": 1, "deaths": 0, "score": 7, "obj_score": 5, "damage": 110, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 1, "hits": 2, "hs_hits": 0, "caps": 1, "cap_breaks": 1, "best_streak": 1 } },
     { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1002", "kills": 0, "deaths": 0, "score": 5, "obj_score": 5, "damage": 0, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "caps": 1, "best_streak": 0 } },
     { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1004", "kills": 1, "deaths": 0, "score": 1, "obj_score": 0, "damage": 100, "assists": 0, "hs_kills": 1, "nade_kills": 0, "gun_kills": 1, "hits": 1, "hs_hits": 1 } },
     { "player_score": { "time": 15200, "user_id": "STEAM_0:0:1003", "kills": 0, "deaths": 1, "score": 0, "obj_score": 0, "damage": 0, "assists": 0, "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0 } },
@@ -366,7 +371,7 @@ export default [
     // when half 2 goes live (half_start below).
     { "half_end": { "time": 57000, "half": 1, "allies_score": 2, "axis_score": 1 } },
     { "player_stats_summary": { "time": 57050, "reason": "half_end", "players": [
-        { "user_id": "STEAM_0:0:1001", "name": "Raphinha", "team": "allies", "kills": 1, "deaths": 1, "assists": 0, "damage": 110, "hs_kills": 0, "nade_kills": 0, "gun_kills": 1, "hits": 2, "hs_hits": 0, "obj_score": 5, "caps": 1, "best_streak": 1 },
+        { "user_id": "STEAM_0:0:1001", "name": "Raphinha", "team": "allies", "kills": 1, "deaths": 1, "assists": 0, "damage": 110, "hs_kills": 0, "nade_kills": 0, "gun_kills": 1, "hits": 2, "hs_hits": 0, "obj_score": 5, "caps": 1, "cap_breaks": 1, "best_streak": 1 },
         { "user_id": "STEAM_0:0:1002", "name": "bud",      "team": "allies", "kills": 0, "deaths": 1, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 5, "caps": 1, "best_streak": 0 },
         { "user_id": "STEAM_0:0:1003", "name": "ORTIN",    "team": "allies", "kills": 0, "deaths": 1, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0, "caps": 0, "best_streak": 0 },
         { "user_id": "STEAM_0:0:1004", "name": "storm",    "team": "allies", "kills": 1, "deaths": 1, "assists": 0, "damage": 100, "hs_kills": 1, "nade_kills": 0, "gun_kills": 1, "hits": 1, "hs_hits": 1, "obj_score": 0, "caps": 0, "best_streak": 1 },

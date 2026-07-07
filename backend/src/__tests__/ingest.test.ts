@@ -408,7 +408,7 @@ describe('stats fields round-trip (player_score extension + player_stats_summary
             .send(body);
     }
 
-    const STATS = { damage: 240, assists: 2, hs_kills: 1, nade_kills: 1, gun_kills: 2, hits: 9, hs_hits: 2, caps: 3, best_streak: 4 };
+    const STATS = { damage: 240, assists: 2, hs_kills: 1, nade_kills: 1, gun_kills: 2, hits: 9, hs_hits: 2, caps: 3, cap_breaks: 2, best_streak: 4 };
 
     it('replays extended player_score stat fields in the snapshot', async () => {
         const host = 'KTP - Stats RT';
@@ -428,7 +428,7 @@ describe('stats fields round-trip (player_score extension + player_stats_summary
         const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
         const replayed = snapshot.find(e => e.event === 'player_score' && e.user_id === 'STEAM_0:0:11');
         expect(replayed).toMatchObject({
-            kills: 1, damage: 0, assists: 0, hs_kills: 0, nade_kills: 0, gun_kills: 0, hits: 0, hs_hits: 0, caps: 0, best_streak: 0,
+            kills: 1, damage: 0, assists: 0, hs_kills: 0, nade_kills: 0, gun_kills: 0, hits: 0, hs_hits: 0, caps: 0, cap_breaks: 0, best_streak: 0,
         });
     });
 
@@ -441,7 +441,7 @@ describe('stats fields round-trip (player_score extension + player_stats_summary
         const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
         const replayed = snapshot.find(e => e.event === 'player_score' && e.user_id === 'STEAM_0:0:12');
         expect(replayed).toMatchObject({
-            kills: 0, damage: 0, assists: 0, hs_kills: 0, nade_kills: 0, gun_kills: 0, hits: 0, hs_hits: 0, caps: 0, best_streak: 0,
+            kills: 0, damage: 0, assists: 0, hs_kills: 0, nade_kills: 0, gun_kills: 0, hits: 0, hs_hits: 0, caps: 0, cap_breaks: 0, best_streak: 0,
         });
     });
 

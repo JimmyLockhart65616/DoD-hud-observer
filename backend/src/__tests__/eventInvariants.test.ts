@@ -9,6 +9,7 @@ import {
     capCreditCaps,
     enumSanity,
     summaryRosterNonEmpty,
+    capBreakConsistency,
     checkEventStream,
     StreamEvent,
 } from '../invariants/eventInvariants';
@@ -151,6 +152,50 @@ describe('summary-roster (empty match_end / half_end board)', () => {
             summary('round_end', []),
         ];
         expect(summaryRosterNonEmpty(events)).toEqual([]);
+    });
+});
+
+describe('cap-break consistency (event ↔ cap_breaks accumulator, half-scoped)', () => {
+    const brk = (half: number, extra: Partial<StreamEvent> = {}): StreamEvent => ({
+        event: 'cap_break', half, flag_id: 0, flag_name: 'The Bridge',
+        reason: 'kill', breaker_id: 'STEAM_0:0:1', broke_team: 'axis', ...extra,
+    });
+
+    it('passes when a break event and a nonzero cap_breaks row share the half', () => {
+        expect(capBreakConsistency([brk(1), score(1, 0, { cap_breaks: 1 })])).toEqual([]);
+    });
+
+    it('is a no-op on a pre-feature stream (no events, no cap_breaks fields)', () => {
+        expect(capBreakConsistency([score(1, 5, { caps: 1 })])).toEqual([]);
+    });
+
+    it('fires when a break event never credits the accumulator', () => {
+        const v = capBreakConsistency([brk(1), score(1, 0, { cap_breaks: 0 })]);
+        expect(v.map(x => x.invariant)).toEqual(['cap-break-credit']);
+        expect(v[0].message).toContain('half 1');
+    });
+
+    it('fires when the accumulator moves without any break event that half', () => {
+        const v = capBreakConsistency([brk(1), score(1, 0, { cap_breaks: 1 }), score(2, 0, { cap_breaks: 1 })]);
+        expect(v.map(x => x.invariant)).toEqual(['cap-break-orphan-stat']);
+        expect(v[0].message).toContain('half 2');
+    });
+
+    it('flags a malformed cap_break (schema check)', () => {
+        const v = capBreakConsistency([brk(1, { broke_team: 'neutral' }), score(1, 0, { cap_breaks: 1 })]);
+        expect(v.map(x => x.invariant)).toEqual(['cap-break-schema']);
+    });
+
+    it('accepts credit carried by a summary row instead of player_score', () => {
+        const summary: StreamEvent = {
+            event: 'player_stats_summary', half: 1, reason: 'round_end',
+            players: [{ user_id: 'STEAM_0:0:1', cap_breaks: 1 }],
+        };
+        expect(capBreakConsistency([brk(1), summary])).toEqual([]);
+    });
+
+    it('is order-independent (the score may arrive before the event over HTTP)', () => {
+        expect(capBreakConsistency([score(1, 0, { cap_breaks: 1 }), brk(1)])).toEqual([]);
     });
 });
 

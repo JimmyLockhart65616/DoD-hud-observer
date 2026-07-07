@@ -217,16 +217,30 @@ new g_flag_emit_owner[MAX_FLAGS];        // captured new_owner (team)
 new g_flag_emit_name[MAX_FLAGS][64];     // captured flag display name
 new bool:g_flag_emit_capout[MAX_FLAGS];  // did this cap complete a capout
 
-// Pending cap-break candidate per flag. client_death marks the killer + the
-// capping team's in-zone count at kill time when the victim's team was actively
-// capping; the next task_poll_zones confirms a break (credits the killer) only if
-// that team's in-zone count actually DROPPED — i.e. the victim was on the point,
-// not merely on the capping team. dod_control_point_captured clears it (a
-// completed cap is not a break). No zone identity exists in extension mode, so
-// this counts-drop correlation is the attribution.
-new g_break_pending_killer[MAX_FLAGS];   // killer slot, 0 = no candidate
-new g_break_pending_team[MAX_FLAGS];     // capping team being broken (victim's team)
-new g_break_pending_was[MAX_FLAGS];      // that team's in-zone count snapshot at kill
+// Pending cap-break candidates per flag. client_death queues the killer when
+// the victim's team was actively capping; task_poll_zones then credits queued
+// killers as the capping team's in-zone count drops below a rolling baseline.
+// PROD-MEASURED (2026-07-06 forensics, e2e/repro/cap-break-replay.cjs over
+// saints2/anjou matchday streams): the engine applies the death decrement to
+// m_nNumAllies/m_nNumAxis 0.2–2.5s (p50 ~1.1s) AFTER the killing blow, so the
+// original one-shot next-poll confirm caught <20% of real breaks (10 credits in
+// 39 matches); and back-to-back kills on one flag overwrote the single
+// candidate, losing both. Hence: a small FIFO queue, a multi-poll confirm
+// window, and a baseline anchored to min(fresh read, previous poll's count) —
+// a fresh read alone can already include an EARLIER victim's decrement, while
+// the poll cache alone misses sub-poll voluntary walk-offs. No zone identity
+// exists in extension mode, so this counts-drop correlation is the attribution.
+// dod_control_point_captured clears the queue (a completed cap is not a break),
+// including its round-restart guard paths (a restart zeroes zone counts, which
+// would fake a drop).
+#define BREAK_QUEUE_MAX     6   // concurrent pending killers per flag (a nade
+                                // wipe can drop a full 6v6 side in one window)
+#define BREAK_WINDOW_POLLS  5   // confirm window in polls (~2.5s @ ZONE_POLL_INTERVAL)
+new g_break_q_killer[MAX_FLAGS][BREAK_QUEUE_MAX];  // FIFO of killer slots
+new g_break_q_ttl[MAX_FLAGS][BREAK_QUEUE_MAX];     // polls left before expiry
+new g_break_q_count[MAX_FLAGS];                    // queued candidates
+new g_break_team[MAX_FLAGS];                       // capping team being broken
+new g_break_baseline[MAX_FLAGS];                   // rolling in-zone count baseline
 
 #if defined HUD_REPRO_TEST
 // Local-repro scaffolding (gated; compiles to nothing in production builds).
@@ -314,7 +328,7 @@ public plugin_cfg() {
         // Cancel any in-flight deferred cap emission from the previous map.
         g_flag_emit_pending[i]   = 0;
         remove_task(TASK_ID_DEFER_BASE + i);
-        g_break_pending_killer[i] = 0;
+        break_queue_clear(i);
 #if defined HUD_REPRO_TEST
         g_flag_test_count[i]     = 0;
 #endif
@@ -1112,21 +1126,43 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
     }
 
     // Cap-break candidate. If the victim's team was actively capping a flag, an
-    // enemy kill MAY have removed a capper from the point. Record the killer +
-    // a snapshot of that team's in-zone count; the next task_poll_zones confirms
-    // a break (credits the killer) ONLY if the count actually dropped — i.e. the
-    // victim was on the point, not merely on the capping team. No per-player zone
-    // identity exists in extension mode, so this counts-drop correlation is the
-    // attribution. dod_control_point_captured clears it if the cap then succeeds
+    // enemy kill MAY have removed a capper from the point. Queue the killer;
+    // task_poll_zones credits queued killers as the capping team's in-zone count
+    // drops below the baseline — i.e. the victim was on the point, not merely on
+    // the capping team. The engine applies the death decrement 0.2–2.5s late
+    // (prod-measured), hence the queue + window instead of a one-shot snapshot.
+    // dod_control_point_captured clears the queue if the cap then succeeds
     // (a completed cap is not a break).
     if (killer != victim && !TK && is_user_connected(killer)) {
         new vt = g_player_team[victim];
         if (vt == TEAM_ALLIES || vt == TEAM_AXIS) {
             for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
                 if (g_flag_capping_team[f] != vt) continue;
-                g_break_pending_killer[f] = killer;
-                g_break_pending_team[f]   = vt;
-                g_break_pending_was[f]    = dodx_area_get_data(f, (vt == TEAM_ALLIES) ? CA_num_allies : CA_num_axis);
+                if (g_break_q_count[f] > 0 && g_break_team[f] != vt) {
+                    // Capping team flipped while the previous team's queue was
+                    // still draining. The flip means the old cap already
+                    // stopped, so those candidates are stale — re-latch for
+                    // the live cap instead of dropping the fresh candidate.
+                    break_queue_clear(f);
+                }
+                if (g_break_q_count[f] == 0) {
+                    // First candidate: latch the team and the drop baseline as
+                    // min(fresh read, prev-poll cache). The fresh read can
+                    // already include an EARLIER victim's late decrement (the
+                    // cache corrects that); the cache misses a sub-poll
+                    // voluntary walk-off (the fresh read corrects that). The
+                    // lower of the two never over-credits.
+                    new fresh = dodx_area_get_data(f, (vt == TEAM_ALLIES) ? CA_num_allies : CA_num_axis);
+                    new cached = (vt == TEAM_ALLIES) ? g_flag_prev_allies_count[f] : g_flag_prev_axis_count[f];
+                    g_break_team[f]     = vt;
+                    g_break_baseline[f] = (fresh < cached) ? fresh : cached;
+                }
+                if (g_break_q_count[f] < BREAK_QUEUE_MAX) {
+                    new qi = g_break_q_count[f];
+                    g_break_q_killer[f][qi] = killer;
+                    g_break_q_ttl[f][qi]    = BREAK_WINDOW_POLLS;
+                    g_break_q_count[f]++;
+                }
                 break;  // attribute at most one flag per kill (first active cap by victim's team)
             }
         }
@@ -1455,26 +1491,39 @@ public task_poll_zones() {
             }
         }
 
-        // Confirm a pending cap-break (set in client_death). The kill removed a
-        // capper from the point IFF the capping team's in-zone count dropped below
-        // the kill-time snapshot. One-shot — clear the candidate either way (no
-        // drop = the victim wasn't on the point, so no credit).
-        if (g_break_pending_killer[f] != 0) {
-            new bt = g_break_pending_team[f];
+        // Credit pending cap-break candidates (queued in client_death) as the
+        // broken team's in-zone count drops below the rolling baseline. The
+        // engine applies the death decrement 0.2–2.5s late (prod-measured), so
+        // candidates stay live for BREAK_WINDOW_POLLS polls — deliberately
+        // surviving the flag_cap_stopped transition the break itself causes.
+        // Count rises re-anchor the baseline (a joiner who later leaves is not
+        // a break). Round restarts zero the counts, which would fake a drop —
+        // dod_control_point_captured's restart guard paths clear the queue.
+        if (g_break_q_count[f] > 0) {
+            new bt = g_break_team[f];
             new now_count = (bt == TEAM_ALLIES) ? ac : xc;
-            // Confirm only if this flag was genuinely being capped by that team as
-            // of the last poll (prev_capper) AND the kill dropped the in-zone count.
-            // The prev_capper gate rejects a stale candidate evaluated after a round
-            // restart, where the zone count starts at 0 (below any snapshot).
-            if (prev_capper == bt && now_count < g_break_pending_was[f]) {
-                new breaker = g_break_pending_killer[f];
-                if (is_user_connected(breaker)) {
-                    g_player_cap_breaks[breaker]++;
-                    emit_cap_break(f, breaker, bt);
-                    emit_player_score(breaker);
+            if (now_count > g_break_baseline[f]) {
+                g_break_baseline[f] = now_count;
+            } else if (now_count < g_break_baseline[f]) {
+                new drops = g_break_baseline[f] - now_count;
+                while (drops > 0 && g_break_q_count[f] > 0) {
+                    new breaker = g_break_q_killer[f][0];
+                    if (is_user_connected(breaker)) {
+                        g_player_cap_breaks[breaker]++;
+                        emit_cap_break(f, breaker, bt);
+                        emit_player_score(breaker);
+                    }
+                    break_queue_shift(f);
+                    drops--;
                 }
+                g_break_baseline[f] = now_count;
             }
-            g_break_pending_killer[f] = 0;
+            // Age out candidates whose window elapsed (their victim never
+            // produced a count drop — off-point kill).
+            for (new qi = 0; qi < g_break_q_count[f]; qi++) g_break_q_ttl[f][qi]--;
+            while (g_break_q_count[f] > 0 && g_break_q_ttl[f][0] <= 0) {
+                break_queue_shift(f);
+            }
         }
 
         g_flag_prev_allies_count[f] = ac;
@@ -1526,8 +1575,25 @@ stock emit_cap_progress(cp_index, team, progress) {
     post_event(json);
 }
 
+stock break_queue_clear(f) {
+    g_break_q_count[f]  = 0;
+    g_break_team[f]     = 0;
+    g_break_baseline[f] = 0;
+}
+
+// Pop the oldest candidate (credited or expired); FIFO order is arm order.
+stock break_queue_shift(f) {
+    for (new i = 1; i < g_break_q_count[f]; i++) {
+        g_break_q_killer[f][i - 1] = g_break_q_killer[f][i];
+        g_break_q_ttl[f][i - 1]    = g_break_q_ttl[f][i];
+    }
+    g_break_q_count[f]--;
+    if (g_break_q_count[f] == 0) g_break_team[f] = 0;
+}
+
 // A cap was broken by a kill: an enemy killed a capper on the point, removing
-// them from the capture zone (confirmed by a zone-count drop next poll).
+// them from the capture zone (confirmed by a zone-count drop within the
+// confirm window — the engine applies the death decrement 0.2–2.5s late).
 // breaker_id = the killer (credited the cap_break stat); broke_team = the
 // capping team that lost the capper.
 stock emit_cap_break(cp_index, breaker, broke_team) {
@@ -1586,7 +1652,7 @@ stock do_flags_init() {
         g_flag_last_progress[i]         = -1;
         g_flag_prev_allies_count[i]     = 0;
         g_flag_prev_axis_count[i]       = 0;
-        g_break_pending_killer[i]       = 0;
+        break_queue_clear(i);
         // Don't wipe the captor batch / last-capper while a deferred cap emission
         // is in flight (e.g. the 30s task_emit_flags or a round-start re-init
         // landing within DEFER_DELAY of a cap) — deferred_emit_cap still needs the
@@ -1683,11 +1749,15 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
     // batch) as before.
     if (g_flag_owner[cp_index] == new_owner) {
         if (!g_flag_emit_pending[cp_index]) g_flag_pending_captor_count[cp_index] = 0;
+        break_queue_clear(cp_index);
         return;
     }
     if (new_owner != TEAM_ALLIES && new_owner != TEAM_AXIS) {
         g_flag_owner[cp_index] = new_owner;
         if (!g_flag_emit_pending[cp_index]) g_flag_pending_captor_count[cp_index] = 0;
+        // Round-restart neutral cascade lands here: it zeroes every zone count,
+        // which the windowed break accounting would misread as kill drops.
+        break_queue_clear(cp_index);
         return;
     }
 
@@ -1705,9 +1775,9 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
     g_flag_capping_team[cp_index]         = 0;
     g_flag_contested[cp_index]            = false;
     g_flag_last_progress[cp_index]        = -1;
-    // A completed cap is NOT a break — drop any pending break candidate so the
+    // A completed cap is NOT a break — drop any pending break candidates so the
     // post-cap zone-count drop (cappers leaving) can't be mis-credited as one.
-    g_break_pending_killer[cp_index]      = 0;
+    break_queue_clear(cp_index);
 
     // Capout = all flags now owned by new_owner. Round end on cap maps, and the
     // only reliable round-end trigger in prod (the Round_End logevent never fires

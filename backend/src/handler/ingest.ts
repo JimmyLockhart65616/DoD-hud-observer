@@ -29,7 +29,7 @@ const SOCKET_ONLY_EVENTS = new Set(['player_state', 'weapon_active']);
 // three can never drift apart.
 const PLAYER_STAT_FIELDS = [
     'damage', 'assists', 'hs_kills', 'nade_kills', 'gun_kills', 'hits', 'hs_hits',
-    'caps', 'best_streak',
+    'caps', 'cap_breaks', 'best_streak',
 ] as const;
 
 interface ServerState {
