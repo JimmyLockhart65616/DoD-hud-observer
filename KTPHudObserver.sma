@@ -580,10 +580,17 @@ stock hud_timeleft() {
 public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) {
     g_matchActive = true;
 
-    // Anchor the half clock at go-live. mp_timelimit is already set for this
-    // half/OT round (KTPMatchHandler applies overrides BEFORE the restart).
+    // PROVISIONAL half-clock anchor. This forward fires ~mp_clan_timer (~8-10s)
+    // BEFORE the go-live mp_clan_restartround actually rebases the DoD half timer
+    // (which happens at the RoundState==1 edge), so this reads ~8s early. It's good
+    // enough for the half_start emit during the go-live countdown, and a fallback if
+    // the go-live signal is missed. msg_round_state RE-ANCHORS precisely at
+    // RoundState==1. mp_timelimit is already set for this half/OT round
+    // (KTPMatchHandler applies overrides BEFORE the restart).
     new Float:limit_min = get_cvar_float("mp_timelimit");
     g_half_end_gt = (limit_min > 0.0) ? get_gametime() + limit_min * 60.0 : 0.0;
+    server_print("[HUD] anchor@match_start gt=%.2f half_end_gt=%.2f timelimit=%.1f",
+                 get_gametime(), g_half_end_gt, limit_min);
 
     copy(g_matchId,  charsmax(g_matchId),  matchId);
     copy(g_matchMap, charsmax(g_matchMap), map);
@@ -597,12 +604,15 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
     }
     g_lastHalfEndFwdAt = 0.0;
 
-    // Arm the round-live re-wipe. This forward fires ~0.8-1s BEFORE the go-live
-    // mp_clan_restartround zeroes engine frags and unpauses DODX (RoundState==1),
-    // so kills in that window leak into the HUD unless we re-wipe when the round
-    // actually goes live. msg_round_state does that once, guarded by the deadline.
+    // Arm the round-live re-anchor + re-wipe. This forward fires ~mp_clan_timer
+    // (~8-10s) BEFORE the go-live mp_clan_restartround rebases the half timer, zeroes
+    // engine frags and unpauses DODX (RoundState==1). msg_round_state re-anchors the
+    // half clock AND re-wipes stats once at that edge, guarded by the deadline. The
+    // window must comfortably exceed mp_clan_timer (measured go-live spawn at +10.8s),
+    // so 20s — the old 10s deadline could abandon the go-live edge on slower maps,
+    // silently losing both the re-anchor and the K/D re-wipe.
     g_awaiting_round_live = true;
-    g_round_live_deadline = get_gametime() + 10.0;
+    g_round_live_deadline = get_gametime() + 20.0;
 
     server_print("[HUD] Match started: %s (map=%s type=%d half=%d)", matchId, map, _:matchType, half);
 
@@ -659,6 +669,27 @@ public msg_round_state() {
     }
 
     wipe_all_stat_accumulators();
+
+    // Re-anchor the half clock at the REAL go-live. ktp_match_start set a provisional
+    // anchor ~mp_clan_timer (~8-10s) ago, BEFORE the engine rebased the timer, which
+    // left the overlay clock ~8s ahead of the client. The round is now actually live
+    // (the engine just rebased at the mp_clan_restartround), so recompute from the
+    // current gametime — this is the same edge KTPMatchHandler trusts for "round is
+    // truly live". mp_timelimit is unchanged since go-live.
+    new Float:limit_min = get_cvar_float("mp_timelimit");
+    if (limit_min > 0.0) {
+        g_half_end_gt = get_gametime() + limit_min * 60.0;
+        server_print("[HUD] anchor@round_live gt=%.2f half_end_gt=%.2f timelimit=%.1f",
+                     get_gametime(), g_half_end_gt, limit_min);
+        // Re-emit the corrected clock immediately so the frontend snaps to it instead
+        // of waiting up to 30s for the next task_time_sync. time_sync rides the same
+        // HLTV delay buffer as kills (stays footage-aligned); half_start is avoided
+        // because it re-triggers the frontend's boundary/reset logic.
+        new tsjson[128];
+        formatex(tsjson, charsmax(tsjson),
+            "{^"event^":^"time_sync^",^"timeleft^":%d}", hud_timeleft());
+        post_event(tsjson);
+    }
 
     // Re-push zeroed scores so the overlay scoreboard snaps to 0 at the go-live
     // instant instead of showing the leaked pre-live counts until the next kill.
