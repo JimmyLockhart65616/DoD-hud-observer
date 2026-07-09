@@ -580,17 +580,33 @@ stock hud_timeleft() {
 public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) {
     g_matchActive = true;
 
-    // PROVISIONAL half-clock anchor. This forward fires ~mp_clan_timer (~8-10s)
-    // BEFORE the go-live mp_clan_restartround actually rebases the DoD half timer
-    // (which happens at the RoundState==1 edge), so this reads ~8s early. It's good
-    // enough for the half_start emit during the go-live countdown, and a fallback if
-    // the go-live signal is missed. msg_round_state RE-ANCHORS precisely at
-    // RoundState==1. mp_timelimit is already set for this half/OT round
-    // (KTPMatchHandler applies overrides BEFORE the restart).
+    // Half-clock anchor with a go-live-countdown offset baked in. This forward fires
+    // at the START of the go-live sequence, ~mp_clan_timer BEFORE KTPMatchHandler's
+    // `mp_clan_restartround 1` actually rebases the DoD half timer (the round physically
+    // restarts + respawns at the end of the countdown). RoundState==1 was meant to mark
+    // that edge, but the DoD engine does NOT emit it on prod — KTPMatchHandler itself
+    // times out on it every match ("RoundState=1 timeout") and falls through to a 5s
+    // fallback (KTPMatchHandler.sma:7924). So msg_round_state's exact re-anchor never
+    // fires here, leaving the overlay clock ~8-9s ahead.
+    //
+    // Fix: project forward by the countdown so the anchor already reflects where the
+    // engine WILL rebase. get_gametime() + mp_clan_timer ≈ the real go-live gametime;
+    // adding mp_timelimit*60 lands g_half_end_gt on the engine's true half end. The
+    // clock then converges to correct as the round goes live (it reads ~mp_clan_timer
+    // high during the pre-live countdown, when the client shows a frozen/pre-round HUD
+    // anyway). mp_clan_timer is read live (adapts per server/config; DoD default ~10s);
+    // guarded to a sane 10s if unset. mp_timelimit is already set for this half/OT round
+    // (KTPMatchHandler applies overrides BEFORE the restart, KTPMatchHandler.sma:7857-7884).
+    //
+    // msg_round_state STILL re-anchors exactly on any server that does emit RoundState==1
+    // (overriding this estimate). Phase 2 (a DODX native reading the authoritative DoD
+    // round timer) replaces this open-loop estimate with the real value.
     new Float:limit_min = get_cvar_float("mp_timelimit");
-    g_half_end_gt = (limit_min > 0.0) ? get_gametime() + limit_min * 60.0 : 0.0;
-    server_print("[HUD] anchor@match_start gt=%.2f half_end_gt=%.2f timelimit=%.1f",
-                 get_gametime(), g_half_end_gt, limit_min);
+    new Float:clan_timer = get_cvar_float("mp_clan_timer");
+    if (clan_timer <= 0.0) clan_timer = 10.0;   // DoD default; cvar unset -> fall back
+    g_half_end_gt = (limit_min > 0.0) ? get_gametime() + clan_timer + limit_min * 60.0 : 0.0;
+    server_print("[HUD] anchor@match_start gt=%.2f half_end_gt=%.2f timelimit=%.1f clan_timer=%.1f",
+                 get_gametime(), g_half_end_gt, limit_min, clan_timer);
 
     copy(g_matchId,  charsmax(g_matchId),  matchId);
     copy(g_matchMap, charsmax(g_matchMap), map);
@@ -670,12 +686,13 @@ public msg_round_state() {
 
     wipe_all_stat_accumulators();
 
-    // Re-anchor the half clock at the REAL go-live. ktp_match_start set a provisional
-    // anchor ~mp_clan_timer (~8-10s) ago, BEFORE the engine rebased the timer, which
-    // left the overlay clock ~8s ahead of the client. The round is now actually live
-    // (the engine just rebased at the mp_clan_restartround), so recompute from the
-    // current gametime — this is the same edge KTPMatchHandler trusts for "round is
-    // truly live". mp_timelimit is unchanged since go-live.
+    // Exact re-anchor at the REAL go-live edge. ktp_match_start baked in an
+    // mp_clan_timer estimate of this moment; if the engine actually emits RoundState==1
+    // (it does NOT on current prod — see the ktp_match_start note — but may on other
+    // configs/builds) we replace the estimate with the precise value: the round is now
+    // truly live and the engine just rebased the timer, so recompute from the current
+    // gametime. This is the same edge KTPMatchHandler trusts for "round is truly live".
+    // mp_timelimit is unchanged since go-live.
     new Float:limit_min = get_cvar_float("mp_timelimit");
     if (limit_min > 0.0) {
         g_half_end_gt = get_gametime() + limit_min * 60.0;
