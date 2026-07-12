@@ -131,12 +131,18 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 - `half_start` includes `timeleft`; `round_start` also includes `timeleft` as a sync point
 - `time_sync` fires every 30 seconds to correct frontend clock drift
 - Frontend stores `timeleft` + `timeleft_at` (browser `Date.now()`) and counts down locally
-- All `timeleft` values come from `hud_timeleft()`, NOT raw `get_timeleft()`: in a match the
-  half clock is anchored at the `ktp_match_start` forward (`gametime + mp_timelimit·60`),
-  because DoD rebases the real half end at KTPMatchHandler's go-live `mp_clan_restartround`
-  while `get_timeleft()` counts from map load (its restart rebase only parses CS TextMsg
-  tokens). Raw `get_timeleft()` would run ahead by the ready-up duration and pin the HUD at
-  0:00 for minutes at half end. Pubs (no anchor) fall back to `get_timeleft()`.
+- All `timeleft` values come from `hud_timeleft()`, NOT raw `get_timeleft()`. Preference
+  order: (1) `dodx_get_round_time()` (dodx_ktp 2.7.23+) — CLOSED LOOP: the engine's own
+  half-clock accounting (`CDoDTeamPlay::m_flDoDMapTime`, which the go-live
+  `mp_clan_restartround` rebases; the restart countdown is projected from
+  `m_flRestartRoundTime`), tracks go-live/`.restarthalf`/OT exactly, equals
+  `get_timeleft()` on pubs; bound optionally via `plugin_natives`/`set_native_filter`
+  so old modules fall through. (2) The open-loop anchor set at `ktp_match_start`
+  (`gametime + mp_clan_timer + mp_timelimit·60`) — kept because DoD rebases the real
+  half end at the go-live restart while `get_timeleft()` counts from map load (its
+  restart rebase only parses CS TextMsg tokens); raw `get_timeleft()` would run ahead
+  by the ready-up duration and pin the HUD at 0:00 for minutes. (3) `get_timeleft()`
+  (pubs, no anchor).
 
 ### Player Events
 ```json

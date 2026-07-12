@@ -23,6 +23,14 @@
 #include <curl>
 #include <ktp_version_reporter>
 
+// dodx_get_round_time ships in dodx.inc from KTPAMXX 2.7.23. Guarded
+// self-declaration so this plugin compiles against older includes too
+// (e.g. KTPInfrastructure CI pinned to an earlier KTPAMXX): the native is
+// bound optionally at load via plugin_natives/set_native_filter either way.
+#if !defined dodx_get_round_time
+native Float:dodx_get_round_time();
+#endif
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
@@ -97,7 +105,14 @@ new g_matchHalf;
 // Gametime when the live half's clock expires, anchored at ktp_match_start
 // (KTPMatchHandler fires it right after the go-live mp_clan_restartround).
 // 0.0 = no live half → hud_timeleft() falls back to get_timeleft() (pubs).
+// FALLBACK ONLY when dodx_get_round_time() is available (see hud_timeleft).
 new Float:g_half_end_gt = 0.0;
+
+// dodx_get_round_time() availability (dodx_ktp 2.7.23+). Optional-native
+// binding via plugin_natives/set_native_filter: on older modules the plugin
+// still loads, this goes false, and hud_timeleft() runs the anchor fallback.
+// Never call the native while false — the runtime trap would abort the plugin.
+new bool:g_has_round_time_native = true;
 
 // Round-live re-wipe gate. KTPMatchHandler fires ktp_match_start ~0.8-1s BEFORE
 // the go-live mp_clan_restartround actually zeroes engine frags and unpauses
@@ -559,19 +574,68 @@ stock do_prone_change(id, prone_state) {
 }
 
 // Half countdown for HUD timer events (half_start / round_start / time_sync /
-// round_end classification). DoD rebases the real half end to the go-live
-// mp_clan_restartround, but AMXX get_timeleft() counts from MAP LOAD — its
-// restart-rebase (emsg.cpp Client_TextMsg) only parses CS tokens (#Game_C /
-// #Game_w), which DoD never sends. So in a match, get_timeleft() runs AHEAD of
-// the real game clock by the entire ready-up duration and its <0 clamp pins the
-// HUD at 0:00 for minutes at half end. Anchor on the forward instead; without
-// an anchor (pubs), get_timeleft() is correct (no clan restart happens).
+// round_end classification), in preference order:
+//
+// 1. dodx_get_round_time() (dodx_ktp 2.7.23+) — CLOSED LOOP: reads DoD's own
+//    half-clock accounting (CDoDTeamPlay::m_flDoDMapTime, which the go-live
+//    mp_clan_restartround rebases and the client HUD counts from; the restart
+//    countdown window is projected from m_flRestartRoundTime). Tracks every
+//    engine rebase — go-live, .restarthalf, OT — with no signal dependency,
+//    and equals get_timeleft() on pubs. Returns -1.0 when it can't answer
+//    (old module via native filter, no gamerules, mp_timelimit 0, implausible
+//    read) → fall through.
+// 2. g_half_end_gt anchor — OPEN LOOP estimate set at ktp_match_start
+//    (+ mp_clan_timer baked offset). Kept for old-module fleets and as the
+//    native's fail-soft net. DoD rebases the real half end at the go-live
+//    mp_clan_restartround, but AMXX get_timeleft() counts from MAP LOAD — its
+//    restart-rebase (emsg.cpp Client_TextMsg) only parses CS tokens (#Game_C /
+//    #Game_w), which DoD never sends — so an unanchored match clock would run
+//    AHEAD by the entire ready-up duration and pin at 0:00 for minutes.
+// 3. get_timeleft() — pubs (no clan restart → map-load clock is correct).
 stock hud_timeleft() {
+    if (g_has_round_time_native) {
+        new Float:rem = dodx_get_round_time();
+        if (rem >= 0.0) {
+            // Keep the open-loop anchor honest while both sources live, so a
+            // mid-half native outage degrades to a calibrated fallback, and
+            // surface residual drift for field forensics (rate-limited).
+            if (g_half_end_gt > 0.0) {
+                new Float:drift = (get_gametime() + rem) - g_half_end_gt;
+                if (floatabs(drift) > 2.0) {
+                    static Float:last_drift_print;
+                    if (get_gametime() - last_drift_print > 30.0) {
+                        last_drift_print = get_gametime();
+                        server_print("[HUD] clock drift: native vs anchor %.2fs (native wins)", drift);
+                    }
+                }
+                g_half_end_gt = get_gametime() + rem;
+            }
+            return floatround(rem, floatround_floor);
+        }
+    }
     if (g_half_end_gt > 0.0) {
         new tl = floatround(g_half_end_gt - get_gametime(), floatround_floor);
         return (tl < 0) ? 0 : tl;
     }
     return get_timeleft();
+}
+
+// Optional-native binding: allow loading against pre-2.7.23 dodx modules that
+// don't export dodx_get_round_time. trap==0 = load-time bind failure — mark
+// the native unavailable and let the plugin load (hud_timeleft falls back to
+// the anchor). Anything else stays fatal: a genuinely missing core native
+// must keep failing loudly, and a runtime trap (trap==1) can only mean a
+// gating bug on our side.
+public plugin_natives() {
+    set_native_filter("native_filter");
+}
+
+public native_filter(const name[], index, trap) {
+    if (!trap && equal(name, "dodx_get_round_time")) {
+        g_has_round_time_native = false;
+        return PLUGIN_HANDLED;
+    }
+    return PLUGIN_CONTINUE;
 }
 
 // ─── KTPMatchHandler Forwards ────────────────────────────────────────────────
