@@ -34,7 +34,7 @@ native Float:dodx_get_round_time();
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.1.0"
+#define VERSION "2.2.0"
 #define AUTHOR  "cadaver"
 
 #define MAX_PLAYERS     32
@@ -57,6 +57,15 @@ native Float:dodx_get_round_time();
 #define TASK_ID_POLL_ZONES   9003
 #define TASK_ID_TIME_SYNC    9004
 #define TASK_ID_EMIT_FLAGS   9005
+#define TASK_ID_GOLIVE_REWIPE 9006
+
+// Go-live restart detection. The engine respawns the ENTIRE roster in one frame
+// when the mp_clan_timer countdown ends and frags are zeroed; mid-countdown
+// respawn waves are only 2-3 players (prod-measured), so a burst this large is
+// unambiguous. Sized for the 6v6 match format — smaller rosters simply fall
+// through to the task fallback.
+#define GOLIVE_SPAWN_BURST   8
+#define GOLIVE_BURST_WINDOW  1.5
 // Per-CP deferred captor/capout emission (TASK_ID_DEFER_BASE + cp_index, one
 // per flag). dodx dispatches dod_score_event ~0.25s AFTER dod_control_point_captured,
 // so flag_captured + the capout board are emitted from this short one-shot —
@@ -126,15 +135,28 @@ new Float:g_last_native_rem = -1.0;
 new Float:g_last_native_gt = 0.0;
 new Float:g_native_hold_until = 0.0;
 
-// Round-live re-wipe gate. KTPMatchHandler fires ktp_match_start ~0.8-1s BEFORE
-// the go-live mp_clan_restartround actually zeroes engine frags and unpauses
-// DODX (RoundState==1). Kills in that window would otherwise survive here but be
-// wiped from the real scoreboard, drifting the HUD's K/D high. Armed at
-// ktp_match_start; the first RoundState==1 within the deadline re-wipes once
-// (see msg_round_state). The deadline abandons a stale arm so a missed go-live
-// signal can't trigger a stray mid-half wipe at a later round boundary.
+// Go-live window gate, read by the HALF-CLOCK (hud_timeleft_f's in_golive).
+// NOTE: prod never emits RoundState==1, so in practice this stays armed for the
+// whole deadline window — the clock logic depends on exactly that lifetime.
+// Do NOT clear it early; use g_awaiting_stat_rewipe for stat-side gating.
 new bool:g_awaiting_round_live = false;
 new Float:g_round_live_deadline = 0.0;
+
+// Go-live STAT re-wipe gate — deliberately SEPARATE from g_awaiting_round_live
+// above (that one doubles as the clock's go-live window and must keep its full
+// lifetime; clearing it at the restart edge would change clock behavior).
+//
+// The engine zeroes frags at the END of the go-live mp_clan_timer countdown
+// (~10s), but ktp_match_start — our first wipe — fires at its START. Every kill
+// during that countdown is therefore counted by the HUD and then wiped by the
+// engine, leaving the overlay permanently ahead of the in-game scoreboard for
+// the rest of the half. RoundState==1 was meant to mark the restart edge, but
+// the DoD engine does not emit it on prod (KTPMatchHandler times out on the same
+// signal every match), so the re-wipe is driven by the restart's own mass-respawn
+// burst, with a task fallback. See do_golive_stat_rewipe().
+new bool:g_awaiting_stat_rewipe = false;
+new g_golive_spawn_count = 0;
+new Float:g_golive_spawn_t0 = 0.0;
 
 // Player state
 new g_player_team[MAX_PLAYERS + 1];
@@ -548,10 +570,10 @@ stock reset_player_stats_slot(id) {
 }
 
 // Zero every per-player stat accumulator (half-scoped). Called at go-live from
-// ktp_match_start and re-run once at the round-live boundary (msg_round_state)
-// so kills/deaths landing in the ~1s go-live window — which the engine wipes on
-// the mp_clan_restartround and DODX discards while paused — don't survive in the
-// HUD and drift K/D above the real scoreboard.
+// ktp_match_start and re-run once at the engine's restart edge
+// (do_golive_stat_rewipe) so kills landing in the go-live countdown — which the
+// engine wipes on the mp_clan_restartround — don't survive in the HUD and drift
+// K/D above the real scoreboard.
 stock wipe_all_stat_accumulators() {
     for (new i = 1; i <= MAX_PLAYERS; i++) {
         g_player_kills[i]    = 0;
@@ -559,6 +581,50 @@ stock wipe_all_stat_accumulators() {
         g_player_objscore[i] = 0;
         reset_player_stats_slot(i);
     }
+}
+
+// Re-wipe the half's accumulators at the ENGINE's go-live restart edge, snapping
+// the HUD's K/D baseline to the instant the engine zeroes frags.
+//
+// ktp_match_start wipes at the START of the ~mp_clan_timer go-live countdown;
+// the engine zeroes frags at its END. Kills in between are counted by the HUD but
+// wiped by the engine, so without this the overlay sits permanently above the
+// in-game scoreboard for the whole half (prod-measured 2026-07-19 on
+// 1784509712-ATL1: 4 countdown kills produced 6 player-visible K/D deltas).
+//
+// Idempotent and single-shot per half — whichever source observes the edge first
+// (spawn burst, task fallback, or a RoundState==1 on configs that emit it)
+// disarms the others. src is logged so matchday forensics can tell which fired.
+stock do_golive_stat_rewipe(const src[]) {
+    if (!g_awaiting_stat_rewipe) return;
+    g_awaiting_stat_rewipe = false;
+    remove_task(TASK_ID_GOLIVE_REWIPE);
+    g_golive_spawn_count = 0;
+    g_golive_spawn_t0    = 0.0;
+
+    wipe_all_stat_accumulators();
+    server_print("[HUD] golive stat re-wipe (src=%s gt=%.2f)", src, get_gametime());
+
+    // Re-push zeroed scores so the overlay snaps to 0 at the go-live instant
+    // instead of showing the leaked countdown counts until each player's next
+    // kill. Uses the tracked team (same reason as emit_stats_summary).
+    new maxp = get_maxplayers();
+    for (new id = 1; id <= maxp; id++) {
+        if (!is_user_connected(id)) continue;
+        if (is_user_hltv(id)) continue;
+        new team = g_player_team[id];
+        if (team != TEAM_ALLIES && team != TEAM_AXIS) continue;
+        emit_player_score(id);
+    }
+}
+
+// Fallback: fires only if the mass-respawn burst never materialised (roster
+// smaller than GOLIVE_SPAWN_BURST, or spawns missed). Scheduled at
+// mp_clan_timer + 2s, so it lands just after the engine's restart. A one-shot
+// set_task armed here is reliable even in half 1 — KTPMatchHandler's own 5s
+// round-live timeout one-shot fires every match on the same servers.
+public task_golive_rewipe() {
+    do_golive_stat_rewipe("task_fallback");
 }
 
 // Get log name for the weapon in the given DODWT_* slot
@@ -774,6 +840,17 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
     g_awaiting_round_live = true;
     g_round_live_deadline = get_gametime() + 20.0;
 
+    // Arm the go-live STAT re-wipe (separate gate — see the globals). Primary
+    // trigger is the engine's mass-respawn burst in dod_client_spawn, which lands
+    // exactly on the frag-zeroing edge; this task is the fallback for rosters too
+    // small to produce a burst. +2s past the countdown so the burst wins the race
+    // on a normal 6v6 and the fallback still fires promptly otherwise.
+    g_awaiting_stat_rewipe = true;
+    g_golive_spawn_count   = 0;
+    g_golive_spawn_t0      = 0.0;
+    remove_task(TASK_ID_GOLIVE_REWIPE);
+    set_task(clan_timer + 2.0, "task_golive_rewipe", TASK_ID_GOLIVE_REWIPE);
+
     server_print("[HUD] Match started: %s (map=%s type=%d half=%d)", matchId, map, _:matchType, half);
 
     // Emit explicit ktp_match_start event so the backend's recorder.startMatch
@@ -829,7 +906,10 @@ public msg_round_state() {
         return PLUGIN_CONTINUE;
     }
 
-    wipe_all_stat_accumulators();
+    // Exact stat re-wipe at the true go-live edge. No-op if the spawn burst or
+    // the fallback task already observed the restart (which is what happens on
+    // prod, where this message never arrives at all).
+    do_golive_stat_rewipe("roundstate");
 
     // Exact re-anchor at the REAL go-live edge. ktp_match_start baked in an
     // mp_clan_timer estimate of this moment; if the engine actually emits RoundState==1
@@ -860,17 +940,6 @@ public msg_round_state() {
         post_event(tsjson);
     }
 
-    // Re-push zeroed scores so the overlay scoreboard snaps to 0 at the go-live
-    // instant instead of showing the leaked pre-live counts until the next kill.
-    // Same guard as do_roster_dump (connected, non-HLTV, on a team).
-    new maxp = get_maxplayers();
-    for (new id = 1; id <= maxp; id++) {
-        if (!is_user_connected(id)) continue;
-        if (is_user_hltv(id)) continue;
-        new team = get_user_team(id);
-        if (team != TEAM_ALLIES && team != TEAM_AXIS) continue;
-        emit_player_score(id);
-    }
     return PLUGIN_CONTINUE;
 }
 
@@ -1147,6 +1216,24 @@ public dod_client_spawn(id) {
     if (is_user_hltv(id)) return;
     if (!is_user_alive(id)) return;
 
+    // Go-live restart edge: the engine respawns the whole roster in one frame when
+    // the mp_clan_timer countdown ends and it zeroes frags. That burst is our only
+    // reliable marker of the edge (RoundState==1 never arrives on prod), so use it
+    // to re-wipe the countdown's leaked kills. Mid-countdown waves are 2-3 players,
+    // well under GOLIVE_SPAWN_BURST, so they can't trip this early.
+    if (g_awaiting_stat_rewipe) {
+        new Float:now = get_gametime();
+        if (now - g_golive_spawn_t0 > GOLIVE_BURST_WINDOW) {
+            g_golive_spawn_t0    = now;   // start a fresh burst window
+            g_golive_spawn_count = 1;
+        } else {
+            g_golive_spawn_count++;
+        }
+        if (g_golive_spawn_count >= GOLIVE_SPAWN_BURST) {
+            do_golive_stat_rewipe("spawn_burst");
+        }
+    }
+
     new steamid[32], name[64], name_esc[128], team_str[16], wpn_primary[32], wpn_secondary[32];
     get_steamid(id, steamid, charsmax(steamid));
     get_user_name(id, name, charsmax(name));
@@ -1305,11 +1392,16 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
     // DODX's Damage-hook path fires client_death BEFORE CDODPlayer::Killed()
     // increments frags / deaths. So track both locally and emit explicitly.
     //
-    // Killer: +1 normal, -1 teamkill, 0 suicide (mirrors DoD frag semantics).
+    // Killer: +1 normal kill; teamkills and suicides score NOTHING.
+    //
+    // We used to decrement on a TK, assuming DoD's frag semantics penalise it.
+    // The engine does NOT — prod-verified 2026-07-19 on 1784509712-ATL1, where
+    // nomistizzle's mid-half TK left the in-game scoreboard at 11 kills while the
+    // HUD showed 10. Decrementing put the overlay permanently BELOW the real
+    // scoreboard for anyone who TK'd, for the rest of the half. The teamkill is
+    // still tracked and surfaced separately via g_player_teamkills (kill feed).
     if (killer != victim && is_user_connected(killer)) {
-        if (TK) {
-            g_player_kills[killer]--;
-        } else {
+        if (!TK) {
             g_player_kills[killer]++;
             // HS / nade-vs-gun buckets count normal kills only, matching frag
             // semantics — a TK'd headshot shouldn't pad anyone's HS%.

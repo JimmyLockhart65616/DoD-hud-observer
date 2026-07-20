@@ -226,16 +226,31 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
   killed by someone else. `kill_class` "nade" = wpnindex ∈ {13,14,15,16,36} (grenades + mills bomb).
   `cap_breaks` = defensive stat: killed an enemy capper standing on the point (separate
   from `caps`, which is offensive). Credited via the breaker's `player_score`.
-- **Go-live re-wipe (RoundState gate).** `ktp_match_start` fires ~0.8–1s BEFORE the
-  go-live `mp_clan_restartround` zeroes engine frags and DODX unpauses (`RoundState==1`).
-  Because the HUD counts kills unconditionally (`client_death` has no live gate), a
-  warmup fighter still mid-engagement at `.ready` can score a kill in that window that
-  the engine wipes but the HUD would keep — drifting the HUD K/D above the in-game
-  scoreboard. The plugin hooks the `RoundState` message and re-wipes accumulators once
-  at the first `RoundState==1` after each `ktp_match_start` (guarded by
-  `g_awaiting_round_live` + a 10s deadline so a missed signal can't wipe mid-half). This
-  snaps the HUD baseline to the exact instant the engine resets. (Same signal
-  KTPMatchHandler uses to gate its own DODX unpause.)
+- **Go-live re-wipe (mass-respawn burst).** `ktp_match_start` — and therefore the
+  HUD's stat wipe — fires at the **START** of the go-live `mp_clan_timer` countdown
+  (~10s), but the engine only zeroes frags at its **END**, when
+  `mp_clan_restartround` actually restarts the round. Because the HUD counts kills
+  unconditionally (`client_death` has no live gate), every kill during that ~10s
+  countdown is kept by the HUD and wiped by the engine, leaving the overlay
+  permanently above the in-game scoreboard for the rest of the half (prod-measured
+  2026-07-19 on `1784509712-ATL1`: 4 countdown kills → 6 player-visible K/D deltas).
+  **`RoundState==1` cannot be used to detect that edge — the DoD engine never emits
+  it on prod** (KTPMatchHandler times out on the same signal every match). The plugin
+  instead re-wipes on the engine's own **mass-respawn burst**: ≥8 `dod_client_spawn`
+  within 1.5s while armed (mid-countdown respawn waves are only 2–3 players, so they
+  can't trip it), with a `set_task(mp_clan_timer + 2s)` fallback for rosters too small
+  to burst. Single-shot per half and idempotent — the burst, the fallback, and a
+  `RoundState==1` (on configs that do emit it) all route through
+  `do_golive_stat_rewipe()`, first one wins. Gated by `g_awaiting_stat_rewipe`, kept
+  deliberately **separate** from `g_awaiting_round_live`, which the half-clock reads as
+  its go-live window and must keep armed for its full deadline.
+- **Teamkills and suicides score nothing — never decrement.** DoD applies **no frag
+  penalty** for a TK or a suicide, so the HUD must not either. The plugin used to do
+  `g_player_kills[killer]--` on a TK, which put the overlay permanently *below* the
+  real scoreboard for anyone who TK'd (prod-verified 2026-07-19: a mid-half TK left
+  the in-game scoreboard at 11 kills vs the HUD's 10). TK-victim deaths **do** count on
+  both sides. The teamkill itself is still tracked via `g_player_teamkills` and
+  surfaced in the kill feed (`killer_tk_count`).
 - **Summary team source.** `emit_stats_summary` filters players by the plugin-tracked
   `g_player_team[]`, NOT the live `get_user_team(id)`: at the end-of-match intermission
   the engine team read returns non-ALLIES/AXIS for everyone, which silently emptied the
