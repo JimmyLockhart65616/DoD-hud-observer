@@ -642,7 +642,10 @@ describe('snapshot — sync invariants for late-joining clients', () => {
         try {
             const ts = getServerSnapshot(host).map(s => JSON.parse(s)).find(e => e.event === 'time_sync');
             expect(ts).toBeDefined();
-            expect(ts.timeleft).toBe(510);
+            // Fractional age-adjust (no floor since the fractional-timeleft
+            // change): ~510 minus the few ms between the POST and t0.
+            expect(ts.timeleft).toBeGreaterThan(509.5);
+            expect(ts.timeleft).toBeLessThanOrEqual(510);
         } finally {
             nowSpy.mockRestore();
         }
@@ -661,7 +664,9 @@ describe('snapshot — sync invariants for late-joining clients', () => {
         expect(hs.timeleft).toBeUndefined();
         const ts = snapshot.find(e => e.event === 'time_sync');
         expect(ts).toBeDefined();
-        expect(ts.timeleft).toBe(1200); // age ~0 in-test
+        // Fractional age-adjust: age ~0 in-test but no longer floored to an int.
+        expect(ts.timeleft).toBeGreaterThan(1199.5);
+        expect(ts.timeleft).toBeLessThanOrEqual(1200);
     });
 
     it('clamps the age-adjusted timeleft to 0 when the cache outlives the value', async () => {

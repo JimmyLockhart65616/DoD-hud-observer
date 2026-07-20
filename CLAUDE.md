@@ -129,6 +129,9 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 ### Timer
 
 - `half_start` includes `timeleft`; `round_start` also includes `timeleft` as a sync point
+- `timeleft` is FRACTIONAL (`%.2f`) since plugin 2.1.0 — the frontend floors only at
+  display (matching the DoD client's rounding); flooring at emission added up to 1s of
+  phase error vs the client clock
 - `time_sync` fires every 30 seconds to correct frontend clock drift
 - Frontend stores `timeleft` + `timeleft_at` (browser `Date.now()`) and counts down locally
 - All `timeleft` values come from `hud_timeleft()`, NOT raw `get_timeleft()`. Preference

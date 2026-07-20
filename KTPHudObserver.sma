@@ -34,7 +34,7 @@ native Float:dodx_get_round_time();
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.0.0"
+#define VERSION "2.1.0"
 #define AUTHOR  "cadaver"
 
 #define MAX_PLAYERS     32
@@ -113,6 +113,18 @@ new Float:g_half_end_gt = 0.0;
 // still loads, this goes false, and hud_timeleft() runs the anchor fallback.
 // Never call the native while false — the runtime trap would abort the plugin.
 new bool:g_has_round_time_native = true;
+
+// Last accepted native reading + when, for the end-of-half artifact guard in
+// hud_timeleft_f(): as a half expires by timelimit the engine's OWN round-cycle
+// restart flips the same restart-projection fields the native reads for the
+// go-live countdown, so the final time_sync of the half can read ~a full half
+// (prod: 7×/week, always ONE bad event with half_end <1s behind it). -1.0 = no
+// reading yet. g_native_hold_until > 0.0 = artifact detected, serving the held
+// countdown until the hold expires (self-heals if the jump was a real rebase,
+// e.g. a sub-35s .restarthalf).
+new Float:g_last_native_rem = -1.0;
+new Float:g_last_native_gt = 0.0;
+new Float:g_native_hold_until = 0.0;
 
 // Round-live re-wipe gate. KTPMatchHandler fires ktp_match_start ~0.8-1s BEFORE
 // the go-live mp_clan_restartround actually zeroes engine frags and unpauses
@@ -592,32 +604,100 @@ stock do_prone_change(id, prone_state) {
 //    #Game_w), which DoD never sends — so an unanchored match clock would run
 //    AHEAD by the entire ready-up duration and pin at 0:00 for minutes.
 // 3. get_timeleft() — pubs (no clan restart → map-load clock is correct).
-stock hud_timeleft() {
+stock Float:hud_timeleft_f() {
+    new Float:gt = get_gametime();
+
+    // Gametime restarts near 0 on changelevel — clear the jump-detector state
+    // so a stale pre-changelevel reading can't misclassify the new map's clock.
+    if (gt < g_last_native_gt) {
+        g_last_native_rem = -1.0;
+        g_last_native_gt = 0.0;
+        g_native_hold_until = 0.0;
+    }
+
+    // The effective go-live window: g_awaiting_round_live alone is NOT enough —
+    // prod never emits RoundState==1, so the flag stays armed all half; only
+    // the deadline bounds the real countdown window.
+    new bool:in_golive = g_awaiting_round_live && gt <= g_round_live_deadline;
+
     if (g_has_round_time_native) {
         new Float:rem = dodx_get_round_time();
         if (rem >= 0.0) {
+            // End-of-half artifact: outside the go-live window, a jump from a
+            // near-zero reading to ~a full half is the engine's own timelimit
+            // round-cycle restart leaking through the native's go-live
+            // projection — never a value the client clock shows. Hold the old
+            // countdown; half_end + changelevel land within ~1s. The hold
+            // expires after 6s so a genuine sub-35s rebase (.restarthalf at
+            // the death of a half) recovers on its own.
+            // An active hold is sticky for its full window: the arming pattern
+            // must not be re-evaluated mid-hold, because the frozen baseline
+            // ages past the 35s bound and a late call would fall through and
+            // accept the still-corrupted reading. On expiry the native is
+            // accepted unconditionally (self-heal for a persistent legit jump,
+            // e.g. a sub-35s .restarthalf) — never immediately re-armed.
+            new bool:hold_expired = false;
+            if (g_native_hold_until > 0.0) {
+                if (gt < g_native_hold_until) {
+                    new Float:held = g_last_native_rem - (gt - g_last_native_gt);
+                    return (held < 0.0) ? 0.0 : held;   // keep pre-jump state
+                }
+                g_native_hold_until = 0.0;
+                hold_expired = true;
+            }
+            if (!hold_expired && !in_golive
+                && g_last_native_rem >= 0.0 && g_last_native_rem < 35.0
+                && gt - g_last_native_gt < 35.0
+                && rem > g_last_native_rem + 35.0) {
+                g_native_hold_until = gt + 6.0;
+                new Float:held = g_last_native_rem - (gt - g_last_native_gt);
+                return (held < 0.0) ? 0.0 : held;   // keep pre-jump state
+            }
+
+            // Go-live request jitter: KTPMatchHandler occasionally issues the
+            // mp_clan_restartround AFTER ktp_match_start (prod 1.3-6255-NY1 h2:
+            // native read the un-rebased pub clock, half_start emitted 1014
+            // instead of ~1209). Until the native sees the restart request, the
+            // freshly-baked anchor is the better estimate; the native takes
+            // over the moment it catches up.
+            if (in_golive && g_half_end_gt > 0.0) {
+                new Float:anchor_rem = g_half_end_gt - gt;
+                if (rem < anchor_rem - 5.0) {
+                    g_last_native_rem = rem;
+                    g_last_native_gt = gt;
+                    return (anchor_rem < 0.0) ? 0.0 : anchor_rem;
+                }
+            }
+
+            g_last_native_rem = rem;
+            g_last_native_gt = gt;
+
             // Keep the open-loop anchor honest while both sources live, so a
             // mid-half native outage degrades to a calibrated fallback, and
             // surface residual drift for field forensics (rate-limited).
             if (g_half_end_gt > 0.0) {
-                new Float:drift = (get_gametime() + rem) - g_half_end_gt;
+                new Float:drift = (gt + rem) - g_half_end_gt;
                 if (floatabs(drift) > 2.0) {
                     static Float:last_drift_print;
-                    if (get_gametime() - last_drift_print > 30.0) {
-                        last_drift_print = get_gametime();
+                    if (gt - last_drift_print > 30.0) {
+                        last_drift_print = gt;
                         server_print("[HUD] clock drift: native vs anchor %.2fs (native wins)", drift);
                     }
                 }
-                g_half_end_gt = get_gametime() + rem;
+                g_half_end_gt = gt + rem;
             }
-            return floatround(rem, floatround_floor);
+            return rem;
         }
     }
     if (g_half_end_gt > 0.0) {
-        new tl = floatround(g_half_end_gt - get_gametime(), floatround_floor);
-        return (tl < 0) ? 0 : tl;
+        new Float:tl = g_half_end_gt - gt;
+        return (tl < 0.0) ? 0.0 : tl;
     }
-    return get_timeleft();
+    return float(get_timeleft());
+}
+
+stock hud_timeleft() {
+    return floatround(hud_timeleft_f(), floatround_floor);
 }
 
 // Optional-native binding: allow loading against pre-2.7.23 dodx modules that
@@ -705,11 +785,12 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
         "{^"event^":^"ktp_match_start^"}");
     post_event(json);
 
-    // Send half_start event
-    new timeleft = hud_timeleft();
+    // Send half_start event. Fractional timeleft: the frontend anchors its
+    // countdown on this value, so integer flooring here adds up to 1s of
+    // phase error against the client clock (see Timer.jsx).
     formatex(json, charsmax(json),
-        "{^"event^":^"half_start^",^"half^":%d,^"timeleft^":%d}",
-        half, timeleft);
+        "{^"event^":^"half_start^",^"half^":%d,^"timeleft^":%.2f}",
+        half, hud_timeleft_f());
     post_event(json);
 
     // Seed cumulative team score for the new half. KTPMatchHandler restores
@@ -762,13 +843,20 @@ public msg_round_state() {
         g_half_end_gt = get_gametime() + limit_min * 60.0;
         server_print("[HUD] anchor@round_live gt=%.2f half_end_gt=%.2f timelimit=%.1f",
                      get_gametime(), g_half_end_gt, limit_min);
+        // This IS the confirmed go-live rebase — void the artifact-guard
+        // baseline so the native's legitimate jump from the countdown value to
+        // the fresh full half can't pattern-match the end-of-half artifact
+        // (g_awaiting_round_live is already false here, so hud_timeleft_f's
+        // in_golive exemption no longer applies to this call).
+        g_last_native_rem = -1.0;
+        g_native_hold_until = 0.0;
         // Re-emit the corrected clock immediately so the frontend snaps to it instead
         // of waiting up to 30s for the next task_time_sync. time_sync rides the same
         // HLTV delay buffer as kills (stays footage-aligned); half_start is avoided
         // because it re-triggers the frontend's boundary/reset logic.
         new tsjson[128];
         formatex(tsjson, charsmax(tsjson),
-            "{^"event^":^"time_sync^",^"timeleft^":%d}", hud_timeleft());
+            "{^"event^":^"time_sync^",^"timeleft^":%.2f}", hud_timeleft_f());
         post_event(tsjson);
     }
 
@@ -808,6 +896,11 @@ public ktp_match_end(const matchId[], const map[], MatchType:matchType, team1Sco
     g_matchActive = false;
     g_matchId[0] = '^0';
     g_half_end_gt = 0.0;
+    // Clear the native jump-detector too: if the post-match changelevel stalls
+    // (KTPMatchHandler has 15s watchdogs for exactly that), a time_sync in the
+    // limbo window must not trigger the artifact hold off dead-half state.
+    g_last_native_rem = -1.0;
+    g_native_hold_until = 0.0;
 }
 
 // ─── Half End (KTPMatchHandler ktp_half_end forward) ─────────────────────────
@@ -844,6 +937,18 @@ public ktp_half_end(const matchId[], const map[], MatchType:matchType, half, tea
     post_event(json);
 
     emit_stats_summary(SUMMARY_HALF_END);
+
+    // The half is over — clear the anchor so it can't go stale across the
+    // halftime changelevel (plugin globals survive changelevel; the old-half
+    // anchor was meaningless on the new map's gametime and spammed the drift
+    // print through every half-2 warmup, and was a wrong fallback if the
+    // native failed in that window). ktp_match_start re-seeds it for half 2.
+    // The jump-detector state goes with it: if the changelevel stalls (15s
+    // KTPMatchHandler watchdogs), a limbo-window time_sync must not trigger
+    // the artifact hold off the dead half's near-zero baseline.
+    g_half_end_gt = 0.0;
+    g_last_native_rem = -1.0;
+    g_native_hold_until = 0.0;
 }
 
 // ─── Roster Dump ─────────────────────────────────────────────────────────────
@@ -905,11 +1010,9 @@ stock do_roster_dump() {
 // ─── Round Events ────────────────────────────────────────────────────────────
 
 public ev_round_start() {
-    new timeleft = hud_timeleft();
-
     new json[128];
     formatex(json, charsmax(json),
-        "{^"event^":^"round_start^",^"timeleft^":%d}", timeleft);
+        "{^"event^":^"round_start^",^"timeleft^":%.2f}", hud_timeleft_f());
     post_event(json);
 
     // Refresh flag state on round start
@@ -1499,11 +1602,9 @@ public ev_team_score() {
 }
 
 public task_time_sync() {
-    new timeleft = hud_timeleft();
-
     new json[128];
     formatex(json, charsmax(json),
-        "{^"event^":^"time_sync^",^"timeleft^":%d}", timeleft);
+        "{^"event^":^"time_sync^",^"timeleft^":%.2f}", hud_timeleft_f());
     post_event(json);
 }
 

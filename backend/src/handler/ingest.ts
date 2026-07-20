@@ -286,8 +286,11 @@ export function getServerSnapshot(server: string): string[] {
     // the cache age — minutes, when time_sync is wedged and only half_start refreshed
     // it. Always emit a fresh `time_sync` (never the raw cached object, which may be
     // a half_start that would re-trigger boundary handling on replay).
+    // Fractional age (no floor): the plugin emits fractional timeleft since
+    // 2.1.0 and the frontend floors only at display, so flooring the age here
+    // would re-introduce up to 1s of phase error for fresh-tab joins.
     const adjustedTimeleft = state.timeleft
-        ? Math.max(0, (state.timeleft.timeleft ?? 0) - Math.floor((Date.now() - state.timeleftReleasedAt) / 1000))
+        ? Math.max(0, (state.timeleft.timeleft ?? 0) - (Date.now() - state.timeleftReleasedAt) / 1000)
         : null;
     if (adjustedTimeleft != null) {
         events.push(JSON.stringify({ event: 'time_sync', timeleft: adjustedTimeleft }));
