@@ -62,8 +62,15 @@ echo "==> Services: backend=$SERVICE, web=$WEB_SERVICE"
 # Frontend env vars are injected inline so they win over any web/.env.local
 # file (CRA loads .env.local in every mode except test — it silently overrides
 # .env.production during build and bakes localhost URLs into the bundle).
-WEB_API_URL="${REACT_APP_API_URL:-http://74.91.112.242:3001}"
-WEB_SOCKET_URL="${REACT_APP_SOCKET_URL:-http://74.91.112.242:4000}"
+#
+# Single origin: the bundle talks to https://hud.ktpdod.com for BOTH REST and
+# Socket.IO — nginx on the data box fans /api, /socket.io, and / out to the app
+# processes (see deploy/nginx/hud.ktpdod.com.conf). This is required, not
+# cosmetic: over HTTPS the browser + OBS's CEF block plain-HTTP cross-origin
+# :3001/:4000 as mixed content, and Socket.IO CORS (frontend.origin) must match
+# the serving origin. Override the defaults via env for a different deployment.
+WEB_API_URL="${REACT_APP_API_URL:-https://hud.ktpdod.com}"
+WEB_SOCKET_URL="${REACT_APP_SOCKET_URL:-https://hud.ktpdod.com}"
 
 if [[ "$DO_FRONTEND" == 1 && "$DO_BUILD" == 1 ]]; then
     echo "==> Building frontend (web/build)"

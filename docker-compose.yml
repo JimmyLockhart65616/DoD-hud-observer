@@ -10,17 +10,25 @@
 #   docker compose logs -f      # tail logs
 #
 # Ports:
-#   3000 — React frontend (OBS browser source / watch page)
-#   3001 — REST API
-#   4000 — Socket.IO
-#   8088 — HTTP ingest (AMXX plugin POSTs here)
+#   8080 — nginx single-origin reverse proxy (overlay + /api + /socket.io) ← use this
+#   3000 — React frontend (direct; normally reached through :8080)
+#   3001 — REST API (direct; normally reached through :8080)
+#   4000 — Socket.IO (direct; normally reached through :8080)
+#   8088 — HTTP ingest (AMXX plugin POSTs here; NOT proxied)
 
 services:
   data:
     build:
       context: .
       dockerfile: data-server/Dockerfile
+    environment:
+      # The frontend bundle is built against the single-origin proxy
+      # (http://localhost:8080), so Socket.IO's CORS origin must match. Set via
+      # env rather than editing the dev-shared config/local/config.yaml (whose
+      # frontend.origin stays :3000 for the host `npm run backend` workflow).
+      HUD_FRONTEND_ORIGIN: http://localhost:8080
     ports:
+      - "8080:80"
       - "3000:3000"
       - "3001:3001"
       - "4000:4000"

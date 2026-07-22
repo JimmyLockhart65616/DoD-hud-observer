@@ -16,6 +16,7 @@
     "e2e:headed": "npx playwright test --headed",
     "e2e:screenshot": "npx ts-node e2e/screenshot-tool.ts",
     "plugin:smoke": "bash scripts/plugin-smoke.sh",
+    "proxy:smoke": "bash scripts/proxy-smoke.sh",
     "bench:ingest": "ts-node --script-mode scripts/bench-ingest.ts",
     "assets:weapons": "ts-node --script-mode scripts/convert-weapon-sprites.ts"
   },

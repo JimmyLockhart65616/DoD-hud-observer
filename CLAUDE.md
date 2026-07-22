@@ -37,6 +37,20 @@ Data Server (or local dev machine)
 - `4000` — Internal Socket.IO server (backend ↔ frontend)
 - `8088` — HTTP ingest endpoint (plugin POSTs events here)
 
+**Single-origin reverse proxy (nginx).** The overlay is served single-origin so
+the HTTPS page (and OBS's embedded Chromium) never hits a cross-origin /
+mixed-content wall, and so Socket.IO's `credentials:true` CORS origin matches
+the serving origin. nginx fans `/` → :3000, `/api/*` + `/health` + `/metrics` →
+:3001, `/socket.io/` → :4000; ingest (:9000 prod / :8088 local) is **never**
+proxied (direct IP-restricted POST from game servers).
+- **Prod**: `https://hud.ktpdod.com` on :443 (nginx already runs on the data
+  box; we add a vhost — `deploy/nginx/hud.ktpdod.com.conf`). The frontend bundle
+  is built against this origin (`deploy/deploy.sh`); `frontend.origin` in the
+  online config must equal it.
+- **Local docker**: `http://localhost:8080` → nginx inside the `data` container
+  (`data-server/nginx-hud.conf`, supervisord `[program:nginx]`). Verify routing
+  with `npm run proxy:smoke`.
+
 ### Deployment Modes
 - **Local/test**: everything on one PC, AMXX sends to 127.0.0.1:9000
 - **Production**: Node backend on a VPS with public IP, game server sends to VPS IP:9000, OBS points browser source at VPS:3000. Switching is one config value change.

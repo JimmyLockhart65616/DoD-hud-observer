@@ -38,8 +38,13 @@ COPY web/ ./web/
 # and bake the wrong URLs into the bundle. Pass the docker-stack ports inline
 # so the resulting bundle calls the host:3001 / host:4000 the data container
 # actually exposes. Production overrides come from build-arg / CI env.
-ARG REACT_APP_API_URL=http://localhost:3001
-ARG REACT_APP_SOCKET_URL=http://localhost:4000
+# Single-origin: the bundle talks to the in-container nginx reverse proxy (:80,
+# published to the host as :8080), NOT the raw :3001/:4000 ports. This mirrors
+# production, where the frontend is built against https://hud.ktpdod.com and
+# nginx fans out /api, /socket.io, and / to the app processes. Override via
+# build-arg for a different local origin.
+ARG REACT_APP_API_URL=http://localhost:8080
+ARG REACT_APP_SOCKET_URL=http://localhost:8080
 RUN cd web && rm -f .env.local && \
     REACT_APP_API_URL=$REACT_APP_API_URL \
     REACT_APP_SOCKET_URL=$REACT_APP_SOCKET_URL \
@@ -58,6 +63,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # System packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     supervisor \
+    nginx \
     lib32gcc-s1 \
     lib32stdc++6 \
     lib32z1 \
@@ -65,6 +71,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mysql-server \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Single-origin reverse proxy — mirrors the production nginx vhost so the local
+# stack serves the overlay + REST + Socket.IO from ONE origin (:80 in-container,
+# published to the host as :8080). Drop the stock default site so our conf.d
+# snippet is the only :80 server.
+RUN rm -f /etc/nginx/sites-enabled/default
+COPY data-server/nginx-hud.conf /etc/nginx/conf.d/hud.conf
 
 # Node.js runtime (copied from builder, not installed via apt)
 COPY --from=app-builder /usr/local/bin/node /usr/local/bin/node
@@ -101,14 +114,15 @@ COPY data-server/start.sh /start.sh
 RUN chmod +x /start.sh
 
 # Ports:
-#   3000  — React frontend (static)
-#   3001  — REST API
-#   4000  — Socket.IO (backend <-> frontend)
-#   8088  — HTTP ingest from AMXX plugin (KTPAMXXCurl)
+#   80    — nginx single-origin reverse proxy (overlay + /api + /socket.io)
+#   3000  — React frontend (static, direct — behind nginx in normal use)
+#   3001  — REST API (direct — behind nginx in normal use)
+#   4000  — Socket.IO (direct — behind nginx in normal use)
+#   8088  — HTTP ingest from AMXX plugin (KTPAMXXCurl, NOT proxied)
 #   27020 — HLTV proxy 1
 #   27021 — HLTV proxy 2
 #   27500 — HLStatsX log receiver (UDP)
 #   3306  — MySQL
-EXPOSE 3000 3001 4000 8088 27020 27021 27500 3306
+EXPOSE 80 3000 3001 4000 8088 27020 27021 27500 3306
 
 CMD ["/start.sh"]

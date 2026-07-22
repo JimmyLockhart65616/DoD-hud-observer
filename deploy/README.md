@@ -70,6 +70,43 @@ Only Denver 5 posts events right now, so 9000 stays pinhole-only. When another g
 
 Port 9000 (not 8088) because 8088 was already bound by an unrelated "KTP AC API" on the box. Override lives in `Environment=HUD_INGEST_PORT=9000` in the systemd unit.
 
+### Friendly URL — nginx vhost (`hud.ktpdod.com`)
+
+Casters/viewers/OBS should use `https://hud.ktpdod.com/screen?server=...`, not a
+raw `IP:3000` URL. The data box already runs nginx on :80; a vhost fans one
+HTTPS origin out to the three app processes so there are no ports in the URL and
+no mixed-content/CORS breakage (see [nginx/hud.ktpdod.com.conf](nginx/hud.ktpdod.com.conf)
+for the full config + the box-specific header comments):
+
+```
+/            → 127.0.0.1:3000   (React overlay, the existing `serve` unit)
+/api/* /health /metrics → 127.0.0.1:3001
+/socket.io/  → 127.0.0.1:4000   (WebSocket upgrade)
+```
+
+Ingest (:9000) is **not** proxied — it stays a direct IP-restricted POST.
+
+One-time setup on the box:
+
+```bash
+ssh cadaver@74.91.112.242
+sudo nginx -T                       # inspect existing layout / for a *.ktpdod.com cert
+sudo ufw allow 80/tcp && sudo ufw allow 443/tcp
+# place deploy/nginx/hud.ktpdod.com.conf per the box convention, then:
+sudo certbot --nginx -d hud.ktpdod.com   # unless a wildcard cert already exists
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+The **frontend must be built against this origin** (already the `deploy.sh`
+default: `REACT_APP_API_URL`/`REACT_APP_SOCKET_URL=https://hud.ktpdod.com`) and
+the online config's `frontend.origin` must equal `https://hud.ktpdod.com` (the
+Socket.IO CORS origin). Verify end to end: `curl -sSf https://hud.ktpdod.com/health`,
+then load the OBS URL during a live/mocker match and confirm the overlay renders
+with a clean dev console.
+
+The local docker stack mirrors this with nginx inside the `data` container at
+`http://localhost:8080` — smoke it with `npm run proxy:smoke`.
+
 ### Config
 
 The repo follows the KTPInfrastructure split:

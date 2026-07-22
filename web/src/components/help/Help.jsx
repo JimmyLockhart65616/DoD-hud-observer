@@ -64,7 +64,7 @@ class Help extends React.Component {
                             <h3>1. Get the overlay URL for the server</h3>
                             <ol>
                                 <li>Open the HUD Observer home page in a browser (e.g.{' '}
-                                    <code>http://74.91.112.242:3000/</code>).</li>
+                                    <code>https://hud.ktpdod.com/</code>).</li>
                                 <li>Click the <a href="/watch"><strong>Watch / Replay</strong></a> link.</li>
                                 <li>Under <strong>Game Servers</strong>, find the server whose match you're casting.</li>
                                 <li>
@@ -73,7 +73,7 @@ class Help extends React.Component {
                                 </li>
                             </ol>
                             <p>That gives you a URL like:</p>
-                            <pre className="help-url">http://74.91.112.242:3000/screen?server=KTP%20-%20Denver%205</pre>
+                            <pre className="help-url">https://hud.ktpdod.com/screen?server=KTP%20-%20Denver%205</pre>
 
                             <h3>2. Add a Browser source in OBS</h3>
                             <p>
@@ -203,7 +203,7 @@ class Help extends React.Component {
 
                         <Section id="troubleshooting" title="Troubleshooting">
                             <ul>
-                                <li><strong>Blank overlay</strong> — confirm the backend is reachable on <code>:4000</code> (Socket.IO) and <code>:3001</code> (REST). Check the browser dev console for connection errors.</li>
+                                <li><strong>Blank overlay</strong> — confirm the overlay origin (<code>https://hud.ktpdod.com</code>) is reachable and its <code>/socket.io/</code> and <code>/api/</code> routes respond. Check the browser dev console for connection or mixed-content errors.</li>
                                 <li><strong>Wrong server showing</strong> — the <code>?server=</code> value must match the server's registered hostname exactly, including case and spaces (URL-encoded). Visit <a href="/watch"><code>/watch</code></a> to get the correct copy-paste URL.</li>
                                 <li><strong>Timer drifting</strong> — the server sends a <code>time_sync</code> every 30s; if the displayed timer is more than a few seconds off, the Socket.IO connection may be dropping.</li>
                                 <li><strong>Players missing from roster</strong> — player cards populate on <code>player_spawn</code>. New connections who haven't spawned yet won't appear until their first spawn.</li>

@@ -23,7 +23,12 @@ storage:
   matches_dir: /opt/hud-observer/matches
 
 frontend:
-  origin: "http://74.91.112.242:3000"
+  # Socket.IO CORS origin — MUST equal the origin the overlay is served from.
+  # Production serves single-origin behind nginx at https://hud.ktpdod.com
+  # (see deploy/nginx/hud.ktpdod.com.conf); the frontend bundle is built against
+  # that same origin (deploy/deploy.sh). A wildcard is invalid here because the
+  # Socket.IO server sets credentials:true.
+  origin: "https://hud.ktpdod.com"
 
 auth:
   steam_api_key: ""
