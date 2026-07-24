@@ -2,34 +2,34 @@
 #
 # proxy-smoke.sh — verify the single-origin reverse proxy actually routes.
 #
-# The overlay is served single-origin behind nginx (https://hud.ktpdod.com — same
-# string local and prod) so the browser + OBS's CEF never hit a cross-origin /
-# mixed-content wall and Socket.IO upgrades to wss. This smoke asserts the three
+# The overlay is served single-origin behind nginx (local: https://localhost;
+# prod: https://hud.ktpdod.com) so the browser + OBS's CEF never hit a cross-origin
+# / mixed-content wall and Socket.IO upgrades to wss. This smoke asserts the three
 # routes fan out correctly through that ONE origin:
 #
 #   GET  /health                                → backend REST  (:3001) → {"status":"ok"}
 #   GET  /socket.io/?EIO=4&transport=polling    → Socket.IO      (:4000) → EIO handshake (sid)
 #   GET  /                                       → React overlay (:3000) → HTML shell
 #
-# Defaults target the LOCAL docker :443 stack with zero setup — no hosts entry
-# needed (curl --resolve maps the name to loopback) and -k (this is a ROUTING
-# test; the trusted padlock is a browser/OBS check, not this script's job).
+# Defaults target the LOCAL docker :443 stack with zero setup — https://localhost
+# (resolves natively, no hosts file) and -k (this is a ROUTING test; the trusted
+# padlock is a browser/OBS check, not this script's job).
 #
-#   npm run proxy:smoke                                   # local https://hud.ktpdod.com (:443)
-#   BASE_URL=http://localhost SMOKE_RESOLVE= npm run proxy:smoke   # local :80 (redirects → :443)
-#   BASE_URL=https://hud.ktpdod.com SMOKE_RESOLVE= SMOKE_STRICT=1 npm run proxy:smoke  # PROD (real DNS + valid cert)
+#   npm run proxy:smoke                                   # local https://localhost (:443)
+#   BASE_URL=http://localhost npm run proxy:smoke         # local :80 (redirects → :443)
+#   BASE_URL=https://hud.ktpdod.com SMOKE_STRICT=1 npm run proxy:smoke  # PROD (real DNS + valid cert)
 #
 # Env:
-#   BASE_URL      origin to probe            (default https://hud.ktpdod.com)
-#   SMOKE_RESOLVE curl --resolve mapping     (default hud.ktpdod.com:443:127.0.0.1; set empty to use real DNS)
+#   BASE_URL      origin to probe            (default https://localhost)
+#   SMOKE_RESOLVE optional curl --resolve mapping (e.g. hud.ktpdod.com:443:127.0.0.1 to test that name locally)
 #   SMOKE_STRICT  1 = validate the cert (no -k); default off for the local self-signed/mkcert case
 #
 # Exit codes: 0 all routes healthy · 1 a route failed · 3 env problem (no curl / nothing listening)
 
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-https://hud.ktpdod.com}"
-SMOKE_RESOLVE="${SMOKE_RESOLVE-hud.ktpdod.com:443:127.0.0.1}"
+BASE_URL="${BASE_URL:-https://localhost}"
+SMOKE_RESOLVE="${SMOKE_RESOLVE-}"
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }

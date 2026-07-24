@@ -3,7 +3,8 @@ import gameEvents from '../gameEvents';
 
 import './Replay.css';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+// Origin-relative (see MatchPicker): unset ⇒ same-origin relative `/api/...`.
+const API_URL = process.env.REACT_APP_API_URL || '';
 
 /**
  * Replay engine — fetches events.jsonl for a match and plays them through

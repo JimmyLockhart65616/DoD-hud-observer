@@ -47,13 +47,19 @@ proxied (direct IP-restricted POST from game servers).
   box; we add a vhost — `deploy/nginx/hud.ktpdod.com.conf`). The frontend bundle
   is built against this origin (`deploy/deploy.sh`); `frontend.origin` in the
   online config must equal it.
-- **Local docker**: **byte-identical** `https://hud.ktpdod.com` on :443 (:80
-  redirect) → nginx inside the `data` container (`data-server/nginx-hud.conf`,
-  supervisord `[program:nginx]`). Same origin string as prod, so the image *is*
-  the prod frontend artifact. Cert = mkcert (mounted at `data-server/certs/`,
-  gitignored) or a `start.sh` self-signed fallback; hosts file maps
-  `hud.ktpdod.com`→127.0.0.1. Setup runbook in [deploy/README.md](deploy/README.md);
-  verify with `npm run proxy:smoke`.
+- **Local docker**: `https://localhost` on :443 (:80 redirect) → nginx inside the
+  `data` container (`data-server/nginx-hud.conf`, supervisord `[program:nginx]`).
+  Zero setup: the frontend is **origin-relative** (no baked hostname — same image
+  serves localhost and prod), and `start.sh` self-signs a fallback cert (SAN
+  `localhost`) so `up` just works (browser warns once). Optional mkcert cert in
+  `data-server/certs/` (gitignored) for a trusted padlock / OBS. Verify with
+  `npm run proxy:smoke`; runbook in [deploy/README.md](deploy/README.md).
+
+The frontend reads `REACT_APP_SOCKET_URL`/`REACT_APP_API_URL` when set (dev:
+`npm run web` uses split ports) and otherwise falls back to
+`window.location.origin` / relative `/api` — so single-origin proxy builds carry
+no origin at all. Prod's `deploy.sh` still injects `https://hud.ktpdod.com`
+inline (to beat the developer's `.env.local` without deleting it).
 
 ### Deployment Modes
 - **Local/test**: everything on one PC, AMXX sends to 127.0.0.1:9000

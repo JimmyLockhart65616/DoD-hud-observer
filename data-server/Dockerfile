@@ -32,24 +32,16 @@ RUN cd web && npm ci --legacy-peer-deps
 
 # Web source + build
 COPY web/ ./web/
-# CRA picks up web/.env.local during build, which on this repo is intentionally
-# port-shifted to 3011/4010 for the host-side `npm run web` dev workflow. That
-# same .env.local would silently override .env.production inside the container
-# and bake the wrong URLs into the bundle. Pass the docker-stack ports inline
-# so the resulting bundle calls the host:3001 / host:4000 the data container
-# actually exposes. Production overrides come from build-arg / CI env.
-# Single-origin, byte-identical to prod: the bundle talks to the in-container
-# nginx reverse proxy at https://hud.ktpdod.com (:443, published to the host as
-# :80/:443), NOT the raw :3001/:4000 ports. nginx fans out /api, /socket.io, and
-# / to the app processes; reach it by pointing hud.ktpdod.com at 127.0.0.1 in
-# your hosts file. Same origin string as the prod deploy (deploy/deploy.sh), so
-# this image IS the prod frontend artifact. Override via build-arg if needed.
-ARG REACT_APP_API_URL=https://hud.ktpdod.com
-ARG REACT_APP_SOCKET_URL=https://hud.ktpdod.com
-RUN cd web && rm -f .env.local && \
-    REACT_APP_API_URL=$REACT_APP_API_URL \
-    REACT_APP_SOCKET_URL=$REACT_APP_SOCKET_URL \
-    npm run build
+# Origin-relative build (single-origin proxy deployments). We DON'T bake a
+# REACT_APP_* origin: with none set, the bundle dials whatever origin it's served
+# from (window.location.origin / relative /api) — see web/.../Socket.jsx. So this
+# one image works behind nginx at https://localhost (local) OR https://hud.ktpdod.com
+# (prod) with no rebuild and no baked hostname. `rm -f .env.local` is still
+# required — CRA loads it in every mode and it's port-shifted to 3011/4010 for the
+# host `npm run web` workflow, which would otherwise bake the wrong URLs here.
+# (Prod via deploy/deploy.sh instead injects REACT_APP_*=https://hud.ktpdod.com
+# inline to beat the developer's real .env.local without deleting it.)
+RUN cd web && rm -f .env.local && npm run build
 
 # Install 'serve' for static file serving
 RUN npm install -g serve

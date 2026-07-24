@@ -104,40 +104,47 @@ Socket.IO CORS origin). Verify end to end: `curl -sSf https://hud.ktpdod.com/hea
 then load the OBS URL during a live/mocker match and confirm the overlay renders
 with a clean dev console.
 
-#### Local mirror — byte-identical `https://hud.ktpdod.com`
+#### Local mirror — `https://localhost` (zero setup)
 
 The docker stack runs the same nginx single-origin proxy **on :443 with a :80
-redirect**, and the image is built against the **same origin string** as prod
-(`https://hud.ktpdod.com`), so the local container is literally the prod frontend
-artifact. To reach it with a trusted padlock (browser **and** OBS):
+redirect** as prod. The frontend is **origin-relative** (no baked hostname), so
+the same image serves `https://localhost` locally and `https://hud.ktpdod.com` in
+prod. No hosts file, no mkcert — `start.sh` self-signs a fallback cert (SAN
+includes `localhost`) so nginx just starts:
 
 ```bash
-# 1. One-time host setup
-choco install mkcert            # or: scoop install mkcert  (Windows)
-mkcert -install                 # adds a local CA to the OS trust store
+docker compose up -d --build                       # this repo (data only)
+#   or the whole KTP stack (game servers → plugin → ingest → overlay):
+#   cd ../KTPInfrastructure && DOD_HUD_PATH=../DoD-hud-observer make local-up-full
 
-# 2. Issue the cert into the gitignored mount dir (from the repo root)
+npm run proxy:smoke                                # zero-arg check (https://localhost, -k)
+#   then open  https://localhost/screen?server=...
+```
+
+Because the fallback cert is self-signed, the browser warns once — click
+**Advanced → Proceed** (Chrome: type `thisisunsafe` on the warning; Firefox: add
+the exception). The page is then a real HTTPS/`wss` secure context, exactly as in
+prod. The cert dir (`data-server/certs/`) is gitignored (machine-specific).
+
+##### Optional — trusted green padlock (and OBS browser source)
+
+OBS's embedded Chromium won't click through a self-signed cert, so for OBS (or if
+you just want no warning) drop in a locally-trusted mkcert cert — no rebuild
+needed, the container picks it up on next start:
+
+```bash
+choco install mkcert && mkcert -install            # or: scoop install mkcert
 mkdir -p data-server/certs
 mkcert -cert-file data-server/certs/hud.ktpdod.com.pem \
        -key-file  data-server/certs/hud.ktpdod.com-key.pem \
-       hud.ktpdod.com localhost 127.0.0.1
-
-# 3. Point the name at loopback — add to C:\Windows\System32\drivers\etc\hosts
-#    (admin):   127.0.0.1  hud.ktpdod.com
-
-# 4. Bring it up (repo standalone, or the full KTP stack from KTPInfrastructure)
-docker compose up -d --build                       # this repo (data only)
-#   or, whole stack (game servers → plugin → ingest → overlay):
-#   cd ../KTPInfrastructure && DOD_HUD_PATH=../DoD-hud-observer make local-up-full
-
-# 5. Verify + browse
-npm run proxy:smoke                                # zero-arg local check (uses --resolve + -k)
-#   then open  https://hud.ktpdod.com/screen?server=...   (green padlock)
+       localhost 127.0.0.1                          # add hud.ktpdod.com to test that exact origin
+docker compose restart data                         # picks up the mounted cert
 ```
 
-Skip mkcert and `start.sh` self-signs a fallback cert so nginx still starts —
-the stack works, the browser just warns until you drop in the mkcert cert. The
-cert dir (`data-server/certs/`) is gitignored (machine-specific).
+To exercise the **exact prod origin** `https://hud.ktpdod.com` locally, also add
+`127.0.0.1  hud.ktpdod.com` to your hosts file and set the backend
+`frontend.origin` to `https://hud.ktpdod.com` — but `https://localhost` covers
+the full HTTPS/`wss`/single-origin path without it.
 
 ### Config
 

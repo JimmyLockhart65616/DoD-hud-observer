@@ -9,7 +9,8 @@
 #   docker compose down         # stop
 #   docker compose logs -f      # tail logs
 #
-# Ports (byte-identical to prod — reach the overlay at https://hud.ktpdod.com):
+# Ports — reach the overlay at https://localhost (single origin, HTTPS, no hosts
+# file needed; the same nginx setup runs prod at https://hud.ktpdod.com):
 #   443  — nginx single-origin reverse proxy, TLS (overlay + /api + /socket.io) ← use this
 #   80   — nginx :80→:443 redirect
 #   3000 — React frontend (direct; normally reached through nginx)
@@ -17,9 +18,9 @@
 #   4000 — Socket.IO (direct; normally reached through nginx)
 #   8088 — HTTP ingest (AMXX plugin POSTs here; NOT proxied)
 #
-# Prereqs for the trusted-padlock browser test (see deploy/README.md → Friendly URL):
-#   - hosts file: 127.0.0.1 hud.ktpdod.com
-#   - mkcert cert in ./data-server/certs (else start.sh self-signs a fallback)
+# TLS cert: start.sh self-signs a fallback (SAN localhost) so `up` just works —
+# the browser warns once until you accept it. For a zero-warning padlock (or OBS),
+# drop a mkcert cert in ./data-server/certs (see deploy/README.md → Friendly URL).
 
 services:
   data:
@@ -27,11 +28,11 @@ services:
       context: .
       dockerfile: data-server/Dockerfile
     environment:
-      # The frontend bundle is built against https://hud.ktpdod.com, so
-      # Socket.IO's CORS origin must match. Set via env rather than editing the
-      # dev-shared config/local/config.yaml (whose frontend.origin stays :3000
-      # for the host `npm run backend` workflow).
-      HUD_FRONTEND_ORIGIN: https://hud.ktpdod.com
+      # The overlay is served origin-relative at https://localhost, so Socket.IO's
+      # credentials CORS origin must match. Set via env rather than editing the
+      # dev-shared config/local/config.yaml (whose frontend.origin stays :3000 for
+      # the host `npm run backend` workflow).
+      HUD_FRONTEND_ORIGIN: https://localhost
     ports:
       - "443:443"
       - "80:80"

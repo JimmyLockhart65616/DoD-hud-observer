@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Container, Row, Col, Table, Badge } from 'react-bootstrap';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+// Origin-relative: unset REACT_APP_API_URL (single-origin proxy deployments) ⇒
+// same-origin relative fetches (`/api/...`), so one build works at localhost or
+// hud.ktpdod.com. Dev workflows set REACT_APP_API_URL explicitly.
+const API_URL = process.env.REACT_APP_API_URL || '';
 
 function MatchPicker() {
     const [servers, setServers] = useState([]);

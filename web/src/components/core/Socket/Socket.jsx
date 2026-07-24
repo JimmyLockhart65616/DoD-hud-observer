@@ -3,7 +3,12 @@ import socketio from 'socket.io-client';
 import create from 'zustand';
 import gameEvents from '../gameEvents';
 
-const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://localhost:4000';
+// Origin-relative: when REACT_APP_SOCKET_URL is unset (the single-origin proxy
+// deployments — local docker at https://localhost, prod at https://hud.ktpdod.com),
+// dial the SAME origin the page is served from, so one build works at any origin
+// with no baked hostname and no mixed-content mismatch. Dev workflows
+// (`npm run web`) set REACT_APP_SOCKET_URL explicitly and keep their split ports.
+const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || window.location.origin;
 export const socket = socketio.connect(SOCKET_URL, { withCredentials: true });
 
 // Read ?match=, ?server=, and ?replay= from URL
