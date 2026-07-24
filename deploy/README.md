@@ -104,8 +104,40 @@ Socket.IO CORS origin). Verify end to end: `curl -sSf https://hud.ktpdod.com/hea
 then load the OBS URL during a live/mocker match and confirm the overlay renders
 with a clean dev console.
 
-The local docker stack mirrors this with nginx inside the `data` container at
-`http://localhost:8080` — smoke it with `npm run proxy:smoke`.
+#### Local mirror — byte-identical `https://hud.ktpdod.com`
+
+The docker stack runs the same nginx single-origin proxy **on :443 with a :80
+redirect**, and the image is built against the **same origin string** as prod
+(`https://hud.ktpdod.com`), so the local container is literally the prod frontend
+artifact. To reach it with a trusted padlock (browser **and** OBS):
+
+```bash
+# 1. One-time host setup
+choco install mkcert            # or: scoop install mkcert  (Windows)
+mkcert -install                 # adds a local CA to the OS trust store
+
+# 2. Issue the cert into the gitignored mount dir (from the repo root)
+mkdir -p data-server/certs
+mkcert -cert-file data-server/certs/hud.ktpdod.com.pem \
+       -key-file  data-server/certs/hud.ktpdod.com-key.pem \
+       hud.ktpdod.com localhost 127.0.0.1
+
+# 3. Point the name at loopback — add to C:\Windows\System32\drivers\etc\hosts
+#    (admin):   127.0.0.1  hud.ktpdod.com
+
+# 4. Bring it up (repo standalone, or the full KTP stack from KTPInfrastructure)
+docker compose up -d --build                       # this repo (data only)
+#   or, whole stack (game servers → plugin → ingest → overlay):
+#   cd ../KTPInfrastructure && DOD_HUD_PATH=../DoD-hud-observer make local-up-full
+
+# 5. Verify + browse
+npm run proxy:smoke                                # zero-arg local check (uses --resolve + -k)
+#   then open  https://hud.ktpdod.com/screen?server=...   (green padlock)
+```
+
+Skip mkcert and `start.sh` self-signs a fallback cert so nginx still starts —
+the stack works, the browser just warns until you drop in the mkcert cert. The
+cert dir (`data-server/certs/`) is gitignored (machine-specific).
 
 ### Config
 

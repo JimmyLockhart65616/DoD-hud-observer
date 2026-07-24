@@ -57,5 +57,30 @@ done
 # Ensure demo directories exist
 mkdir -p /opt/hltv/instance-1/demos /opt/hltv/instance-2/demos
 
+# ============================================
+# TLS cert for the nginx single-origin proxy
+# ============================================
+# nginx serves https://hud.ktpdod.com on :443 reading its cert from $CERT_DIR (a
+# WRITABLE in-image dir). Preferred cert = a mkcert cert bind-mounted READ-ONLY at
+# $CERT_SRC (locally trusted → green padlock in browser + OBS); copy it into
+# $CERT_DIR. If none is mounted, self-sign into $CERT_DIR so nginx still starts
+# and the :443/wss path is exercisable (browser warns until you drop in mkcert).
+# The read-only mount / writable-read split lets the fallback write without
+# hitting the mount's EROFS. Mirrors prod, where certbot supplies the cert.
+CERT_DIR=/etc/nginx/certs
+CERT_SRC=/etc/nginx/certs-src
+mkdir -p "$CERT_DIR"
+if [ -f "$CERT_SRC/hud.ktpdod.com.pem" ] && [ -f "$CERT_SRC/hud.ktpdod.com-key.pem" ]; then
+    echo "[data-server] Using mounted TLS cert from $CERT_SRC (trusted if mkcert)"
+    cp "$CERT_SRC/hud.ktpdod.com.pem" "$CERT_SRC/hud.ktpdod.com-key.pem" "$CERT_DIR/"
+else
+    echo "[data-server] No mounted TLS cert — self-signing a fallback (mount a mkcert cert for a trusted padlock)"
+    openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+        -keyout "$CERT_DIR/hud.ktpdod.com-key.pem" \
+        -out    "$CERT_DIR/hud.ktpdod.com.pem" \
+        -subj "/CN=hud.ktpdod.com" \
+        -addext "subjectAltName=DNS:hud.ktpdod.com,DNS:localhost,IP:127.0.0.1" 2>/dev/null
+fi
+
 echo "[data-server] Starting all services via supervisord..."
 exec supervisord -n -c /etc/supervisor/conf.d/data-server.conf

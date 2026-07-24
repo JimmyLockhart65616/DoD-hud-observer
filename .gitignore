@@ -51,3 +51,8 @@ config/online/config.yaml
 # assets/weapons-src.zip (provenance); the extracted working dir is local-only.
 # Regenerate the committed PNGs with `npm run assets:weapons`.
 /assets/weapons-src/
+
+# Local TLS certs for the docker nginx :443 mirror — machine-specific mkcert
+# output (or a self-signed fallback), never committed. Generate per
+# deploy/README.md → Friendly URL.
+/data-server/certs/

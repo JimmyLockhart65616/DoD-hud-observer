@@ -47,9 +47,13 @@ proxied (direct IP-restricted POST from game servers).
   box; we add a vhost — `deploy/nginx/hud.ktpdod.com.conf`). The frontend bundle
   is built against this origin (`deploy/deploy.sh`); `frontend.origin` in the
   online config must equal it.
-- **Local docker**: `http://localhost:8080` → nginx inside the `data` container
-  (`data-server/nginx-hud.conf`, supervisord `[program:nginx]`). Verify routing
-  with `npm run proxy:smoke`.
+- **Local docker**: **byte-identical** `https://hud.ktpdod.com` on :443 (:80
+  redirect) → nginx inside the `data` container (`data-server/nginx-hud.conf`,
+  supervisord `[program:nginx]`). Same origin string as prod, so the image *is*
+  the prod frontend artifact. Cert = mkcert (mounted at `data-server/certs/`,
+  gitignored) or a `start.sh` self-signed fallback; hosts file maps
+  `hud.ktpdod.com`→127.0.0.1. Setup runbook in [deploy/README.md](deploy/README.md);
+  verify with `npm run proxy:smoke`.
 
 ### Deployment Modes
 - **Local/test**: everything on one PC, AMXX sends to 127.0.0.1:9000

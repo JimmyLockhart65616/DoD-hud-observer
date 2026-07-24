@@ -38,13 +38,14 @@ COPY web/ ./web/
 # and bake the wrong URLs into the bundle. Pass the docker-stack ports inline
 # so the resulting bundle calls the host:3001 / host:4000 the data container
 # actually exposes. Production overrides come from build-arg / CI env.
-# Single-origin: the bundle talks to the in-container nginx reverse proxy (:80,
-# published to the host as :8080), NOT the raw :3001/:4000 ports. This mirrors
-# production, where the frontend is built against https://hud.ktpdod.com and
-# nginx fans out /api, /socket.io, and / to the app processes. Override via
-# build-arg for a different local origin.
-ARG REACT_APP_API_URL=http://localhost:8080
-ARG REACT_APP_SOCKET_URL=http://localhost:8080
+# Single-origin, byte-identical to prod: the bundle talks to the in-container
+# nginx reverse proxy at https://hud.ktpdod.com (:443, published to the host as
+# :80/:443), NOT the raw :3001/:4000 ports. nginx fans out /api, /socket.io, and
+# / to the app processes; reach it by pointing hud.ktpdod.com at 127.0.0.1 in
+# your hosts file. Same origin string as the prod deploy (deploy/deploy.sh), so
+# this image IS the prod frontend artifact. Override via build-arg if needed.
+ARG REACT_APP_API_URL=https://hud.ktpdod.com
+ARG REACT_APP_SOCKET_URL=https://hud.ktpdod.com
 RUN cd web && rm -f .env.local && \
     REACT_APP_API_URL=$REACT_APP_API_URL \
     REACT_APP_SOCKET_URL=$REACT_APP_SOCKET_URL \
@@ -64,6 +65,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     supervisor \
     nginx \
+    openssl \
     lib32gcc-s1 \
     lib32stdc++6 \
     lib32z1 \
@@ -114,7 +116,8 @@ COPY data-server/start.sh /start.sh
 RUN chmod +x /start.sh
 
 # Ports:
-#   80    — nginx single-origin reverse proxy (overlay + /api + /socket.io)
+#   443   — nginx single-origin reverse proxy, TLS (overlay + /api + /socket.io)
+#   80    — nginx :80→:443 redirect (mirrors prod certbot)
 #   3000  — React frontend (static, direct — behind nginx in normal use)
 #   3001  — REST API (direct — behind nginx in normal use)
 #   4000  — Socket.IO (direct — behind nginx in normal use)
@@ -123,6 +126,6 @@ RUN chmod +x /start.sh
 #   27021 — HLTV proxy 2
 #   27500 — HLStatsX log receiver (UDP)
 #   3306  — MySQL
-EXPOSE 80 3000 3001 4000 8088 27020 27021 27500 3306
+EXPOSE 443 80 3000 3001 4000 8088 27020 27021 27500 3306
 
 CMD ["/start.sh"]
