@@ -23,11 +23,17 @@ storage:
   matches_dir: /opt/hud-observer/matches
 
 frontend:
-  # Socket.IO CORS origin — MUST equal the origin the overlay is served from.
+  # Socket.IO CORS origin(s) — MUST include the origin the overlay is served from.
   # Production serves single-origin behind nginx at https://hud.ktpdod.com
   # (see deploy/nginx/hud.ktpdod.com.conf); the frontend bundle is built against
   # that same origin (deploy/deploy.sh). A wildcard is invalid here because the
   # Socket.IO server sets credentials:true.
+  #
+  # Comma-separated for a URL migration (several serving origins share one
+  # backend), e.g. keep a legacy http://<ip>:3000 alive while OBS sources move to
+  # the friendly URL: "https://hud.ktpdod.com,http://74.91.112.242:3000".
+  # (In prod this is set via HUD_FRONTEND_ORIGIN on the systemd unit, which
+  # overrides this file.)
   origin: "https://hud.ktpdod.com"
 
 auth:

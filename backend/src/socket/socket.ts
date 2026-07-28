@@ -15,9 +15,17 @@ import { getServerSnapshot } from '../handler/ingest';
 export function createSocketServer(origin: string, recorder: MatchRecorder) {
     const httpServer = createServer();
 
+    // frontend.origin may be a comma-separated list so several serving origins
+    // can share one backend during a URL migration (e.g. the new
+    // https://hud.ktpdod.com single-origin proxy AND the legacy
+    // http://<ip>:3000 that existing OBS sources still point at). credentials:true
+    // forbids a wildcard, so we pass the explicit allow-list to Socket.IO (it
+    // accepts a string or string[]). Single value → plain string (unchanged).
+    const allowedOrigins = origin.split(',').map((s) => s.trim()).filter(Boolean);
+
     const io = new Server(httpServer, {
         cors: {
-            origin,
+            origin: allowedOrigins.length <= 1 ? (allowedOrigins[0] ?? origin) : allowedOrigins,
             methods: ['GET', 'POST'],
             credentials: true,
         },
