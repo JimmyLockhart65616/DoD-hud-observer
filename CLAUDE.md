@@ -28,11 +28,43 @@ Data Server (or local dev machine)
        └─ REST API on :3001 (teams, players, matches)
 
   └─ React frontend (this repo /web)
-       └─ OBS browser source at http://localhost:3000/screen
+       ├─ OBS browser source at http://localhost:3000/screen
+       └─ HQ operations board at http://localhost:3000/hq (all servers, one screen)
 ```
 
+### HQ / Operations Board (`/hq`)
+
+A wall display showing every reporting server at once — status, map, score, half
+clock, flag ownership and per-player K/D — for a venue monitor. One full-width
+strip per server, ordered by hostname, authored on a fixed 1920×1080 canvas that
+`transform: scale()`s to fit any display (`?scale=` overrides for on-site nudging).
+
+Deliberately **polls `GET /api/hq` at 1 Hz instead of using Socket.IO**:
+`Socket.jsx` connects at module scope and its Zustand store + 8 module globals are
+a hard singleton, so it cannot serve N servers on one page. Nothing under
+`web/src/components/hq/` may import from `core/Socket/Socket` — enforced by
+`Hq.socketfree.test.js`, which also asserts every `Hq.css` selector is `.hq-`
+prefixed (CRA emits one global stylesheet shared with the live overlay's
+`Screen.css`, so an unprefixed rule would restyle `/screen`).
+
+`/api/hq` (`backend/src/handler/hqBoard.ts`) is a read-only projection over the
+per-server state cache in `ingest.ts` + MatchRecorder + MetricsCollector, composed
+server-side so every field on a strip comes from one instant. Two notes:
+
+- **It reflects the post-delay cache.** `updateServerState` runs inside
+  `makeFireToSockets`, i.e. after the HLTV delay buffer, so any server in
+  `hltv_sync.servers` is shown ~`delaySeconds` behind live (60s on the league
+  fleet). Surfaced per strip as `delayActive`/`delaySeconds`. Servers absent from
+  that config are effectively live — the lag is a config property, not a code one.
+- **Statuses** (first match wins): `NO_SIGNAL` (no ingest <60s) → `STALE`
+  (signal, no cache — the backend-restart window) → `BETWEEN` → `LIVE` (a round
+  has begun) → `WARMUP`. `BETWEEN` keys on the additive `matchActive` field, NOT
+  on `half`, which `ktp_match_end` deliberately leaves set. Score/clock/flags are
+  suppressed on non-LIVE/WARMUP strips: the cache is never evicted, so an offline
+  server would otherwise show a client-side clock ticking down forever.
+
 ### Ports
-- `3000` — React dev server (OBS browser source)
+- `3000` — React dev server (OBS browser source `/screen`, HQ board `/hq`)
 - `3001` — Node.js backend REST API
 - `4000` — Internal Socket.IO server (backend ↔ frontend)
 - `8088` — HTTP ingest endpoint (plugin POSTs events here)
@@ -627,10 +659,13 @@ KTPInfrastructure as a sibling directory (same as the KTPAMXX hook).
 - `backend/src/handler/ingest.ts` — HTTP ingest endpoint (POST /ingest, X-Auth-Key)
 - `backend/src/handler/matchRecorder.ts` — per-match events.jsonl + metadata.json
 - `backend/src/handler/metrics.ts` — /metrics endpoint (EPS, per-source, latency)
+- `backend/src/handler/hqBoard.ts` — `/api/hq` projection for the HQ board (see above)
 - `backend/src/config.ts` — YAML config loader with env-var overrides
 - `backend/src/socket/socket.ts` — Socket.IO rooms (matchId-keyed)
-- `backend/src/routes/apiRouter.ts` — REST API for teams/players/matches
+- `backend/src/app.ts` — **all** REST routes, defined inline (there is no
+  `routes/apiRouter.ts`; the only `Router()` in the repo is `createIngestRouter`)
 - `web/src/components/core/Socket/Socket.jsx` — all game state logic (Zustand store + event handlers)
+- `web/src/components/hq/` — HQ operations board (`/hq`); polls REST, never imports Socket.jsx
 - `web/src/components/screen/api/api.js` — weapon name → display info mapping
 - `web/src/components/screen/Example.jsx` — main HUD layout
 - `web/src/components/core/StatsBoard/StatsTable.jsx` — the per-team stat table, shared by the on-air board and the caster page

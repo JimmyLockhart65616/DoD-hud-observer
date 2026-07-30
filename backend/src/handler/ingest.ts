@@ -45,6 +45,11 @@ interface ServerState {
     halftime_summary: any | null; // latest player_stats_summary with reason half_end —
                                   // replayed to late joiners so a freshly-loaded OBS
                                   // page at halftime still auto-shows the stats board
+    map: string | null;           // last enveloped event's map. HQ board only — no
+                                  // reader in the socket/overlay path.
+    matchActive: boolean;         // true between ktp_match_start and ktp_match_end.
+                                  // HQ board only. Deliberately separate from `half`,
+                                  // which is never cleared (see the ktp_match_end arm).
 }
 
 const serverStates = new Map<string, ServerState>();
@@ -60,6 +65,8 @@ function getOrCreateState(server: string): ServerState {
             half: null,
             round_phase: null,
             halftime_summary: null,
+            map: null,
+            matchActive: false,
         });
     }
     return serverStates.get(server)!;
@@ -83,6 +90,11 @@ function updateServerState(server: string, event: any): void {
             if (event.event === 'ktp_match_start' && event.half != null) {
                 state.half = event.half;
             }
+            // HQ board only. `half` above is deliberately NOT cleared on
+            // ktp_match_end — getServerSnapshot replays half_start from it to
+            // seed a late joiner's HUD — so it can't double as "a match is
+            // running". Hence this separate flag.
+            state.matchActive = (event.event === 'ktp_match_start');
             break;
         case 'player_connect':
             state.players.set(event.user_id, {
@@ -237,6 +249,12 @@ function updateServerState(server: string, event: any): void {
     if (uid && state.players.has(uid)) {
         state.players.get(uid).lastSeen = now;
     }
+
+    // HQ board only, no reader in the socket/overlay path. Captured here rather
+    // than in a ktp_match_start arm because every enveloped plugin event carries
+    // `map` — so one assignment covers all of them, and the board still knows
+    // the map after a mid-match backend restart (which starts this cache empty).
+    if (event.map) state.map = event.map;
 }
 
 /**
@@ -345,6 +363,112 @@ export function getServerSnapshot(server: string): string[] {
     }
 
     return events;
+}
+
+// ─── HQ board projection (read-only) ────────────────────────────────────────
+// Backs GET /api/hq (see handler/hqBoard.ts). Returns plain copies only —
+// `serverStates` stays module-private so no consumer can mutate live reducer
+// state out from under the overlay.
+//
+// This shares two behaviours with getServerSnapshot VERBATIM, on purpose: the
+// PLAYER_STALE_MS + allies/axis filter, and the timeleft age-adjustment. If
+// they ever diverge, the HQ board and the broadcast overlay would disagree
+// about who is playing and what the clock reads — the one failure mode that
+// makes a wall display worse than no wall display.
+
+export interface CachedServerPlayer {
+    user_id: string;
+    name: string;
+    kills: number;
+    deaths: number;
+}
+
+export interface CachedServerFlag {
+    flag_id: any;
+    flag_name: string;
+    owner: string | null;
+}
+
+export interface CachedServerView {
+    hasCache: boolean;
+    map: string | null;
+    half: number | null;
+    roundPhase: 'freeze' | 'live' | 'end' | null;
+    matchActive: boolean;
+    alliesScore: number | null;
+    axisScore: number | null;
+    timeleft: number | null;   // age-adjusted to call time
+    flags: CachedServerFlag[];
+    allies: CachedServerPlayer[];
+    axis: CachedServerPlayer[];
+}
+
+/** Hostnames with a state-cache entry (i.e. that have had ≥1 event released). */
+export function listCachedServers(): string[] {
+    return [...serverStates.keys()];
+}
+
+/** Roster order: most kills first, then fewest deaths, then name. */
+function byKills(a: CachedServerPlayer, b: CachedServerPlayer): number {
+    return (b.kills - a.kills) || (a.deaths - b.deaths) || a.name.localeCompare(b.name);
+}
+
+export function getCachedServerView(server: string): CachedServerView {
+    const state = serverStates.get(server);
+    if (!state) {
+        return {
+            hasCache: false, map: null, half: null, roundPhase: null,
+            matchActive: false, alliesScore: null, axisScore: null,
+            timeleft: null, flags: [], allies: [], axis: [],
+        };
+    }
+
+    const now = Date.now();
+
+    // Identical math to getServerSnapshot's replay path — see the long comment
+    // there. Fractional (no floor): the client floors only at display.
+    const timeleft = state.timeleft
+        ? Math.max(0, (state.timeleft.timeleft ?? 0) - (now - state.timeleftReleasedAt) / 1000)
+        : null;
+
+    const allies: CachedServerPlayer[] = [];
+    const axis: CachedServerPlayer[] = [];
+    state.players.forEach((p) => {
+        // Allowlist, same as getServerPlayerCount: HLTV bots sit on
+        // spectator/unassigned and must never reach the board.
+        if (p.team !== 'allies' && p.team !== 'axis') return;
+        if (now - (p.lastSeen ?? 0) > PLAYER_STALE_MS) return;
+        (p.team === 'allies' ? allies : axis).push({
+            user_id: p.user_id,
+            name: p.name ?? p.user_id,
+            kills: p.kills ?? 0,
+            deaths: p.deaths ?? 0,
+        });
+    });
+    allies.sort(byKills);
+    axis.sort(byKills);
+
+    return {
+        hasCache: true,
+        map: state.map,
+        half: state.half,
+        roundPhase: state.round_phase,
+        matchActive: state.matchActive,
+        alliesScore: state.team_score?.allies_score ?? null,
+        axisScore: state.team_score?.axis_score ?? null,
+        timeleft,
+        // Ownership ONLY. flag_captured updates `owner` and nothing else, and
+        // there is no flag_zone_players arm in updateServerState — so
+        // contested/progress/zone counts are frozen at whatever the last
+        // flags_init carried. Exposing them would render stale data as live.
+        flags: (state.flags?.flags ?? []).map((f: any) => ({
+            flag_id: f.flag_id,
+            flag_name: f.flag_name,
+            owner: f.owner ?? null,
+        })),
+        allies,
+        axis,
+    };
 }
 
 /**

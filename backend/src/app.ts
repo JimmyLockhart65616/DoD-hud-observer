@@ -5,6 +5,7 @@ import config from './config';
 import { MatchRecorder } from './handler/matchRecorder';
 import { MetricsCollector } from './handler/metrics';
 import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './handler/ingest';
+import { buildHqOverview } from './handler/hqBoard';
 import { createSocketServer } from './socket/socket';
 import { HltvSyncService } from './handler/hltvSync';
 import { HltvDelayBuffer, wireStrandedRescue } from './handler/hltvDelayBuffer';
@@ -92,6 +93,14 @@ app.get('/api/matches/stored', (_req, res) => {
     res.json({
         matches: recorder.listStoredMatches(),
     });
+});
+
+// HQ / Operations Board — one poll returns every reporting server's status,
+// score, roster and clock for the wall display at /hq. Read-only projection over
+// the state cache + recorder + metrics; shares no state or middleware with
+// /ingest and nothing the broadcast overlay reads.
+app.get('/api/hq', (_req, res) => {
+    res.json(buildHqOverview(recorder, metrics, hltvSync));
 });
 
 // Serve events.jsonl for a completed match (replay)

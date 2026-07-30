@@ -1,0 +1,501 @@
+/* ─── HQ / Operations Board ──────────────────────────────────────────────────
+ *
+ * SCOPING RULE — every selector in this file must begin with `.hq-`.
+ *
+ * CRA emits all imported CSS into ONE global stylesheet, and App.jsx statically
+ * imports the /screen overlay (which imports Screen.css). So this file and the
+ * production broadcast overlay share a stylesheet at runtime: a single
+ * unprefixed `body`, `#root`, `.score`, or `.flag-item` rule here would silently
+ * restyle the live overlay. No bare element selectors, no ids, no generic class
+ * names. Grep for a leading non-`.hq-` selector before deploying.
+ *
+ * The reverse also holds: Screen.css is already active on /hq, including
+ * `#root { background-color: transparent }` (it exists for OBS keying). That's
+ * why .hq-board paints its own background on its own fixed element rather than
+ * relying on the page background.
+ */
+
+.hq-board {
+  /* Design tokens, scoped to this subtree. Deliberately NOT :root — a global
+   * token file would mean editing Screen.css to consume it, which is risk for
+   * no benefit. Mirrors the overlay's hardcoded team colors. */
+  --hq-allies: #8fa847;
+  --hq-axis: #c43030;
+  --hq-chrome: #282c50;
+  --hq-chrome-2: #303661;
+  --hq-bg: #0b0d16;
+  --hq-ink: #e8e6df;
+  --hq-ink-dim: #8a8f9e;
+  --hq-ink-faint: #565b6b;
+  --hq-live: #7ee081;
+  --hq-warmup: #e0c04a;
+  --hq-dead: #4a4f5e;
+  --hq-warn: #e07a4a;
+  --hq-rule: rgba(255, 255, 255, 0.09);
+  /* System mono only — no webfont. A failed font fetch on venue wifi would
+   * reflow the entire board mid-event. The dossier register comes from
+   * uppercase + letter-spacing + designators, not from a specific typeface. */
+  --hq-mono: 'Consolas', 'DejaVu Sans Mono', 'Menlo', 'Courier New', monospace;
+
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: var(--hq-bg);
+  color: var(--hq-ink);
+  font-family: var(--hq-mono);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* Fixed authoring canvas, centred and scaled to fit by Hq.jsx. translate before
+ * scale so an oversized (pre-scale) box still centres instead of clipping at
+ * the top-left the way flex centring would. */
+.hq-canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1920px;
+  height: 1080px;
+  transform-origin: center center;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  box-sizing: border-box;
+}
+
+/* ─── Top bar ─────────────────────────────────────────────────────────────── */
+
+.hq-topbar {
+  height: 72px;
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 2px solid var(--hq-rule);
+}
+
+.hq-topbar-title {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 5px;
+}
+
+.hq-topbar-rule {
+  color: var(--hq-ink-faint);
+  margin: 0 4px;
+}
+
+.hq-topbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 16px;
+  letter-spacing: 2px;
+  color: var(--hq-ink-dim);
+}
+
+.hq-topbar-stat {
+  white-space: nowrap;
+}
+
+.hq-topbar-sep {
+  color: var(--hq-ink-faint);
+}
+
+.hq-topbar-clock {
+  margin-left: 10px;
+  padding-left: 16px;
+  border-left: 1px solid var(--hq-rule);
+  color: var(--hq-ink);
+  white-space: nowrap;
+  /* Fixed-width digits so the seconds ticking can't jiggle the layout. */
+  font-variant-numeric: tabular-nums;
+}
+
+.hq-chip {
+  padding: 3px 9px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  white-space: nowrap;
+}
+
+.hq-chip-delay {
+  color: var(--hq-warmup);
+}
+
+.hq-chip-warn {
+  color: var(--hq-warn);
+}
+
+/* ─── Strip grid ──────────────────────────────────────────────────────────── */
+
+/* `1fr` rows over a flexed container: N strips divide the remaining canvas
+ * height evenly, so the board holds its shape at 1 station (local dev) or 6
+ * (a fleet that gained a box) without overflowing. At 5 it lands on ~186px. */
+.hq-strips {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-auto-rows: 1fr;
+  gap: 10px;
+}
+
+.hq-strip {
+  display: grid;
+  grid-template-columns: 150px 200px 210px minmax(200px, 1fr) 380px 380px;
+  gap: 12px;
+  align-items: stretch;
+  padding: 8px 14px;
+  box-sizing: border-box;
+  min-height: 0;
+  background: linear-gradient(to right, var(--hq-chrome), var(--hq-chrome-2));
+  border-left: 5px solid var(--hq-dead);
+  overflow: hidden;
+}
+
+.hq-strip-live {
+  border-left-color: var(--hq-live);
+}
+
+.hq-strip-warmup {
+  border-left-color: var(--hq-warmup);
+}
+
+.hq-strip-stale {
+  border-left-color: var(--hq-warn);
+}
+
+/* Idle and offline stations recede so live games read first from across a room. */
+.hq-strip-between,
+.hq-strip-no_signal {
+  opacity: 0.62;
+}
+
+/* ─── Left rail: designator, name, status ─────────────────────────────────── */
+
+.hq-rail {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.hq-designator {
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--hq-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.hq-servername {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hq-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--hq-dead);
+}
+
+.hq-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.hq-strip-live .hq-status {
+  color: var(--hq-live);
+}
+
+.hq-strip-warmup .hq-status {
+  color: var(--hq-warmup);
+}
+
+.hq-strip-stale .hq-status {
+  color: var(--hq-warn);
+}
+
+/* ─── Context: map, half, players ─────────────────────────────────────────── */
+
+.hq-context {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  border-left: 1px solid var(--hq-rule);
+  padding-left: 14px;
+}
+
+.hq-map {
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hq-context-meta {
+  display: flex;
+  gap: 7px;
+  font-size: 14px;
+  letter-spacing: 1px;
+  color: var(--hq-ink-dim);
+  white-space: nowrap;
+}
+
+.hq-context-sep {
+  color: var(--hq-ink-faint);
+}
+
+.hq-matchtype {
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: var(--hq-ink-faint);
+  white-space: nowrap;
+}
+
+.hq-delay {
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: var(--hq-warmup);
+  white-space: nowrap;
+}
+
+/* ─── Score + clock ───────────────────────────────────────────────────────── */
+
+.hq-scoreblock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-left: 1px solid var(--hq-rule);
+  min-width: 0;
+}
+
+.hq-scores {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  line-height: 1;
+}
+
+.hq-score {
+  font-size: 44px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.hq-score-allies {
+  color: var(--hq-allies);
+}
+
+.hq-score-axis {
+  color: var(--hq-axis);
+}
+
+.hq-score-dash {
+  font-size: 22px;
+  color: var(--hq-ink-faint);
+}
+
+.hq-clock {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  font-variant-numeric: tabular-nums;
+  color: var(--hq-ink);
+}
+
+.hq-clock-frozen {
+  color: var(--hq-ink-dim);
+}
+
+/* ─── Flags ───────────────────────────────────────────────────────────────── */
+
+/* Fixed 3-column grid rather than flex-wrap: wrapping put 5 flags on the first
+ * row and 1 orphan on the second for a 6-flag map. A grid gives a tidy 3x2 for
+ * 6 flags and degrades predictably for the 3-, 4- and 5-flag maps. */
+.hq-flags {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: center;
+  gap: 6px 10px;
+  min-width: 0;
+  border-left: 1px solid var(--hq-rule);
+  padding-left: 14px;
+  overflow: hidden;
+}
+
+.hq-flag {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.hq-flag-pip {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  background: var(--hq-dead);
+  transform: rotate(45deg);
+}
+
+.hq-flag-allies .hq-flag-pip {
+  background: var(--hq-allies);
+}
+
+.hq-flag-axis .hq-flag-pip {
+  background: var(--hq-axis);
+}
+
+.hq-flag-name {
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: var(--hq-ink-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hq-flag-allies .hq-flag-name,
+.hq-flag-axis .hq-flag-name {
+  color: var(--hq-ink);
+}
+
+/* ─── Rosters ─────────────────────────────────────────────────────────────── */
+
+.hq-roster {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  border-left: 1px solid var(--hq-rule);
+  padding-left: 12px;
+  overflow: hidden;
+}
+
+.hq-roster-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  margin-bottom: 2px;
+}
+
+.hq-roster-allies .hq-roster-label {
+  color: var(--hq-allies);
+}
+
+.hq-roster-axis .hq-roster-label {
+  color: var(--hq-axis);
+}
+
+.hq-roster-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  /* Fixed row height: HqRoster always renders 6 rows so a short roster can't
+   * shrink its strip and shift every strip below it. */
+  height: 23px;
+  line-height: 23px;
+  min-width: 0;
+}
+
+.hq-roster-row-empty {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.hq-roster-name {
+  font-size: 17px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.hq-roster-kd {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+  letter-spacing: 1px;
+}
+
+.hq-kd-k {
+  font-weight: 700;
+}
+
+.hq-kd-sep {
+  color: var(--hq-ink-faint);
+  margin: 0 2px;
+}
+
+.hq-kd-d {
+  color: var(--hq-ink-dim);
+}
+
+.hq-roster-overflow {
+  font-size: 12px;
+  color: var(--hq-ink-faint);
+  letter-spacing: 1px;
+}
+
+/* Replaces both roster columns when nobody is on the server. */
+.hq-empty {
+  grid-column: span 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid var(--hq-rule);
+  font-size: 16px;
+  letter-spacing: 3px;
+  /* Not --hq-ink-faint: idle strips are already dimmed to 0.62 opacity, and
+   * faint-on-dimmed was unreadable across a room. */
+  color: var(--hq-ink-dim);
+  text-align: center;
+}
+
+/* ─── Nothing has reported yet ────────────────────────────────────────────── */
+
+.hq-awaiting {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.hq-awaiting-title {
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: 10px;
+  color: var(--hq-ink-dim);
+}
+
+.hq-awaiting-sub {
+  font-size: 17px;
+  letter-spacing: 2px;
+  color: var(--hq-ink-faint);
+}
