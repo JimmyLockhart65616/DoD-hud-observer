@@ -2017,10 +2017,16 @@ stock init_cp_index_remap() {
     // dod_donner — stock map, ships point_index=-1 on every CP. dodx array order
     // is [AxisHQ, AxisStreet, AlliedStreet, AlliedHQ, MainStreet]; allies->axis
     // geometry gives [AlliedHQ, AlliedStreet, MainStreet, AxisStreet, AxisHQ].
-    // UNVERIFIED — donner has 0 recorded HUD matches, so this comes from CP
-    // origins, not event data. It does agree with the saints2 pattern (the
-    // point_team_points=2 CP landing on DLL index 2). Confirm after its first
-    // match using the procedure above.
+    //
+    // Derived from CP origins and then corroborated against the operator's own
+    // map knowledge (2026-07-30) — AXISHQ is axis-first, AXISSTREET axis-second,
+    // ALLIEDSTREET allied-second, ALLIEDHQ allied-first, MAINSTREET the middle
+    // double-cap — which matches this permutation exactly. Structurally identical
+    // to saints2 too: 5 CPs, a single dod_capture_area on the neutral
+    // point_team_points=2 centre flag (numcap 2, 5s), landing on DLL index 2.
+    //
+    // Not yet confirmed from event data (donner has 0 recorded HUD matches). Run
+    // the procedure above after its first match to close that out.
     if (equal(mapname, "dod_donner")) {
         g_cp_dodx_of_dll[0] = 3;   // AlliedHQ
         g_cp_dodx_of_dll[1] = 2;   // AlliedStreet
