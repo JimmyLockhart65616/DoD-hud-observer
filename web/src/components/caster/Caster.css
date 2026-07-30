@@ -1,0 +1,464 @@
+/* ═══════════════════════════════════════════════════════════════════
+   CASTER REFERENCE PAGE (/caster)
+
+   Every rule is .caster-* prefixed. This page reuses the .stats-board-*
+   table and .flag-* strip from Screen.css, so the ONLY selectors here
+   that touch those are scoped under a .caster-* ancestor — nothing can
+   leak back into the broadcast overlay.
+
+   Target: a caster's second monitor at 1080p, read at arm's length.
+   Bigger type and looser rows than the OBS overlay on purpose.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.caster-page {
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 14px 18px 32px;
+  background-color: #0a0b14;
+  color: #d8dae8;
+  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.caster-page code {
+  color: #ffd700;
+  background-color: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.caster-page a { color: #8fb4ff; }
+
+.caster-empty {
+  padding: 48px;
+  font-size: 16px;
+}
+
+/* ── Header: score, clock, half, server ──────────────────────────── */
+
+.caster-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 10px;
+}
+
+.caster-scoreline {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-width: 0;
+}
+
+.caster-team {
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 2px;
+}
+
+.caster-score {
+  font-size: 34px;
+  font-weight: 900;
+  line-height: 1;
+  color: #fff;
+}
+
+.caster-clock {
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1;
+  color: #ffd700;
+  padding: 0 6px;
+}
+
+.caster-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: #8990b5;
+}
+
+.caster-half {
+  font-weight: 900;
+  font-size: 15px;
+  letter-spacing: 1px;
+  color: #d8dae8;
+}
+
+.caster-server {
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
+.caster-delay {
+  border: 1px solid rgba(143, 180, 255, 0.4);
+  border-radius: 10px;
+  padding: 1px 8px;
+  color: #8fb4ff;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  cursor: help;
+}
+
+/* Team colors, matched to the overlay's palette. */
+.caster-allies  { color: #c8e090; }
+.caster-axis    { color: #ffb8b8; }
+.caster-neutral,
+.caster-unknown { color: #9aa0c0; }
+.caster-dmg     { color: #ffd700; }
+.caster-vs      { color: #6b7192; padding: 0 2px; }
+
+/* ── Flags strip (reuses Flags/.flag-* from Screen.css) ──────────── */
+
+.caster-flags {
+  margin: 12px 0 4px;
+}
+
+/* .flags-container is an unpositioned flex row in Screen.css (the OBS grid
+   positioning lives in the .flags-bar wrapper, which this page doesn't use), so
+   it drops into document flow as-is. Only wrapping needs adding — maps can run
+   5 CPs and the panel is narrower than a 1280 OBS canvas. */
+.caster-flags .flags-container {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* ── Talking points strip ────────────────────────────────────────── */
+
+.caster-points {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  margin: 12px 0;
+  padding: 8px 12px;
+  background-color: rgba(255, 255, 255, 0.04);
+  border-left: 3px solid #ffd700;
+  border-radius: 3px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.caster-point {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.caster-point-label {
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  color: #6b7192;
+  text-transform: uppercase;
+}
+
+.caster-hot b { color: #ffd700; }
+
+/* ── Toolbar: scope toggle + freeze ──────────────────────────────── */
+
+.caster-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 14px 0 8px;
+}
+
+.caster-scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.caster-chip {
+  background-color: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 3px;
+  color: #aeb3d0;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  padding: 5px 11px;
+  cursor: pointer;
+}
+
+.caster-chip:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.caster-chip:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.caster-chip-on {
+  background-color: #ffd700;
+  border-color: #ffd700;
+  color: #2a2200;
+}
+
+.caster-freeze {
+  border-color: rgba(143, 180, 255, 0.45);
+  color: #8fb4ff;
+}
+
+.caster-chip-frozen {
+  background-color: #8fb4ff;
+  border-color: #8fb4ff;
+  color: #0a0b14;
+}
+
+.caster-warn {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffb347;
+  cursor: help;
+}
+
+.caster-frozen-banner {
+  background-color: rgba(143, 180, 255, 0.16);
+  border: 1px solid #8fb4ff;
+  border-radius: 3px;
+  color: #8fb4ff;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 1.5px;
+  padding: 7px 12px;
+  margin-bottom: 10px;
+  text-align: center;
+}
+
+/* ── Stats tables (reuses StatsTable/.stats-board-* from Screen.css) ── */
+
+/* Screen.css sizes the table for a 1280-wide OBS canvas; scale it up for a
+   monitor a caster actually reads from. Scoped under .caster-tables so the
+   on-air board is untouched. */
+.caster-tables {
+  align-items: flex-start;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.caster-tables .stats-board-table th,
+.caster-tables .stats-board-table td {
+  padding: 5px 12px;
+  font-size: 15px;
+}
+
+.caster-tables .stats-board-table th {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.caster-tables .stats-board-table tfoot tr.stats-board-totals td {
+  font-size: 13px;
+}
+
+.caster-tables .stats-board-player-col {
+  min-width: 150px;
+  max-width: 240px;
+}
+
+.caster-tables .stats-board-team-name {
+  font-size: 16px;
+  padding: 7px 0 5px;
+}
+
+.caster-tables .stats-board-nade-icon {
+  height: 15px;
+}
+
+/* Click-to-sort headers — only rendered when StatsTable gets an onSort prop,
+   i.e. only on this page. */
+.caster-tables .caster-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.caster-tables .caster-sortable:hover {
+  color: #fff;
+  background-color: rgba(255, 255, 255, 0.07);
+}
+
+.caster-tables .caster-sorted {
+  color: #ffd700;
+}
+
+.caster-idle {
+  color: #6b7192;
+  font-size: 13px;
+  font-style: italic;
+  margin: 12px 0;
+}
+
+/* ── Lower panels: loadouts + kill feed ──────────────────────────── */
+
+.caster-lower {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  margin-top: 22px;
+  align-items: flex-start;
+}
+
+.caster-panel {
+  flex: 1 1 340px;
+  /* Without this a flex item refuses to shrink below its content width and the
+     right edge clips off a narrow window — the same trap the HUD hit at 1280. */
+  min-width: 0;
+  background-color: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+  border-top: 2px solid rgba(255, 255, 255, 0.12);
+  padding: 10px 12px 12px;
+}
+
+.caster-panel-feed { flex: 1 1 420px; }
+
+.caster-panel h2 {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: #8990b5;
+  margin: 0 0 8px;
+}
+
+.caster-count {
+  color: #6b7192;
+  font-weight: 700;
+}
+
+.caster-loadout-cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.caster-loadouts {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.caster-loadout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Dimmed, not hidden — casters still want the roster while someone's dead. */
+.caster-loadout.caster-dead { opacity: 0.42; }
+
+.caster-loadout-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.caster-loadouts-allies .caster-loadout-name { color: #c8e090; }
+.caster-loadouts-axis   .caster-loadout-name { color: #ffb8b8; }
+
+.caster-loadout-class {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: #8990b5;
+}
+
+.caster-loadout-weapon {
+  flex: 0 0 46px;
+  text-align: right;
+  font-size: 10px;
+  color: #9aa0c0;
+}
+
+.caster-loadout-weapon img {
+  height: 13px;
+  width: auto;
+  vertical-align: middle;
+}
+
+/* Kill feed — newest first, scrolls inside its own panel so the page body
+   never grows unbounded over a long half. */
+.caster-feed {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.caster-kill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.caster-kill-time {
+  flex: 0 0 58px;
+  font-size: 10px;
+  color: #6b7192;
+}
+
+.caster-kill-killer,
+.caster-kill-victim {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.caster-kill-victim { opacity: 0.75; }
+
+.caster-kill-weapon {
+  flex: 0 0 42px;
+  text-align: center;
+  font-size: 10px;
+  color: #9aa0c0;
+}
+
+.caster-kill-weapon img {
+  height: 13px;
+  width: auto;
+  vertical-align: middle;
+}
+
+.caster-kill-tags {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+}
+
+.caster-kill-teamkill,
+.caster-kill-suicide { background-color: rgba(255, 100, 100, 0.08); }
+
+.caster-tag {
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.4px;
+  border-radius: 2px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+
+.caster-tag-hs     { background-color: #ffd700; color: #2a2200; }
+.caster-tag-prone  { background-color: #8fb4ff; color: #0a0b14; }
+.caster-tag-tk     { background-color: #c43030; color: #fff; }
+.caster-tag-streak { background-color: rgba(255, 215, 0, 0.22); color: #ffd700; }
+.caster-tag-assist { background-color: rgba(255, 255, 255, 0.08); color: #9aa0c0; font-weight: 700; }

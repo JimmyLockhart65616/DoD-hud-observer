@@ -134,6 +134,13 @@ function MatchPicker() {
                                                 <a href={`/screen?server=${encodeURIComponent(s.hostname)}`}>
                                                     {match ? 'Watch Live' : 'Watch'}
                                                 </a>
+                                                {' | '}
+                                                <a
+                                                    href={`/caster?server=${encodeURIComponent(s.hostname)}`}
+                                                    title="Persistent stats page for casters (broadcast-synced, second monitor)"
+                                                >
+                                                    Caster View
+                                                </a>
                                             </td>
                                         </tr>
                                     );

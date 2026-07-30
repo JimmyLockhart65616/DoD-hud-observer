@@ -290,6 +290,40 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 
 ---
 
+## Caster Page (`/caster`)
+
+`/caster?server=<X-Server-Hostname>` — the **persistent** counterpart to the transient
+on-air StatsBoard popup, for a caster's second monitor. Not an OBS source; never
+composited into the broadcast.
+
+- **Broadcast-synced, not real-time.** Joins the same delayed `server:<host>` room as
+  `/screen`, so the numbers match the video casters and viewers are watching. There is
+  no undelayed socket path (the HLTV delay is applied backend-side before any emit).
+- **Reuses, doesn't duplicate**: `SocketStoreComponent` + `useHudStore` (same store,
+  own tab → own socket), `StatsTable`, `Flags`, `Timer`, `getWeaponIcon`.
+- **Scope toggle** — `This Half` / each completed half / `MATCH`. Halves come from the
+  `halfRows` carry archive in Socket.jsx via `getHalfRows` / `getRecordedHalves` /
+  `carrySoFar` (module-level, polled on a 1s tick — deliberately NOT mirrored into the
+  store, which would put the on-air cumulative-stats state machine on the render path).
+- **MATCH groups each player under their CURRENT-half side**, since teams swap at
+  halftime and `addStatRows` keeps the latest team. Same as the on-air `match_end`
+  board; correct for 6v6 with fixed rosters.
+- **Freeze** snapshots the table so a caster can read it mid-firefight; the feed keeps
+  running underneath and an unmissable banner marks it stale.
+- **Known prototype limit**: a reload after half 2 goes live loses half-1 carry — the
+  backend evicts its cached `halftime_summary` at `half_start` (`ingest.ts`), so the
+  join snapshot has nothing to replay. The page detects this and shows
+  `⚠ opened after halftime`. The durable fix (a `half_archive` on `ServerState` that
+  survives `half_start`) would also fix a latent on-air bug: an OBS browser-source
+  reload during half 2 makes the `FINAL STATS` board show half-2 numbers only.
+- **Do NOT add `gameEvents.on(...)` listeners from this page** — `SocketStoreComponent`'s
+  effect cleanup calls `gameEvents.removeAllListeners()`, which wipes every listener
+  globally, and `index.jsx` mounts under StrictMode (effects run mount→unmount→mount in
+  dev). Extend the store instead; that's why the deep kill history is a `kill_log`
+  slice rather than a direct subscription.
+
+---
+
 ## Prone Shame Timer
 - `prone_change` with `state: "prone"` or `state: "deployed"` includes a `timestamp` (unix ms from server)
 - Frontend calculates elapsed prone time from that timestamp
@@ -599,6 +633,8 @@ KTPInfrastructure as a sibling directory (same as the KTPAMXX hook).
 - `web/src/components/core/Socket/Socket.jsx` — all game state logic (Zustand store + event handlers)
 - `web/src/components/screen/api/api.js` — weapon name → display info mapping
 - `web/src/components/screen/Example.jsx` — main HUD layout
+- `web/src/components/core/StatsBoard/StatsTable.jsx` — the per-team stat table, shared by the on-air board and the caster page
+- `web/src/components/caster/Caster.jsx` — caster reference page (`/caster`, see below)
 - `config/local/config.yaml` — local-dev backend config (committed; ports, auth key, storage). Production uses `config/online/config.yaml` (gitignored, operator-owned), selected via `HUD_CONFIG_PATH` env var. Template: `config/online/config.yaml.example`.
 - `data-server/Dockerfile` — build source for the KTPInfrastructure data container
 - `dod_hud_observer.sma` — legacy plugin (vanilla Metamod version, kept for reference)

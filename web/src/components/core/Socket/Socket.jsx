@@ -57,6 +57,11 @@ let flagEventSeq = 0;
 let killSeq = 0;
 let dmgSeq = 0;
 
+// Depth of the caster page's kill scrollback (store slice `kill_log`). Deep
+// enough to cover a full half of a 6v6 for reference, bounded so a long prod
+// match can't grow it without limit.
+const KILL_LOG_CAP = 150;
+
 // Per-player stat fields streamed by the plugin (player_score extension +
 // player_stats_summary rows). Shared so defaults/resets/copies can't drift.
 // `best_streak` is special-cased in addStatRows (max, not sum) for match totals.
@@ -107,7 +112,7 @@ function recordHalf(rows, endingHalf, source) {
 
 // Sum all recorded prior-half contributions by user_id (best_streak takes max
 // via addStatRows). Consumed by the match_end board for full-match totals.
-function carrySoFar() {
+export function carrySoFar() {
     const merged = {};
     Object.keys(halfRows).forEach(h => {
         Object.values(halfRows[h]).forEach(r => {
@@ -115,6 +120,17 @@ function carrySoFar() {
         });
     });
     return merged;
+}
+
+// Read-only accessors over the completed-half archive, for the caster page's
+// scope toggle (This Half / H1 / H2 / Match). Deliberately plain getters over
+// the module globals rather than store state — mirroring the carry into zustand
+// would put the on-air cumulative-stats state machine (guarded by
+// Socket.chaos.test.js) on the render path. Callers poll these on their own
+// heartbeat; nothing here is reactive.
+export function getHalfRows(half) { return halfRows[half] ?? null; }
+export function getRecordedHalves() {
+    return Object.keys(halfRows).map(Number).sort((a, b) => a - b);
 }
 
 function handleHalfBoundary(newHalf) {
@@ -180,8 +196,13 @@ export const useHudStore = create(set => ({
     // Flag state: [{ flag_id, flag_name, owner, capping_team }]
     flags: [],
 
-    // Kill feed entries
+    // Kill feed entries — capped at 6 for the on-air overlay (see addKill).
     kills: [],
+
+    // Longer kill history for the caster page's scrollback. Same entries as
+    // `kills`, just a deeper cap. The overlay never selects this slice, so
+    // zustand's selector subscriptions keep it off /screen's render path.
+    kill_log: [],
 
     // Flag-event feed entries (captures + cap breaks), shown under the flags bar
     flag_feed: [],
@@ -235,13 +256,17 @@ export const useHudStore = create(set => ({
         // unbounded; observed 715+ kills in one prod match, and inactive-tab
         // OBS overlays couldn't auto-hide via setTimeout, so the entire history
         // would render at once on refocus.
+        const entry = {
+            ...kill,
+            streak: streaks[kill.killer_id] || 0,
+            id: ++killSeq,
+            addedAt: Date.now(),
+        };
         return {
-            kills: [...state.kills.slice(-5), {
-                ...kill,
-                streak: streaks[kill.killer_id] || 0,
-                id: ++killSeq,
-                addedAt: Date.now(),
-            }],
+            kills: [...state.kills.slice(-5), entry],
+            // Deeper cap for the caster page's scrollback — bounded for the same
+            // reason `kills` is (a 715-kill match must not accumulate forever).
+            kill_log: [...state.kill_log.slice(-(KILL_LOG_CAP - 1)), entry],
             kill_streaks: streaks,
         };
     }),
@@ -281,6 +306,7 @@ export const useHudStore = create(set => ({
         });
         return {
             kills: [],
+            kill_log: [],
             flag_feed: [],
             chat: [],
             kill_streaks: {},
@@ -297,6 +323,7 @@ export const useHudStore = create(set => ({
     // half=2 / OT preserve carryover.
     resetMatch: (half) => set(() => ({
         kills: [],
+        kill_log: [],
         flag_feed: [],
         chat: [],
         kill_streaks: {},
@@ -349,7 +376,7 @@ function makeDefaultPlayer(user_id, name, team) {
 }
 
 // Snapshot the stat row a popup/board needs from a live store player.
-function statRow(p) {
+export function statRow(p) {
     const row = {
         user_id: p.user_id, name: p.name, team: p.team,
         kills: p.kills ?? 0, deaths: p.deaths ?? 0, obj_score: p.obj_score ?? 0,
@@ -361,7 +388,7 @@ function statRow(p) {
 // Combine b's stats into a (both statRow-shaped); used for cumulative match-end
 // totals across halves. Additive fields sum; best_streak takes the max (a
 // streak doesn't carry across the half boundary).
-function addStatRows(a, b) {
+export function addStatRows(a, b) {
     const out = { ...a, name: b.name ?? a.name, team: b.team ?? a.team };
     ['kills', 'deaths', 'obj_score', ...STAT_FIELDS].forEach(f => {
         if (f === 'best_streak') {

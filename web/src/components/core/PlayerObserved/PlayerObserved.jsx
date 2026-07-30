@@ -1,12 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { getWeaponIcon } from '../../screen/resources/weaponIcons';
+import { ALLIED_CLASSES, AXIS_CLASSES } from '../dodClasses';
 
 const classImages = {};
 const classCtx = require.context('../../screen/resources/images/classes', false, /\.png$/);
 classCtx.keys().forEach(key => { classImages[key.replace('./', '').replace('.png', '')] = classCtx(key); });
-
-const ALLIED_CLASSES = ['Rifleman', 'Staff Sgt', 'Master Sgt', 'LMG', 'Sniper', 'Rocket'];
-const AXIS_CLASSES   = ['Grenadier', 'Stosstruppe', 'Unteroffizier', 'Sturmtruppe', 'Scharfschütze', 'Panzerschreck', 'MG42'];
 
 function useProneTimer(prone_since) {
     const [elapsed, setElapsed] = useState(0);
