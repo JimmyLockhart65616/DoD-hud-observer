@@ -62,6 +62,11 @@ server-side so every field on a strip comes from one instant. Two notes:
   on `half`, which `ktp_match_end` deliberately leaves set. Score/clock/flags are
   suppressed on non-LIVE/WARMUP strips: the cache is never evicted, so an offline
   server would otherwise show a client-side clock ticking down forever.
+- **Map fallback chain**: cache → active match metadata → HLTV RCON status →
+  last recorded match. The plugin only stamps `map` on events while a match is
+  active, so a server that hasn't started one since the last backend restart has
+  no cache value at all — the RCON status map (from `hltv_sync`, independent of
+  match state) fills that gap for HLTV-paired servers.
 
 ### Ports
 - `3000` — React dev server (OBS browser source `/screen`, HQ board `/hq`)

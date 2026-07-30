@@ -45,7 +45,7 @@ export type HqStatus = 'LIVE' | 'WARMUP' | 'BETWEEN' | 'STALE' | 'NO_SIGNAL';
 /** The slice of HltvSyncService this module needs. Narrow so tests can fake it. */
 export interface HqHltvSource {
     isActive(server: string): boolean;
-    getStatus(): { server: string; delaySeconds?: number }[];
+    getStatus(): { server: string; delaySeconds?: number; map?: string }[];
 }
 
 export interface HqServer {
@@ -158,8 +158,15 @@ export function buildHqOverview(
     const anyByServer = newestByServer(allMeta);
 
     const info = new Map(metrics.getServers().map(s => [s.hostname, s]));
+    const hltvStatus = hltv?.getStatus() ?? [];
     const delayByServer = new Map<string, number | undefined>(
-        (hltv?.getStatus() ?? []).map(s => [s.server, s.delaySeconds]),
+        hltvStatus.map(s => [s.server, s.delaySeconds]),
+    );
+    // RCON-sourced current map, independent of match state — the one map source
+    // that's populated even when no match has run since the last backend
+    // restart. Only covers servers listed in hltv_sync.servers.
+    const hltvMapByServer = new Map<string, string | undefined>(
+        hltvStatus.map(s => [s.server, s.map]),
     );
 
     // Union of the two discovery registries. Both are in-memory and populated by
@@ -183,8 +190,16 @@ export function buildHqOverview(
             totalEvents: meta?.total_events ?? 0,
 
             // Cache first (delay-correct, and survives a restart once one event
-            // lands), then match metadata for a cold cache.
-            map: view.map ?? active?.map ?? anyByServer.get(hostname)?.map ?? null,
+            // lands). The plugin only stamps `map` on events while a match is
+            // active (CLAUDE.md: idle traffic carries no match_id/map/half), so
+            // a freshly restarted backend with no match yet has no cache value —
+            // exactly the LAN-kickoff case this board exists for. RCON status
+            // fills that gap for HLTV-paired servers (live, not delay-scoped, so
+            // it's ahead of the cache — acceptable, it's just a map name).
+            // Last-resort: the most recent match ever recorded, which can be
+            // stale if the map changed outside a match.
+            map: view.map ?? active?.map ?? hltvMapByServer.get(hostname)
+                ?? anyByServer.get(hostname)?.map ?? null,
             half: view.half,
             roundPhase: view.roundPhase,
 

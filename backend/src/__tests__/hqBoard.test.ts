@@ -382,6 +382,41 @@ describe('GET /api/hq — projection over ingested events', () => {
         expect(s.delaySeconds).toBeNull();
     });
 
+    it('falls back to the HLTV status map when no match has run since a restart', async () => {
+        // Reproduces the LAN-kickoff gap: the plugin only stamps `map` on events
+        // while a match is active, so a freshly restarted backend with a server
+        // that hasn't started a match yet has no cache value at all. RCON status
+        // (available independent of match state) fills it in.
+        const host = 'KTP - Cold Cache';
+        await post({ event: 'team_score', allies_score: 0, axis_score: 0 }, host);
+
+        const hltvWithMap: HqHltvSource = {
+            isActive: (server) => server === host,
+            getStatus: () => [{ server: host, delaySeconds: 60, map: 'dod_kalt' }],
+        };
+
+        const overview = buildHqOverview(recorder, metrics, hltvWithMap);
+        const s = overview.servers.find(x => x.hostname === host)!;
+        expect(s.map).toBe('dod_kalt');
+    });
+
+    it('prefers the cache map over HLTV status once a match has actually reported one', async () => {
+        const host = 'KTP - Cache Wins';
+        await post({ event: 'ktp_match_start', match_id: 'm-cache-wins', map: 'dod_anzio', half: 1 }, host);
+
+        const hltvWithMap: HqHltvSource = {
+            isActive: (server) => server === host,
+            // RCON is polling a different (later) map than what the cache has
+            // recorded for the CURRENT delayed match — the cache must win, since
+            // it's what the rest of the strip (score, roster) is consistent with.
+            getStatus: () => [{ server: host, delaySeconds: 60, map: 'dod_flash' }],
+        };
+
+        const overview = buildHqOverview(recorder, metrics, hltvWithMap);
+        const s = overview.servers.find(x => x.hostname === host)!;
+        expect(s.map).toBe('dod_anzio');
+    });
+
     it('attaches the active match id and type, and drops them once the match ends', async () => {
         const host = 'KTP - Match Meta';
         await post({ event: 'ktp_match_start', match_id: 'm-meta', map: 'dod_avalanche', match_type: 0, half: 1 }, host);
