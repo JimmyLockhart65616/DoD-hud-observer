@@ -34,7 +34,7 @@ native Float:dodx_get_round_time();
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.2.0"
+#define VERSION "2.2.1"
 #define AUTHOR  "cadaver"
 
 #define MAX_PLAYERS     32
@@ -227,6 +227,36 @@ new g_flag_count;
 
 // Flag metadata cache (read once at flags_init)
 new g_flag_name_cache[MAX_FLAGS][64];
+
+// ─── CP index-space remap (dodx array order -> DLL cp_index order) ───────────
+// There are TWO control-point index spaces and they are not always the same:
+//
+//   dodx array  — the order dodx's entity scan found the CPs (BSP lump / spawn
+//                 order). `dodx_objective_get_data` and `dodx_area_get_data`
+//                 are indexed in THIS space.
+//   DLL cp_index — what `dod_control_point_captured` hands us, and what the
+//                 game's own HUD uses.
+//
+// dodx normally reconciles them by reordering its array by the BSP's
+// `point_index` key (SetObj cp_index == point_index - 1). On maps whose
+// `dod_control_point` entities carry no usable `point_index`, that reorder is
+// silently skipped (`[DODX] BSP parse returned 0 CPs — using entity scan
+// order`) and the two spaces diverge — so flag NAMES get attached to the wrong
+// captures, and our zone-derived events (emitted in dodx space) disagree with
+// our cap events (emitted in DLL space).
+//
+// We keep ALL of our own state and every emitted `flag_id` in **DLL space**,
+// and funnel every dodx read through g_cp_dodx_of_dll[]. Identity by default,
+// so maps dodx already got right are untouched.
+//
+// Verified on dod_saints2_b3e from 65 recorded prod matches, three independent
+// ways: (1) flag_cap_started on the map's only capture area (dodx idx 0, the
+// bridge) completes as flag_captured on DLL idx 2 in 62% of cases vs 2.7% on
+// idx 0; (2) DLL idx 2 is the flag whose captures yield a +2 team-score delta,
+// i.e. the sole point_team_points=2 CP; (3) first-capture owner per DLL index
+// is allies,allies,mixed,axis,axis — matching the real default owners
+// [allies, allies, neutral, axis, axis].
+new g_cp_dodx_of_dll[MAX_FLAGS];
 
 // Current cap state per flag (mirror of game-authoritative CAreaCapture fields)
 // capping_team: 0=none, 1=allies, 2=axis
@@ -1459,7 +1489,9 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
                     // cache corrects that); the cache misses a sub-poll
                     // voluntary walk-off (the fresh read corrects that). The
                     // lower of the two never over-credits.
-                    new fresh = dodx_area_get_data(f, (vt == TEAM_ALLIES) ? CA_num_allies : CA_num_axis);
+                    // `f` is a DLL cp_index (g_flag_capping_team is DLL-indexed),
+                    // so the dodx area read must go through the remap.
+                    new fresh = dodx_area_get_data(g_cp_dodx_of_dll[f], (vt == TEAM_ALLIES) ? CA_num_allies : CA_num_axis);
                     new cached = (vt == TEAM_ALLIES) ? g_flag_prev_allies_count[f] : g_flag_prev_axis_count[f];
                     g_break_team[f]     = vt;
                     g_break_baseline[f] = (fresh < cached) ? fresh : cached;
@@ -1718,15 +1750,19 @@ public task_poll_zones() {
     copy(zones_json, charsmax(zones_json), "{^"event^":^"flag_zone_players^",^"zones^":[");
     new bool:first_zone = true;
 
+    // `f` is the DLL cp_index — the space our g_flag_* state and every emitted
+    // flag_id live in, so zone-derived events line up with the cap events that
+    // dod_control_point_captured delivers. `dx` is the dodx slot to read from.
     for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
-        new ac = dodx_area_get_data(f, CA_num_allies);
-        new xc = dodx_area_get_data(f, CA_num_axis);
+        new dx = g_cp_dodx_of_dll[f];
+        new ac = dodx_area_get_data(dx, CA_num_allies);
+        new xc = dodx_area_get_data(dx, CA_num_axis);
         if (ac < 0) ac = 0;
         if (xc < 0) xc = 0;
 
         // Required cappers per team (static per flag, set in cap_area entity keyvalues).
-        new an = dodx_area_get_data(f, CA_allies_numcap);
-        new xn = dodx_area_get_data(f, CA_axis_numcap);
+        new an = dodx_area_get_data(dx, CA_allies_numcap);
+        new xn = dodx_area_get_data(dx, CA_axis_numcap);
         if (an < 1) an = 1;
         if (xn < 1) xn = 1;
 
@@ -1739,8 +1775,8 @@ public task_poll_zones() {
         first_zone = false;
 
         // ── Cap state transitions (game-authoritative) ──
-        new is_capping = dodx_area_get_data(f, CA_is_capturing);
-        new new_capper = is_capping ? dodx_area_get_data(f, CA_capturing_team) : 0;
+        new is_capping = dodx_area_get_data(dx, CA_is_capturing);
+        new new_capper = is_capping ? dodx_area_get_data(dx, CA_capturing_team) : 0;
 
         new prev_capper = g_flag_capping_team[f];
         new bool:was_contested = g_flag_contested[f];
@@ -1782,8 +1818,8 @@ public task_poll_zones() {
 
         // Progress tick (derived from m_fTimeRemaining / m_nCapTime).
         if (g_flag_capping_team[f] != 0) {
-            new Float:remaining = Float:dodx_area_get_data(f, CA_time_remaining);
-            new cap_time        = dodx_area_get_data(f, CA_timetocap);
+            new Float:remaining = Float:dodx_area_get_data(dx, CA_time_remaining);
+            new cap_time        = dodx_area_get_data(dx, CA_timetocap);
             if (cap_time > 0 && remaining >= 0.0) {
                 new Float:pct = 100.0 - (remaining * 100.0 / float(cap_time));
                 new progress = floatround(pct);
@@ -1940,7 +1976,68 @@ public controlpoints_init() {
     do_flags_init();
 }
 
+// Populate g_cp_dodx_of_dll for the current map (identity unless the map is a
+// known offender — see the g_cp_dodx_of_dll declaration for the index spaces).
+//
+// Explicit per-map permutations, NOT a generic geometric sort: such a sort would
+// have to run only where dodx's own BSP reorder DIDN'T, and a plugin can't tell
+// whether it ran. Guessing wrong on a currently-correct map would be a
+// regression, so the allowlist stays narrow and evidence-backed.
+//
+// To derive an entry for a newly-affected map: watch for
+// `[DODX] BSP parse returned 0 CPs` (or a `BSP CP count != entity scan count`
+// mismatch) in the server log, play one match, then run
+// `scripts/cp-index-space.py <matches_dir> <map>` — the flag_id whose captures
+// carry a +2 team-score delta is the map's point_team_points=2 CP, which pins the
+// permutation. Background: docs/dodx-cp-index-space-findings.md.
+//
+// dod_northbound also skips the reorder (4 of 5 CPs carry point_index, so the
+// counts mismatch) but its spawn order already equals the DLL's, so identity is
+// correct there — deliberately not listed.
+stock init_cp_index_remap() {
+    for (new i = 0; i < MAX_FLAGS; i++) g_cp_dodx_of_dll[i] = i;
+
+    new mapname[64];
+    get_mapname(mapname, charsmax(mapname));
+
+    // dod_saints2_b3e / _b2 — no point_index on any CP. dodx array order is
+    // [Bridge, Allied 1st, Allied 2nd, Axis 2nd, Axis 1st]; the DLL orders them
+    // allies->axis, which puts the bridge 3rd. VERIFIED on b3e across 65 prod
+    // matches; b2 shares b3e's CP names, spawn order and relative geometry.
+    if (equal(mapname, "dod_saints2_b3e") || equal(mapname, "dod_saints2_b2")) {
+        g_cp_dodx_of_dll[0] = 1;   // Allied 1st
+        g_cp_dodx_of_dll[1] = 2;   // Allied 2nd
+        g_cp_dodx_of_dll[2] = 0;   // The Bridge  (point_team_points=2)
+        g_cp_dodx_of_dll[3] = 3;   // Axis 2nd
+        g_cp_dodx_of_dll[4] = 4;   // Axis 1st
+        server_print("[HUD] CP index remap active for %s", mapname);
+        return;
+    }
+
+    // dod_donner — stock map, ships point_index=-1 on every CP. dodx array order
+    // is [AxisHQ, AxisStreet, AlliedStreet, AlliedHQ, MainStreet]; allies->axis
+    // geometry gives [AlliedHQ, AlliedStreet, MainStreet, AxisStreet, AxisHQ].
+    // UNVERIFIED — donner has 0 recorded HUD matches, so this comes from CP
+    // origins, not event data. It does agree with the saints2 pattern (the
+    // point_team_points=2 CP landing on DLL index 2). Confirm after its first
+    // match using the procedure above.
+    if (equal(mapname, "dod_donner")) {
+        g_cp_dodx_of_dll[0] = 3;   // AlliedHQ
+        g_cp_dodx_of_dll[1] = 2;   // AlliedStreet
+        g_cp_dodx_of_dll[2] = 4;   // MainStreet  (point_team_points=2)
+        g_cp_dodx_of_dll[3] = 1;   // AxisStreet
+        g_cp_dodx_of_dll[4] = 0;   // AxisHQ
+        server_print("[HUD] CP index remap active for %s (geometry-derived)", mapname);
+        return;
+    }
+}
+
 stock do_flags_init() {
+    // Seed the index remap BEFORE the early return, so the table is never left
+    // all-zeros (which would alias every DLL index onto dodx slot 0). Cheap — a
+    // few string compares — and idempotent, so running it on every re-init is fine.
+    init_cp_index_remap();
+
     g_flag_count = dodx_objectives_get_num();
     if (g_flag_count <= 0) return;
 
@@ -1948,8 +2045,11 @@ stock do_flags_init() {
     static tmp[128];
     copy(json, charsmax(json), "{^"event^":^"flags_init^",^"flags^":[");
 
+    // `i` is the DLL cp_index (the space every emitted flag_id and all of our
+    // g_flag_* state lives in); `dx` is the dodx array slot to read it from.
     for (new i = 0; i < g_flag_count && i < MAX_FLAGS; i++) {
-        new owner = dodx_objective_get_data(i, CP_owner);
+        new dx = g_cp_dodx_of_dll[i];
+        new owner = dodx_objective_get_data(dx, CP_owner);
         g_flag_owner[i] = owner;
 
         g_flag_capping_team[i]          = 0;
@@ -1974,7 +2074,7 @@ stock do_flags_init() {
         else                           copy(owner_str, charsmax(owner_str), "neutral");
 
         new flag_name[64];
-        dodx_objective_get_data(i, CP_name, flag_name, charsmax(flag_name));
+        dodx_objective_get_data(dx, CP_name, flag_name, charsmax(flag_name));
         if (flag_name[0] == '^0') formatex(flag_name, charsmax(flag_name), "flag_%d", i);
         copy(g_flag_name_cache[i], charsmax(g_flag_name_cache[]), flag_name);
 
@@ -2066,8 +2166,12 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
         return;
     }
 
+    // cp_index is already a DLL index, so read the name from the DLL-indexed
+    // cache do_flags_init built — NOT a fresh dodx_objective_get_data(cp_index),
+    // which would index dodx's array with a DLL index and mislabel the capture on
+    // any map where the two spaces diverge (see g_cp_dodx_of_dll).
     new flag_name[64];
-    dodx_objective_get_data(cp_index, CP_name, flag_name, charsmax(flag_name));
+    copy(flag_name, charsmax(flag_name), g_flag_name_cache[cp_index]);
     if (flag_name[0] == '^0') formatex(flag_name, charsmax(flag_name), "flag_%d", cp_index);
 
     // Record the capping team for the DEFERRED credit. dod_score_event fires
@@ -2251,18 +2355,19 @@ public cmd_dump_zones(id, level, cid) {
     server_print("[HUD] zone dump (count=%d)", g_flag_count);
 
     for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
-        new ac = dodx_area_get_data(f, CA_num_allies);
-        new xc = dodx_area_get_data(f, CA_num_axis);
-        new an = dodx_area_get_data(f, CA_allies_numcap);
-        new xn = dodx_area_get_data(f, CA_axis_numcap);
-        new isc = dodx_area_get_data(f, CA_is_capturing);
-        new ct  = dodx_area_get_data(f, CA_capturing_team);
-        new ot  = dodx_area_get_data(f, CA_owning_team);
-        new Float:tr = Float:dodx_area_get_data(f, CA_time_remaining);
-        new ct_total = dodx_area_get_data(f, CA_timetocap);
+        new dx = g_cp_dodx_of_dll[f];
+        new ac = dodx_area_get_data(dx, CA_num_allies);
+        new xc = dodx_area_get_data(dx, CA_num_axis);
+        new an = dodx_area_get_data(dx, CA_allies_numcap);
+        new xn = dodx_area_get_data(dx, CA_axis_numcap);
+        new isc = dodx_area_get_data(dx, CA_is_capturing);
+        new ct  = dodx_area_get_data(dx, CA_capturing_team);
+        new ot  = dodx_area_get_data(dx, CA_owning_team);
+        new Float:tr = Float:dodx_area_get_data(dx, CA_time_remaining);
+        new ct_total = dodx_area_get_data(dx, CA_timetocap);
 
-        server_print("[HUD] CP[%d] '%s' own=%d cap=%d/team=%d  a=%d/%d x=%d/%d  t=%.1f/%d  committed=%d",
-            f, g_flag_name_cache[f], ot, isc, ct, ac, an, xc, xn,
+        server_print("[HUD] CP[%d] (dodx[%d]) '%s' own=%d cap=%d/team=%d  a=%d/%d x=%d/%d  t=%.1f/%d  committed=%d",
+            f, dx, g_flag_name_cache[f], ot, isc, ct, ac, an, xc, xn,
             tr, ct_total, g_flag_capping_team[f]);
     }
     return PLUGIN_HANDLED;
