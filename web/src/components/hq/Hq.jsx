@@ -86,7 +86,12 @@ const Hq = () => {
     const scale = useCanvasScale(Number.isFinite(rawScale) && rawScale > 0 ? rawScale : null);
 
     const inGame = servers.reduce((sum, s) => sum + s.playerCount, 0);
-    const liveCount = servers.filter(s => s.status === 'LIVE' || s.status === 'WARMUP').length;
+    // "Active" = something is actually happening on the station, which includes
+    // pub play (status BETWEEN with players). Counting only LIVE/WARMUP produced
+    // the contradictory "0 ACTIVE · 8 IN GAME".
+    const liveCount = servers.filter(
+        s => s.status === 'LIVE' || s.status === 'WARMUP' || s.playerCount > 0,
+    ).length;
     const feedStale = receivedAt > 0 && Date.now() - receivedAt > STALE_FEED_MS;
 
     // Every reporting server is delayed by the same amount in practice (one

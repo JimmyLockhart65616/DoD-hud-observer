@@ -81,6 +81,23 @@ describe('deriveStatus — precedence rules', () => {
                 .toBe('LIVE');
         }
     });
+
+    it('falls back to the recorder when the cache missed ktp_match_start', () => {
+        // The mid-match restart case: the cache never saw the start event, but
+        // MatchRecorder rehydrates active matches from disk and does know.
+        expect(deriveStatus(true, emptyView({ matchActive: false, roundPhase: 'live' }), true))
+            .toBe('LIVE');
+        expect(deriveStatus(true, emptyView({ matchActive: false, roundPhase: null }), true))
+            .toBe('WARMUP');
+    });
+
+    it('keeps a match LIVE while the delayed cache still says active', () => {
+        // At match end the recorder flips false immediately (real time) while the
+        // delayed cache is still mid-match. OR must keep it LIVE, or the board
+        // would announce the end ~60s before the broadcast shows it.
+        expect(deriveStatus(true, emptyView({ matchActive: true, roundPhase: 'live' }), false))
+            .toBe('LIVE');
+    });
 });
 
 describe('GET /api/hq — projection over ingested events', () => {
@@ -322,6 +339,32 @@ describe('GET /api/hq — projection over ingested events', () => {
         // The map survives the match boundary — it's read off every event envelope,
         // so the board still labels an idle server.
         expect(s.map).toBe('dod_kalt');
+    });
+
+    it('keeps score, clock and roster populated for pub play (no KTP match)', async () => {
+        // A server with people on it but no ktp_match_start — the common case on
+        // a station between tournament matches. It is BETWEEN by definition, but
+        // the score, clock and roster are live and must survive into the payload:
+        // the board's job is "who's playing and what's the score", and blanking
+        // this is what made a busy server look dead.
+        const host = 'KTP - Pub Play';
+        await post({ event: 'player_connect', user_id: 'p1', name: 'Polak', team: 'allies' }, host);
+        await post({ event: 'player_connect', user_id: 'p2', name: 'Sapphire', team: 'axis' }, host);
+        await post({ event: 'player_score', user_id: 'p1', kills: 21, deaths: 23, score: 30 }, host);
+        await post({ event: 'player_score', user_id: 'p2', kills: 22, deaths: 8, score: 34 }, host);
+        await post({ event: 'team_score', allies_score: 23, axis_score: 32 }, host);
+        await post({ event: 'time_sync', timeleft: 400.7 }, host);
+
+        const res = await request(app).get('/api/hq');
+        const s = strip(res.body, host);
+
+        expect(s.status).toBe('BETWEEN');
+        expect(s.alliesScore).toBe(23);
+        expect(s.axisScore).toBe(32);
+        expect(s.timeleft).toBeGreaterThan(395);
+        expect(s.playerCount).toBe(2);
+        expect(s.allies.map((p: any) => p.name)).toEqual(['Polak']);
+        expect(s.axis.map((p: any) => p.name)).toEqual(['Sapphire']);
     });
 
     it('reports WARMUP between ktp_match_start and the first round', async () => {

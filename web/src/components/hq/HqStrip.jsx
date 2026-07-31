@@ -25,6 +25,15 @@ const STATUS_LABEL = {
     NO_SIGNAL: 'NO SIGNAL',
 };
 
+/**
+ * BETWEEN means "no KTP match is running", which covers two very different
+ * things: an empty server waiting for the next match, and a server full of
+ * people playing pub. Calling the second one STANDBY reads as "nothing
+ * happening here" next to nine players actively fragging.
+ */
+const statusLabel = s =>
+    s.status === 'BETWEEN' && s.playerCount > 0 ? 'OPEN PLAY' : STATUS_LABEL[s.status];
+
 /** Shown in place of the rosters when nobody is on the server. */
 const EMPTY_MESSAGE = {
     LIVE: 'NO PLAYERS ON TEAMS',
@@ -39,24 +48,36 @@ const HqStrip = ({ index, server, anchor }) => {
     const hasPlayers = s.playerCount > 0;
     const matchType = s.matchType != null ? MATCH_TYPES[s.matchType] : null;
 
-    // Whether this server's cached game state can be trusted as CURRENT.
+    // Whether the cached game state is still being REFRESHED — i.e. whether
+    // score/clock/flags describe now.
     //
     // The backend's state cache is never evicted, so a server that drops off
-    // keeps reporting its last-known score, clock and flags forever. Rendering
-    // those is actively misleading on a board whose whole job is current state —
-    // worst of all the clock, which free-runs client-side and would tick down on
-    // a machine that has been off for an hour, reading as a live game.
-    // (ktp_match_end already nulls the score, but not the flags.)
-    const showCurrent = s.status === 'LIVE' || s.status === 'WARMUP';
+    // keeps reporting its last-known state forever; rendering that is actively
+    // misleading, worst of all the clock, which free-runs client-side and would
+    // tick down on a machine that has been off for an hour. But the thing that
+    // makes state stale is the EVENT STREAM stopping, not the absence of a KTP
+    // match: NO_SIGNAL (quiet >60s) and STALE (cache wiped by a restart) have
+    // nothing current to show, while BETWEEN with a live stream is pub play —
+    // real players, real score, real round clock, refreshed continuously.
+    // Gating on LIVE/WARMUP blanked exactly that case.
+    //
+    // A genuinely finished match needs no gate here: ktp_match_end nulls
+    // team_score and timeleft in the reducer, so an idle post-match server
+    // renders "–" and "--:--" on its own.
+    const dataFresh = s.status !== 'NO_SIGNAL' && s.status !== 'STALE';
+
+    // Idle strips recede so live games read first from across a room — but a pub
+    // server with players on it is not idle.
+    const dimmed = !dataFresh || (s.status === 'BETWEEN' && !hasPlayers);
 
     return (
-        <section className={`hq-strip hq-strip-${s.status.toLowerCase()}`}>
+        <section className={`hq-strip hq-strip-${s.status.toLowerCase()}${dimmed ? ' hq-strip-dim' : ''}`}>
             <div className="hq-rail">
                 <div className="hq-designator">{pad2(index)}</div>
                 <div className="hq-servername">{shortName(s.hostname)}</div>
                 <div className="hq-status">
                     <span className="hq-dot" />
-                    <span className="hq-status-text">{STATUS_LABEL[s.status]}</span>
+                    <span className="hq-status-text">{statusLabel(s)}</span>
                 </div>
             </div>
 
@@ -78,21 +99,21 @@ const HqStrip = ({ index, server, anchor }) => {
             <div className="hq-scoreblock">
                 <div className="hq-scores">
                     <span className="hq-score hq-score-allies">
-                        {showCurrent && s.alliesScore != null ? s.alliesScore : '–'}
+                        {dataFresh && s.alliesScore != null ? s.alliesScore : '–'}
                     </span>
                     <span className="hq-score-dash">—</span>
                     <span className="hq-score hq-score-axis">
-                        {showCurrent && s.axisScore != null ? s.axisScore : '–'}
+                        {dataFresh && s.axisScore != null ? s.axisScore : '–'}
                     </span>
                 </div>
                 <div className={`hq-clock${s.timerFrozen ? ' hq-clock-frozen' : ''}`}>
-                    {showCurrent && anchor
+                    {dataFresh && anchor
                         ? <Timer timeleft={anchor.timeleft} timeleftAt={anchor.at} frozen={s.timerFrozen} />
                         : <span>--:--</span>}
                 </div>
             </div>
 
-            <HqFlagStrip flags={showCurrent ? s.flags : []} />
+            <HqFlagStrip flags={dataFresh ? s.flags : []} />
 
             {hasPlayers ? (
                 <>

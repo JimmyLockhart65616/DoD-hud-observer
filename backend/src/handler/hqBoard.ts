@@ -119,12 +119,28 @@ export interface HqOverview {
  * Note LIVE with playerCount 0 is possible (everyone aged out of
  * PLAYER_STALE_MS or disconnected). That needs no sixth state — an empty roster
  * beside a LIVE chip is self-explanatory, and another state would only add
- * precedence surface.
+ * precedence surface. BETWEEN likewise covers both an empty server and pub play;
+ * the frontend distinguishes those by playerCount rather than the backend
+ * inventing a status for it.
+ *
+ * `recorderSaysActive` ORs MatchRecorder's view of match-activeness onto the
+ * cache's. It exists for the restart case: `matchActive` is set by the
+ * ktp_match_start arm, so a backend that restarts MID-match never sees that
+ * event and would report BETWEEN for the rest of the half — while the recorder
+ * rehydrates active matches from disk and does know. OR is the correct
+ * combinator in both directions: at match start the recorder (real-time) flips
+ * first, which only advances the chip ahead of the delayed feed and leaks no
+ * score; at match end the recorder flips first but the delayed cache holds the
+ * OR true until its own ktp_match_end arrives, so the end is NOT revealed early.
  */
-export function deriveStatus(online: boolean, view: CachedServerView): HqStatus {
+export function deriveStatus(
+    online: boolean,
+    view: CachedServerView,
+    recorderSaysActive = false,
+): HqStatus {
     if (!online) return 'NO_SIGNAL';
     if (!view.hasCache) return 'STALE';
-    if (!view.matchActive) return 'BETWEEN';
+    if (!view.matchActive && !recorderSaysActive) return 'BETWEEN';
     return view.roundPhase != null ? 'LIVE' : 'WARMUP';
 }
 
@@ -184,7 +200,7 @@ export function buildHqOverview(
 
         return {
             hostname,
-            status: deriveStatus(online, view),
+            status: deriveStatus(online, view, active != null),
             online,
             lastEventAgeMs,
             totalEvents: meta?.total_events ?? 0,

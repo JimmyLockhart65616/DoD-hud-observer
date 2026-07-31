@@ -31,6 +31,9 @@
   --hq-warmup: #e0c04a;
   --hq-dead: #4a4f5e;
   --hq-warn: #e07a4a;
+  /* Pub / open play — deliberately not the match-LIVE green, so a glance can
+   * tell a tournament match from people warming up on a station. */
+  --hq-pub: #5ab4d6;
   --hq-rule: rgba(255, 255, 255, 0.09);
   /* System mono only — no webfont. A failed font fetch on venue wifi would
    * reflow the entire board mid-event. The dossier register comes from
@@ -170,9 +173,15 @@
   border-left-color: var(--hq-warn);
 }
 
-/* Idle and offline stations recede so live games read first from across a room. */
-.hq-strip-between,
-.hq-strip-no_signal {
+/* Pub play: no KTP match, but people are on the server and the feed is live. */
+.hq-strip-between:not(.hq-strip-dim) {
+  border-left-color: var(--hq-pub);
+}
+
+/* Idle and offline stations recede so live games read first from across a room.
+ * Driven by a modifier rather than by status, because a BETWEEN server with
+ * players on it is pub play, not idle, and must stay at full contrast. */
+.hq-strip-dim {
   opacity: 0.62;
 }
 
@@ -231,6 +240,10 @@
 
 .hq-strip-stale .hq-status {
   color: var(--hq-warn);
+}
+
+.hq-strip-between:not(.hq-strip-dim) .hq-status {
+  color: var(--hq-pub);
 }
 
 /* ─── Context: map, half, players ─────────────────────────────────────────── */
