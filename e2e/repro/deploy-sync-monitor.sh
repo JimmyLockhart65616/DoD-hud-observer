@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Deploy the durable HLTV↔overlay sync monitor on the data server (run THERE as
-# cadaver; uses sudo). Installs 3 delay-0 relays (CHI1/NY1/ATL1) + the logger,
-# all under systemd (Restart=always). Expects sync-logger.js + lib/ staged in
-# ~/sync-stage. Idempotent. Teardown: e2e/repro/teardown-sync-monitor.sh.
+# cadaver; uses sudo). Installs 3 delay-0 relays (CHI1/NY1/ATL1) + the logger +
+# a health gate, all under systemd (Restart=always). Expects sync-logger.js,
+# sync-health.sh and lib/ staged in ~/sync-stage. Idempotent.
+# Teardown: e2e/repro/teardown-sync-monitor.sh.
 set -e
 RELAY_PW="${1:-syncrelay}"
 
 # ── install dir ──────────────────────────────────────────────────────────────
 sudo mkdir -p /opt/sync-monitor/logs
 sudo cp ~/sync-stage/sync-logger.js /opt/sync-monitor/
+sudo cp ~/sync-stage/sync-health.sh /opt/sync-monitor/
+sudo chmod +x /opt/sync-monitor/sync-health.sh
 sudo rm -rf /opt/sync-monitor/lib && sudo cp -r ~/sync-stage/lib /opt/sync-monitor/
 sudo chown -R cadaver:cadaver /opt/sync-monitor
 
@@ -61,6 +64,31 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
+# ── health gate ──────────────────────────────────────────────────────────────
+# A running logger is NOT proof the monitor is measuring: when the relays went
+# away on 2026-07-24 the logger kept exiting 0 while writing blank footage
+# columns for 3.5 days. This gate checks the columns themselves and fans failure
+# out to Discord via the shared ktp-systemd-alert@ notifier.
+sudo tee /etc/systemd/system/sync-health.service >/dev/null <<'EOF'
+[Unit]
+Description=KTP sync-monitor health gate (relays up + footage columns populated)
+OnFailure=ktp-systemd-alert@%n.service
+[Service]
+Type=oneshot
+ExecStart=/opt/sync-monitor/sync-health.sh
+EOF
+
+sudo tee /etc/systemd/system/sync-health.timer >/dev/null <<'EOF'
+[Unit]
+Description=Run the KTP sync-monitor health gate every 15 minutes
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+[Install]
+WantedBy=timers.target
+EOF
+
 # ── replace the manual test relay (if any) with systemd-managed ones ─────────
 sudo pkill -f "port 27060" 2>/dev/null || true
 sleep 2
@@ -71,6 +99,8 @@ sleep 9
 echo "[deploy] starting logger..."
 sudo systemctl enable --now sync-logger
 sleep 12
+echo "[deploy] arming health gate..."
+sudo systemctl enable --now sync-health.timer
 
 echo "[deploy] === status ==="
 systemctl is-active sync-relay@27060 sync-relay@27061 sync-relay@27062 sync-logger || true

@@ -44,12 +44,23 @@ playback buffer + post-changelevel fill — none captured by the cvar. So the ov
 | `relay-probe.cjs` | master rcon + N relay rcons | serve-delay over time; multi-viewer + join-dependence + across-changelevel |
 | `relay-launch.sh` | — | spins a throwaway `delay 0` relay (local docker or data-server) |
 | `analyze-segment-csv.cjs` | a segment-probe CSV | stats + slope + STEP + map-change behavior + PASS/FAIL verdict + discriminator |
+| `sync-health.sh` | relay units + logger + the CSV's own footage columns | **liveness gate** — timer-run on the data server; failure → Discord via `ktp-systemd-alert@` |
 | `prod-overlay-read.cjs` | snapshot + status | quick one-instant overlay read |
 | `prod-overlay-shot.cjs` | headless chromium of `:3000/screen` | the literal "what does the HUD render" PNG |
 | `sniff-prod-events.ts` | Socket.IO | confirm `time_sync` arrives every 30s (cadence health) |
 
 Formulas live in `lib/sync-math.cjs` (gated by `backend/src/__tests__/syncMath.test.ts`); the shared
 GoldSrc rcon client is `lib/rcon.cjs`.
+
+### A live logger is not proof of measurement
+
+On **2026-07-24 23:35 EDT** the three relays were stopped and `sync-relay@.service` removed, while
+`sync-logger.service` kept running and exiting 0. systemd saw nothing fail, so no `OnFailure` fired —
+the logger simply wrote `relayGameTime`/`proxySrvDelay`/`relayVsOverlay` **blank** with `RELAY_DOWN`
+in the flags column for **3.5 days**, silently discarding the entire footage side of the measurement.
+`sync-health.sh` (installed + armed by `deploy-sync-monitor.sh`, every 15 min) exists for exactly
+this: it gates on the *populated columns*, not on unit liveness. Restored 2026-07-29; relays are now
+`enable`d so they also survive a reboot.
 
 ## Per-component runtime-proof matrix
 
