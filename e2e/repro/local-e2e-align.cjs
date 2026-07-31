@@ -16,7 +16,7 @@
 //      > 0   the overlay is BEHIND the video (the caster's reported symptom)
 //      < 0   the overlay is AHEAD of the video (spoils the feed)
 //
-// SpectatorTime(W) is projected from anchors written by local-serve-sampler.sh.
+// SpectatorTime(W) is projected from periodic rcon anchors (see below).
 // Projection is sound because the serve clock advances 1:1 with wall time —
 // measured flat at 60.02s +/- 0.01 against `Delay 60` over a 4-minute soak. New
 // anchors are picked up continuously, so a clock reset shows up as a step rather
@@ -25,25 +25,30 @@
 // Both sides are independent of `Delay` and of the MM:SS `Game Time` field, so
 // this number is immune to the truncation bias that distorts broadcastNow.
 //
+// Anchors come from rcon `status` — a synchronous round trip, so the wall
+// instant is known to within the round trip itself (~10-50ms on loopback)
+// rather than the seconds of slop a log-scraping sampler carries.
+//
 // Usage:
 //   node e2e/repro/local-e2e-align.cjs ["KTP Local Dev #1"]
 //        [--socket http://localhost:4000]
-//        [--container ktpinfrastructure-data-1] [--anchors /tmp/serveclock.csv]
-//        [--csv out.csv] [--quiet]
+//        [--hltv 127.0.0.1:27020] [--hltv-pw localdev-rcon]
+//        [--anchor-interval 10000] [--csv out.csv] [--quiet]
 'use strict';
-const { execFile } = require('child_process');
 const fs = require('fs');
+const { rconCommand, splitHostPort } = require('./lib/rcon.cjs');
 
 function arg(name, def) {
     const i = process.argv.indexOf(name);
     return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : def;
 }
-const SERVER    = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : 'KTP Local Dev #1';
-const SOCKET    = arg('--socket', 'http://localhost:4000');
-const CONTAINER = arg('--container', 'ktpinfrastructure-data-1');
-const ANCHORS   = arg('--anchors', '/tmp/serveclock.csv');
-const CSV       = arg('--csv', '');
-const QUIET     = process.argv.includes('--quiet');
+const SERVER   = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : 'KTP Local Dev #1';
+const SOCKET   = arg('--socket', 'http://localhost:4000');
+const [HLTV_HOST, HLTV_PORT] = splitHostPort(arg('--hltv', '127.0.0.1:27020'));
+const HLTV_PW  = arg('--hltv-pw', 'localdev-rcon');
+const ANCHOR_MS = +arg('--anchor-interval', '10000');
+const CSV      = arg('--csv', '');
+const QUIET    = process.argv.includes('--quiet');
 
 let io;
 try { io = require('socket.io-client').io; }
@@ -55,16 +60,30 @@ catch { console.error('need socket.io-client (npm i, or run from the repo root)'
 // stalled and the row deserves less trust.
 let anchors = [];
 
-function refreshAnchors() {
-    execFile('docker', ['exec', CONTAINER, 'cat', ANCHORS], { maxBuffer: 4 << 20 }, (err, stdout) => {
-        if (err) return;
-        const rows = stdout.trim().split('\n').slice(1)
-            .map(l => l.split(','))
-            .filter(p => p.length >= 3 && p[0] && p[1])
-            .map(p => ({ wallMs: +p[0], serve: +p[1], world: +p[2], delay: p[3] ? +p[3] : null }))
-            .filter(a => Number.isFinite(a.wallMs) && Number.isFinite(a.serve));
-        if (rows.length) anchors = rows.slice(-8);
-    });
+async function refreshAnchors() {
+    const before = Date.now();
+    let text;
+    try { text = await rconCommand(HLTV_HOST, HLTV_PORT, HLTV_PW, 'status', 5000); }
+    catch { return; }
+    const after = Date.now();
+    if (!text) return;
+
+    const m = text.match(/Spectator Time ([0-9.]+), World Time ([0-9.]+)/);
+    if (!m) {
+        // Older proxy.so without the KTP serve-clock patch. Refuse to guess:
+        // deriving the serve point from (Game Time - Delay) reintroduces both
+        // the MM:SS truncation and the assumption this probe exists to test.
+        if (!refreshAnchors.warned) {
+            console.log('!! status has no `Spectator Time` — this proxy lacks the serve-clock patch; cannot measure');
+            refreshAnchors.warned = true;
+        }
+        return;
+    }
+    const d = text.match(/Delay (\d+)/);
+    // Midpoint of the round trip: the reply was generated somewhere inside it.
+    anchors.push({ wallMs: (before + after) / 2, serve: +m[1], world: +m[2],
+                   delay: d ? +d[1] : null, rttMs: after - before });
+    if (anchors.length > 8) anchors.shift();
 }
 
 // Game time being served at wall instant `wallMs`, projected off the newest
@@ -79,7 +98,7 @@ function serveTimeAt(wallMs) {
 }
 
 refreshAnchors();
-setInterval(refreshAnchors, 5000);
+setInterval(refreshAnchors, ANCHOR_MS);
 
 // ─── overlay side ───────────────────────────────────────────────────────────
 // A persistent connection, exactly like an OBS browser source: events are
