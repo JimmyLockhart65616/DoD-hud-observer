@@ -52,6 +52,11 @@ config/online/config.yaml
 # Regenerate the committed PNGs with `npm run assets:weapons`.
 /assets/weapons-src/
 
+# HLTV↔overlay sync soak CSVs pulled off the data server (131 MB, 36 files).
+# The evidence trail behind SYNC-MEASUREMENT.md "RESOLVED (2026-07-03)"; kept
+# locally after the prod monitor was torn down 2026-08-02. Too large to commit.
+/e2e/repro/soak-logs/
+
 # Local TLS certs for the docker nginx :443 mirror — machine-specific mkcert
 # output (or a self-signed fallback), never committed. Generate per
 # deploy/README.md → Friendly URL.

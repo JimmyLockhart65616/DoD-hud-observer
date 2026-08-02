@@ -3,6 +3,10 @@
 # cadaver; uses sudo). Installs 3 delay-0 relays (CHI1/NY1/ATL1) + the logger,
 # all under systemd (Restart=always). Expects sync-logger.js + lib/ staged in
 # ~/sync-stage. Idempotent. Teardown: e2e/repro/teardown-sync-monitor.sh.
+#
+# RETIRED 2026-08-02 — the offset investigation this instruments is CLOSED
+# (see SYNC-MEASUREMENT.md "RESOLVED (2026-07-03)"). Do not re-deploy without a
+# reason; these relays cost ~7% of a core each and are pure measurement load.
 set -e
 RELAY_PW="${1:-syncrelay}"
 
@@ -34,6 +38,13 @@ Description=KTP sync measurement relay %i
 After=network.target
 [Service]
 User=hltvserver
+Group=hltvserver
+# REQUIRED — without it hltv cannot dlopen steamclient.so and enters an
+# unthrottled SteamAPI_Init retry loop: ~7% of a core per relay and a flood of
+# "[S_API FAIL] ... dlopen failed" to syslog (measured 2026-08-02: 3 relays put
+# 46 GiB into /var/log/syslog.1 in under 3 days). Production hltv@.service has
+# this line; the first version of this unit did not.
+Environment="LD_LIBRARY_PATH=/home/hltvserver/hlds"
 WorkingDirectory=/home/hltvserver/hlds
 ExecStart=/home/hltvserver/hlds/hltv -game dod -port %i +exec configs/hltv-%i.cfg
 StandardInput=null

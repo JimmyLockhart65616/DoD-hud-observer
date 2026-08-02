@@ -10,7 +10,10 @@ sudo rm -f /etc/systemd/system/sync-logger.service /etc/systemd/system/sync-rela
 sudo rm -f /home/hltvserver/hlds/configs/hltv-27060.cfg \
            /home/hltvserver/hlds/configs/hltv-27061.cfg \
            /home/hltvserver/hlds/configs/hltv-27062.cfg
-sudo pkill -f "port 2706" 2>/dev/null
+# Match the hltv binary specifically. A bare "port 2706" pattern also matches
+# any shell whose command line contains that text — including an ssh remote
+# command running this teardown inline, which then kills itself mid-script.
+sudo pkill -f "hlds/hltv .*-port 2706[0-2]" 2>/dev/null
 sudo systemctl daemon-reload
 echo "[teardown] services + relays + configs removed."
 echo "[teardown] logs retained: /opt/sync-monitor/logs  (remove with: sudo rm -rf /opt/sync-monitor)"
