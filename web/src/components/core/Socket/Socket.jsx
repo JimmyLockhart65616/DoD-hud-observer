@@ -924,15 +924,25 @@ export const SocketStoreComponent = () => {
         gameEvents.on('flags_init', (raw) => {
             const e = JSON.parse(raw);
             const { flags: prior } = getState();
+
+            // `reason` (plugin 2.2.2+) says whether this snapshot is authoritative.
+            // map_load / match_start / reset are full-state broadcasts taken from
+            // dodx at a moment the engine had just (re)set ownership — adopt them
+            // verbatim, neutrals included. `tick` is the 30s heartbeat: keep the
+            // old conservative behaviour there, because a heartbeat that lands
+            // mid-round-restart used to wipe the whole bar to grey (4caaa75).
+            //
+            // Before the reason existed a reset was indistinguishable from a stale
+            // heartbeat, so BOTH were refused — which is why flag ownership never
+            // reset after a capout. An older plugin sends no reason and keeps the
+            // pre-existing behaviour.
+            const authoritative = e.reason === 'map_load'
+                || e.reason === 'match_start'
+                || e.reason === 'reset';
+
             setFlags(e.flags.map(f => {
-                // Preserve a non-neutral owner against a neutral snapshot. The
-                // engine resets every flag to TEAM_SPECTATOR during round-restart
-                // windows (e.g. last minute before half-time), and the 30s
-                // task_emit_flags tick would otherwise wipe the HUD bar to grey.
-                // flag_captured remains the source of truth for owner; ktp_match_start
-                // clears flags so a fresh half/match still adopts neutrals correctly.
                 const before = prior.find(p => p.flag_id === f.flag_id);
-                const owner = (before && before.owner !== 'neutral' && f.owner === 'neutral')
+                const owner = (!authoritative && before && before.owner !== 'neutral' && f.owner === 'neutral')
                     ? before.owner
                     : f.owner;
                 return {

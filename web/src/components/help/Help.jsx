@@ -207,7 +207,7 @@ class Help extends React.Component {
                                 <li><strong>Wrong server showing</strong> — the <code>?server=</code> value must match the server's registered hostname exactly, including case and spaces (URL-encoded). Visit <a href="/watch"><code>/watch</code></a> to get the correct copy-paste URL.</li>
                                 <li><strong>Timer drifting</strong> — the server sends a <code>time_sync</code> every 30s; if the displayed timer is more than a few seconds off, the Socket.IO connection may be dropping.</li>
                                 <li><strong>Players missing from roster</strong> — player cards populate on <code>player_spawn</code>. New connections who haven't spawned yet won't appear until their first spawn.</li>
-                                <li><strong>Wrong flag order / names</strong> — <code>flags_init</code> fires once per map load. Reload the map to resend.</li>
+                                <li><strong>Wrong flag order / names</strong> — <code>flags_init</code> is a full-state snapshot re-sent every 30s, at map load, at match start, and after each round restart, so the bar self-heals within 30s. Names that stay wrong are a map-ordering issue, not a lost event.</li>
                             </ul>
                             <p>
                                 For the full event schema and architecture details, see the{' '}
