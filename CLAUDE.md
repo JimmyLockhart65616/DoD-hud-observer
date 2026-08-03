@@ -234,7 +234,7 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 
 ### Flag Events
 ```json
-{ "event": "flags_init", "flags": [
+{ "event": "flags_init", "reason": "map_load|match_start|reset|tick", "flags": [
     { "flag_id": 0, "flag_name": "Allied Plaza", "owner": "allies|axis|neutral" }
   ]
 }
@@ -252,6 +252,7 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
   one-shot `set_task`), so `captor_ids` carries the captors that `dod_score_event`
   credited (it fires ~0.25s deferred). Emitting synchronously read an empty batch
   (the long-standing empty-captor_ids/capout_by bug).
+
 - `cap_break` (reason `kill`) = an enemy killed a capper on the point, removing
   them from the capture zone. Confirmed by an in-zone count drop within a 5-poll
   (~2.5s) window against a rolling baseline, via a per-flag FIFO queue of pending
@@ -263,6 +264,61 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
   The only per-player-attributable break in extension mode (counts only, no zone
   identity) — step-off / enemy-contest are `flag_cap_stopped`
   / `flag_cap_contested`, unattributed.
+
+#### Flag ownership resets (map start / round restart)
+
+`flags_init` is a **full-state snapshot**, re-emitted throughout the map — not once
+per map load. `reason` says how far to trust it:
+
+| reason | when | frontend |
+|---|---|---|
+| `map_load` | `controlpoints_init` + `task_init_config` | authoritative |
+| `match_start` | `ktp_match_start` | authoritative |
+| `reset` | debounced after a round-restart cascade | authoritative |
+| `tick` | the 30s `task_emit_flags` heartbeat | conservative |
+
+Authoritative snapshots are adopted verbatim, **neutrals included**; a `tick` keeps
+the older "never downgrade a captured flag to neutral" rule so a heartbeat landing
+mid-restart can't grey out the bar (`4caaa75`). Guarded by the `flags-init-reason`
+invariant — an untagged or misspelled reason silently degrades to conservative,
+which is the bug, not a crash.
+
+Three things had to line up for ownership to reset correctly; all three were broken:
+
+- **Map defaults.** The engine only broadcasts `SetObj` when a CP *changes hands*,
+  and dodx's pdata `owner` read is a misaligned field that is 0 for every CP. So on
+  a map with default-owned flags (`dod_donner`, `dod_kalt`, `dod_flash`,
+  `dod_saints2_*`) every flag read neutral for the whole map — a round restart did
+  **not** heal it (verified locally: `sv_restartround` produced no CP forwards).
+  Fixed in dodx by parsing `point_default_owner` out of the BSP entity lump in
+  `DODX_InitCPFromEntities`, which also makes `CP_default_owner` real.
+- **Neutral resets were never announced.** `dod_control_point_captured` swallows
+  team→neutral transitions (a live flag never goes neutral mid-round, so they are
+  all restart noise) — but it emitted nothing in their place, so the frontend never
+  learned. The first reset marker now arms a short window and schedules one
+  `reason:"reset"` snapshot carrying the whole post-restart state.
+- **Team resets looked like captures.** On default-owned maps the same cascade
+  restores flags to allies/axis, which alone is indistinguishable from a capture.
+  Inside the reset window a transition landing exactly on the flag's
+  `CP_default_owner` is treated as cascade, not capture; and `deferred_emit_cap`
+  drops a non-capout emission if a reset was detected after it was armed, since the
+  engine can dispatch the neutral sibling a frame later than the flag itself. A
+  capout emission is never dropped — that is the round-winning cap, and the restart
+  it causes necessarily lands inside the same window. (A cascade can't produce a
+  capout: that needs every flag on the map defaulting to one team.)
+
+  **Residual, deliberate:** a cascade that resets *only* home flags has no neutral
+  sibling to open the window, so its one transition still emits a phantom capture.
+  It is recognisable — lands on the default, `dod_score_event` credited nobody — but
+  not reliably: a genuine home-flag re-capture looks identical on the one occasion
+  its score event goes missing. So that evidence only schedules the snapshot (the
+  bar ends correct either way, which is the bug) and still emits. Losing a capture
+  the casters just watched is worse than one stray feed line at a round boundary.
+
+The reset window arms **once** per cascade and extends in place. Re-arming with
+`remove_task` + `set_task` per flag loses the last arm — and therefore the whole
+snapshot — to the KTPAMXX shared-SP-forward hazard, since a real cascade dispatches
+every CP in one frame.
 
 ### Stats Events (popups: cap flash, round/halftime/match-end boards)
 

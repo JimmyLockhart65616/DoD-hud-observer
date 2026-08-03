@@ -34,7 +34,7 @@ native Float:dodx_get_round_time();
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.2.1"
+#define VERSION "2.2.2"
 #define AUTHOR  "cadaver"
 
 #define MAX_PLAYERS     32
@@ -58,6 +58,7 @@ native Float:dodx_get_round_time();
 #define TASK_ID_TIME_SYNC    9004
 #define TASK_ID_EMIT_FLAGS   9005
 #define TASK_ID_GOLIVE_REWIPE 9006
+#define TASK_ID_RESET_SNAPSHOT 9007
 
 // Go-live restart detection. The engine respawns the ENTIRE roster in one frame
 // when the mp_clan_timer countdown ends and frags are zeroed; mid-countdown
@@ -228,6 +229,26 @@ new g_flag_count;
 // Flag metadata cache (read once at flags_init)
 new g_flag_name_cache[MAX_FLAGS][64];
 
+// Per-flag default owner (the team that owns it at round start) in DLL space,
+// from dodx's CP_default_owner. Two uses: the map-load seed below, and telling a
+// round-restart reset apart from a real capture (a reset always lands exactly on
+// the default).
+//
+// dodx only learned this in the build that parses `point_default_owner` out of the
+// BSP entity lump; older modules return 0 for every CP, which reads as "all
+// neutral" — i.e. exactly today's behaviour. So this is safe to run against an
+// un-upgraded fleet: nothing here changes until the module can answer.
+new g_flag_default_owner[MAX_FLAGS];
+
+// Round-restart cascade window. The engine resets every CP to its default at a
+// round restart and dodx replays that as a burst of dod_control_point_captured in
+// a single frame. Set to gametime + CP_RESET_WINDOW the moment we see a reset
+// marker; while it is open, cap events that land on a flag's default owner are
+// treated as part of the cascade rather than as captures.
+new Float:g_cp_reset_until;
+new bool:g_cp_reset_task_pending;
+#define CP_RESET_WINDOW 0.75
+
 // ─── CP index-space remap (dodx array order -> DLL cp_index order) ───────────
 // There are TWO control-point index spaces and they are not always the same:
 //
@@ -295,6 +316,9 @@ new g_flag_emit_pending[MAX_FLAGS];      // 1 while a deferred emission is armed
 new g_flag_emit_owner[MAX_FLAGS];        // captured new_owner (team)
 new g_flag_emit_name[MAX_FLAGS][64];     // captured flag display name
 new bool:g_flag_emit_capout[MAX_FLAGS];  // did this cap complete a capout
+new Float:g_flag_emit_armed_at[MAX_FLAGS];  // gametime the emission was armed, so
+                                            // deferred_emit_cap can tell whether a
+                                            // reset was detected after the fact
 
 // Pending cap-break candidates per flag. client_death queues the killer when
 // the victim's team was actively capping; task_poll_zones then credits queued
@@ -403,9 +427,11 @@ public plugin_cfg() {
     // Reset flag state
     for (new i = 0; i < MAX_FLAGS; i++) {
         g_flag_owner[i]          = -1;
+        g_flag_default_owner[i]  = 0;
         g_flag_last_capped_by[i] = 0;
         // Cancel any in-flight deferred cap emission from the previous map.
         g_flag_emit_pending[i]   = 0;
+        g_flag_emit_armed_at[i]  = 0.0;
         remove_task(TASK_ID_DEFER_BASE + i);
         break_queue_clear(i);
 #if defined HUD_REPRO_TEST
@@ -413,6 +439,10 @@ public plugin_cfg() {
 #endif
     }
     g_flag_count = 0;
+    // gametime restarts at 0 on a new map, so a window left open by the previous
+    // map would otherwise read as open for its first CP_RESET_WINDOW seconds.
+    g_cp_reset_until = 0.0;
+    g_cp_reset_task_pending = false;
 
     // Clear any stragglers from the previous map, then re-arm.
     remove_task(TASK_ID_INIT_CONFIG);
@@ -420,6 +450,7 @@ public plugin_cfg() {
     remove_task(TASK_ID_POLL_ZONES);
     remove_task(TASK_ID_TIME_SYNC);
     remove_task(TASK_ID_EMIT_FLAGS);
+    remove_task(TASK_ID_RESET_SNAPSHOT);
 
     // Defer CVAR + header init to ensure amxx.cfg has loaded
     set_task(1.0, "task_init_config", TASK_ID_INIT_CONFIG);
@@ -480,7 +511,7 @@ public task_init_config() {
     }
 
     // Send flags snapshot now that URL is set (controlpoints_init fires before CVARs load)
-    do_flags_init();
+    do_flags_init("map_load");
 }
 
 
@@ -912,7 +943,7 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
     post_event(json);
 
     // Refresh flag state and send roster dump
-    do_flags_init();
+    do_flags_init("match_start");
     do_roster_dump();
 }
 
@@ -1114,8 +1145,10 @@ public ev_round_start() {
         "{^"event^":^"round_start^",^"timeleft^":%.2f}", hud_timeleft_f());
     post_event(json);
 
-    // Refresh flag state on round start
-    do_flags_init();
+    // Refresh flag state on round start. Authoritative: the engine has just reset
+    // every CP to its default. (This logevent is dead in DoD — see the registration
+    // comment — but the reason is correct for the configs where it does fire.)
+    do_flags_init("reset");
 }
 
 public ev_round_end() {
@@ -1973,7 +2006,7 @@ public ev_say_team(id) { return do_say(id, 1); }
 // DODX forward: called after map control point data is initialized
 public controlpoints_init() {
     server_print("[HUD] controlpoints_init fired");
-    do_flags_init();
+    do_flags_init("map_load");
 }
 
 // Populate g_cp_dodx_of_dll for the current map (identity unless the map is a
@@ -2038,7 +2071,12 @@ stock init_cp_index_remap() {
     }
 }
 
-stock do_flags_init() {
+// `reason` tells the frontend how much to trust this snapshot. "map_load",
+// "match_start" and "reset" are authoritative full-state broadcasts and are adopted
+// verbatim, neutrals included; "tick" is the 30s heartbeat, which the overlay is
+// allowed to treat conservatively. Without the distinction the overlay cannot tell
+// a genuine reset-to-neutral from a stale heartbeat, and had to refuse both.
+stock do_flags_init(const reason[] = "tick") {
     // Seed the index remap BEFORE the early return, so the table is never left
     // all-zeros (which would alias every DLL index onto dodx slot 0). Cheap — a
     // few string compares — and idempotent, so running it on every re-init is fine.
@@ -2049,12 +2087,14 @@ stock do_flags_init() {
 
     static json[BUFFER_SIZE];
     static tmp[128];
-    copy(json, charsmax(json), "{^"event^":^"flags_init^",^"flags^":[");
+    formatex(json, charsmax(json),
+        "{^"event^":^"flags_init^",^"reason^":^"%s^",^"flags^":[", reason);
 
     // `i` is the DLL cp_index (the space every emitted flag_id and all of our
     // g_flag_* state lives in); `dx` is the dodx array slot to read it from.
     for (new i = 0; i < g_flag_count && i < MAX_FLAGS; i++) {
         new dx = g_cp_dodx_of_dll[i];
+        g_flag_default_owner[i] = dodx_objective_get_data(dx, CP_default_owner);
         new owner = dodx_objective_get_data(dx, CP_owner);
         g_flag_owner[i] = owner;
 
@@ -2137,6 +2177,49 @@ public dod_score_event(id, score_delta, total_score, cp_index) {
     }
 }
 
+// Open (or extend) the round-restart cascade window and schedule the single
+// authoritative flags_init that closes it. Idempotent: every flag in the burst
+// calls this, and the re-armed one-shot collapses them into one snapshot.
+//
+// The delay must outlast the whole cascade AND the DEFER_DELAY emissions it may
+// need to cancel, so the snapshot is the last word on ownership.
+stock arm_cp_reset_window() {
+    new Float:now = get_gametime();
+    // The one-shot clears the latch when it fires, which is CP_RESET_WINDOW +
+    // DEFER_DELAY after the last arm. A latch still set well past that means the
+    // task was lost, so don't let it wedge the snapshot off for the rest of the
+    // map — re-arm. Self-healing, and rare enough not to have the tight-loop shape
+    // the guard below exists to avoid.
+    new bool:already_armed = g_cp_reset_task_pending
+        && now < g_cp_reset_until + DEFER_DELAY + 1.0;
+    g_cp_reset_until = now + CP_RESET_WINDOW;
+    if (already_armed) return;
+    remove_task(TASK_ID_RESET_SNAPSHOT);
+
+    // Deliberately ONE set_task per cascade — extend the window in place rather
+    // than remove_task + set_task per flag. A cascade dispatches every CP in a
+    // single frame, and re-arming a task that fast from inside the forward is the
+    // shape that trips KTPAMXX's shared-SP-forward free (the same hazard behind
+    // "a tight loop of cap dispatches drops the last one",
+    // KTPInfrastructure/tests/integration/test_hud_observer_flag_emission.py).
+    // Losing the LAST re-arm means losing the snapshot entirely — observed on the
+    // local repro before this was pinned down.
+    g_cp_reset_task_pending = true;
+    set_task(CP_RESET_WINDOW + DEFER_DELAY, "task_reset_snapshot", TASK_ID_RESET_SNAPSHOT);
+}
+
+public task_reset_snapshot() {
+    // A staggered cascade can push the window past this firing. Wait it out so the
+    // snapshot is always the LAST word on ownership, never a mid-cascade read.
+    new Float:remaining = g_cp_reset_until - get_gametime();
+    if (remaining > 0.0) {
+        set_task(remaining + DEFER_DELAY, "task_reset_snapshot", TASK_ID_RESET_SNAPSHOT);
+        return;
+    }
+    g_cp_reset_task_pending = false;
+    do_flags_init("reset");
+}
+
 // DODX forward: control point captured
 public dod_control_point_captured(cp_index, new_owner, old_owner) {
     if (cp_index < 0 || cp_index >= MAX_FLAGS) return;
@@ -2164,10 +2247,39 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
         return;
     }
     if (new_owner != TEAM_ALLIES && new_owner != TEAM_AXIS) {
+        // Unambiguous reset marker: a live flag never goes neutral mid-round, so
+        // this can only be the engine restoring defaults. Open the cascade window
+        // for its siblings (the whole burst lands in one frame) and schedule the
+        // authoritative re-broadcast — this path emits no flag_captured, so the
+        // snapshot is the ONLY way the frontend ever learns the flag went neutral.
+        // That was the "flags don't reset after a capout" bug.
+        arm_cp_reset_window();
+
         g_flag_owner[cp_index] = new_owner;
         if (!g_flag_emit_pending[cp_index]) g_flag_pending_captor_count[cp_index] = 0;
         // Round-restart neutral cascade lands here: it zeroes every zone count,
         // which the windowed break accounting would misread as kill drops.
+        break_queue_clear(cp_index);
+        return;
+    }
+
+    // Mirror image on maps whose flags are default-OWNED (dod_donner, dod_kalt,
+    // dod_flash, dod_saints2_*): the same cascade restores those to allies/axis,
+    // which on its own is indistinguishable from a capture. Inside an already-open
+    // window a transition landing exactly on the flag's default owner is the
+    // cascade — credit nothing, emit nothing, let the scheduled snapshot carry it.
+    //
+    // The window may NOT be open yet — the engine can dispatch a team reset before
+    // its neutral sibling, and a cascade that resets only home flags has no neutral
+    // sibling at all. Both are handled at emission time instead; see
+    // deferred_emit_cap.
+    //
+    // Requires dodx to know the defaults; on an older module g_flag_default_owner
+    // is 0 everywhere, so neither path can fire and behaviour is unchanged.
+    if (g_cp_reset_until > get_gametime()
+        && g_flag_default_owner[cp_index] == new_owner) {
+        g_flag_owner[cp_index] = new_owner;
+        if (!g_flag_emit_pending[cp_index]) g_flag_pending_captor_count[cp_index] = 0;
         break_queue_clear(cp_index);
         return;
     }
@@ -2216,6 +2328,7 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
     copy(g_flag_emit_name[cp_index], charsmax(g_flag_emit_name[]), flag_name);
     g_flag_emit_capout[cp_index]  = is_capout;
     g_flag_emit_pending[cp_index] = 1;
+    g_flag_emit_armed_at[cp_index] = get_gametime();
     remove_task(TASK_ID_DEFER_BASE + cp_index);
     set_task(DEFER_DELAY, "deferred_emit_cap", TASK_ID_DEFER_BASE + cp_index);
 }
@@ -2231,6 +2344,36 @@ public deferred_emit_cap(task_id) {
     if (cp_index < 0 || cp_index >= MAX_FLAGS) return;
     if (!g_flag_emit_pending[cp_index]) return;
     g_flag_emit_pending[cp_index] = 0;
+
+    // A reset cascade detected AFTER this was armed means the cap we were about to
+    // announce was really the engine restoring a default — the neutral sibling that
+    // proves it can be dispatched a frame later than this flag's own event, i.e.
+    // inside DEFER_DELAY. Drop it rather than feed a phantom capture to the feed.
+    //
+    // Never drop a capout emission: that is the round-winning cap, and the restart
+    // it triggers necessarily lands within this same window. A cascade cannot
+    // itself produce a capout — that would need every flag on the map defaulting to
+    // one team, which no DoD map does.
+    if (!g_flag_emit_capout[cp_index]
+        && g_cp_reset_until > g_flag_emit_armed_at[cp_index]) {
+        g_flag_pending_captor_count[cp_index] = 0;
+        return;
+    }
+
+    // Weaker evidence, weaker action. A cascade only fires for CPs that actually
+    // changed, so a round in which just one home flag was taken resets exactly one
+    // CP — a lone team-owner transition with no neutral sibling to open the window
+    // above. It is recognisable (it lands exactly on the flag's default owner and
+    // dod_score_event credited nobody), but NOT reliably: a genuine re-capture of a
+    // home flag lands on the default too, and would be suppressed on the one
+    // occasion its score event went missing. Losing a capture the casters just
+    // watched is worse than one phantom line at a round boundary, so this only
+    // SCHEDULES the authoritative snapshot — the flag bar ends up correct either
+    // way, which is the actual bug — and still emits.
+    if (g_flag_default_owner[cp_index] == g_flag_emit_owner[cp_index]
+        && g_flag_pending_captor_count[cp_index] == 0) {
+        arm_cp_reset_window();
+    }
 
     new new_owner = g_flag_emit_owner[cp_index];
     new owner_str[16];
