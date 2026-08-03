@@ -87,6 +87,12 @@ function updateServerState(server: string, event: any): void {
             state.halftime_summary = null;
             state.timeleft = null;
             state.timeleftReleasedAt = 0;
+            // Flags too: a half boundary is a changelevel, so cached ownership can
+            // be from a DIFFERENT map. Held stale it was replayed to joiners by
+            // getServerSnapshot and rendered on the HQ board until the next
+            // flags_init. The plugin emits a "match_start" snapshot immediately
+            // after this event, so the empty window is sub-second.
+            state.flags = null;
             if (event.event === 'ktp_match_start' && event.half != null) {
                 state.half = event.half;
             }

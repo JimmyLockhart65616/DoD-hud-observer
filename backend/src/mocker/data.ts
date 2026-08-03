@@ -27,7 +27,12 @@
  *   - flag_cap_started.captor_ids is always []. Captor names only surface on
  *     flag_captured.captor_ids, populated by dod_score_event post-cap.
  *   - flags_init.flag_name uses raw BSP entity strings (e.g. POINT_ANZIO_PLAZA).
- *     All dod_anzio flags initialise as "neutral".
+ *     All dod_anzio flags initialise as "neutral" — a property of THAT map's BSP,
+ *     not of the format: dod_kalt/donner/flash start with their home flags owned.
+ *   - flags_init.reason tags how authoritative the snapshot is (map_load /
+ *     match_start / reset / tick); see CLAUDE.md. The fixture predates the field,
+ *     so the two snapshots here are tagged by hand to keep the stream schema-valid
+ *     against the flags-init-reason invariant.
  *
  * Fields the plugin injects on every emit (tick, plugin_sent_at, match_id, map,
  * match_type, half) are NOT authored here — mocker.ts adds them at send time.
@@ -64,8 +69,11 @@ export default [
 
     // ── Round 1 ──────────────────────────────────────────────────────────────
 
-    // dod_anzio: 5 cap zones, all start neutral. flag_name = BSP entity string.
-    { "flags_init": { "time": 1100, "flags": [
+    // dod_anzio: 5 cap zones, all start neutral (its BSP sets no point_default_owner
+    // on any CP — unlike dod_kalt/donner/flash, where the home flags start owned).
+    // flag_name = BSP entity string. `reason` says how far the overlay trusts the
+    // snapshot; see the flags_init table in CLAUDE.md.
+    { "flags_init": { "time": 1100, "reason": "map_load", "flags": [
         { "flag_id": 0, "flag_name": "POINT_ANZIO_PLAZA",   "owner": "neutral" },
         { "flag_id": 1, "flag_name": "POINT_ANZIO_STREET",  "owner": "neutral" },
         { "flag_id": 2, "flag_name": "POINT_ANZIO_HILL",    "owner": "neutral" },
@@ -413,7 +421,7 @@ export default [
     // ── Half 2, Round 1 ──────────────────────────────────────────────────────
     // Production: flags_init is re-emitted per round (47× in fixture, 6 H1 + 41 H2).
 
-    { "flags_init": { "time": 63100, "flags": [
+    { "flags_init": { "time": 63100, "reason": "match_start", "flags": [
         { "flag_id": 0, "flag_name": "POINT_ANZIO_PLAZA",   "owner": "neutral" },
         { "flag_id": 1, "flag_name": "POINT_ANZIO_STREET",  "owner": "neutral" },
         { "flag_id": 2, "flag_name": "POINT_ANZIO_HILL",    "owner": "neutral" },

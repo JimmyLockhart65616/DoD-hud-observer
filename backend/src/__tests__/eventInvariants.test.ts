@@ -10,6 +10,7 @@ import {
     enumSanity,
     summaryRosterNonEmpty,
     capBreakConsistency,
+    flagsInitReason,
     checkEventStream,
     StreamEvent,
 } from '../invariants/eventInvariants';
@@ -196,6 +197,46 @@ describe('cap-break consistency (event ↔ cap_breaks accumulator, half-scoped)'
 
     it('is order-independent (the score may arrive before the event over HTTP)', () => {
         expect(capBreakConsistency([score(1, 0, { cap_breaks: 1 }), brk(1)])).toEqual([]);
+    });
+});
+
+describe('flags_init reason schema', () => {
+    const snap = (half: number, reason?: string, owner = 'neutral'): StreamEvent => {
+        const e: StreamEvent = { event: 'flags_init', half, flags: [{ flag_id: 0, flag_name: 'A', owner }] };
+        if (reason !== undefined) e.reason = reason;
+        return e;
+    };
+
+    it('passes for every reason in the vocabulary', () => {
+        const events = ['map_load', 'match_start', 'reset', 'tick'].map(r => snap(1, r));
+        expect(flagsInitReason(events)).toEqual([]);
+    });
+
+    it('is a no-op on a pre-feature stream (no snapshot carries a reason)', () => {
+        expect(flagsInitReason([snap(1), snap(1), snap(2)])).toEqual([]);
+    });
+
+    it('fires when only some snapshots are tagged (a missed call site)', () => {
+        const v = flagsInitReason([snap(1, 'map_load'), snap(1), snap(1)]);
+        expect(v.map(x => x.invariant)).toEqual(['flags-init-reason-missing']);
+        expect(v[0].message).toContain('half 1');
+        expect(v[0].message).toContain('2 flags_init');
+    });
+
+    it('fires on a misspelled reason — the overlay would silently stop resetting', () => {
+        const v = flagsInitReason([snap(1, 'tick'), snap(1, 'restart')]);
+        expect(v.map(x => x.invariant)).toEqual(['flags-init-reason-enum']);
+        expect(v[0].message).toContain('restart');
+    });
+
+    it('reports each distinct bad reason once, not per event', () => {
+        const v = flagsInitReason([snap(1, 'restart'), snap(1, 'restart'), snap(2, 'restart')]);
+        expect(v).toHaveLength(1);
+    });
+
+    it('enumSanity also rejects a bad owner inside a snapshot', () => {
+        const v = enumSanity([snap(1, 'reset', 'british')]);
+        expect(v.map(x => x.invariant)).toEqual(['enum-flag-owner']);
     });
 });
 

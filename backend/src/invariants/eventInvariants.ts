@@ -136,6 +136,13 @@ export const enumSanity: Invariant = (events) => {
         if (e.event === 'flag_captured' && typeof e.new_owner === 'string' && !FLAG_OWNER_VALUES.has(e.new_owner)) {
             badOwners.add(e.new_owner);
         }
+        // flags_init is the authoritative full-state broadcast, so a bad owner
+        // here mis-colours the whole bar, not one flag.
+        if (e.event === 'flags_init' && Array.isArray(e.flags)) {
+            for (const f of e.flags) {
+                if (typeof f?.owner === 'string' && !FLAG_OWNER_VALUES.has(f.owner)) badOwners.add(f.owner);
+            }
+        }
     }
     const out: InvariantViolation[] = [];
     for (const t of badTeams) {
@@ -249,8 +256,56 @@ export const capBreakConsistency: Invariant = (events) => {
     return out;
 };
 
+/**
+ * FLAGS_INIT REASON SCHEMA: once the plugin tags snapshots, every snapshot must
+ * carry a reason from the known vocabulary.
+ *
+ * This guards a silent-degradation path rather than a crash. The overlay decides
+ * whether to adopt a team→neutral downgrade purely from `reason`
+ * (Socket.jsx flags_init): authoritative reasons are adopted verbatim, anything
+ * else keeps the conservative "never grey out a captured flag" behaviour that
+ * existed before the field. So a snapshot emitted with a missing or misspelled
+ * reason does not fail loudly — it just stops resetting the flag bar, which is
+ * exactly the bug the field was added to fix, back again and invisible.
+ *
+ * No-op on streams that predate the field (they carry no reason anywhere), so it
+ * cannot false-positive on the archived fixtures.
+ */
+const FLAGS_INIT_REASONS = new Set(['map_load', 'match_start', 'reset', 'tick']);
+
+export const flagsInitReason: Invariant = (events) => {
+    const snapshots = events.filter(e => e.event === 'flags_init');
+    if (!snapshots.some(e => typeof e.reason === 'string')) return [];
+
+    const missing = new Map<number, number>();
+    const bad = new Set<string>();
+    for (const e of snapshots) {
+        if (typeof e.reason !== 'string') {
+            const h = halfOf(e);
+            missing.set(h, (missing.get(h) ?? 0) + 1);
+        } else if (!FLAGS_INIT_REASONS.has(e.reason)) {
+            bad.add(e.reason);
+        }
+    }
+
+    const out: InvariantViolation[] = [];
+    for (const [h, n] of missing) {
+        out.push({
+            invariant: 'flags-init-reason-missing',
+            message: `half ${h}: ${n} flags_init without a reason, in a stream that tags others — the overlay falls back to the conservative path for these and will not reset flag ownership (expected one of ${[...FLAGS_INIT_REASONS].join('|')}).`,
+        });
+    }
+    for (const r of bad) {
+        out.push({
+            invariant: 'flags-init-reason-enum',
+            message: `flags_init with unknown reason "${r}" — the overlay treats anything it does not recognise as a non-authoritative tick and will not reset flag ownership (expected one of ${[...FLAGS_INIT_REASONS].join('|')}).`,
+        });
+    }
+    return out;
+};
+
 /** All invariants, in evaluation order. Reused by tests and (later) the audit harness. */
-export const INVARIANTS: ReadonlyArray<Invariant> = [capCreditObjScore, capCreditCaps, enumSanity, summaryRosterNonEmpty, capBreakConsistency];
+export const INVARIANTS: ReadonlyArray<Invariant> = [capCreditObjScore, capCreditCaps, enumSanity, summaryRosterNonEmpty, capBreakConsistency, flagsInitReason];
 
 /** Run every invariant over an emitted event stream and return all violations. */
 export function checkEventStream(events: ReadonlyArray<StreamEvent>): InvariantViolation[] {
