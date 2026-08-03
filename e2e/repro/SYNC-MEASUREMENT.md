@@ -168,3 +168,32 @@ Still real, still open (separate, lower priority): `hltv-restart.timer` (03:00 *
 empties master buffers → reconnecting viewers get near-live footage (no spoiler delay) for one map;
 mid-map proxy-type joins land at buffer start (client joins may differ); frontend counts down through
 engine pauses until the next post-unpause `time_sync`.
+
+---
+
+## DECOMMISSIONED (2026-08-02) — the prod monitor is gone
+
+Tony asked what was holding 27060/27061/27062 on the data server. It was this
+suite, still running 4 weeks after the investigation closed. Removed entirely:
+`sync-relay@27060/27061/27062`, `sync-logger.service`, `sync-health.timer` +
+`.service`, `/opt/sync-monitor`, and the three `hltv-2706x.cfg` files.
+
+**The relay unit had a defect worth remembering.** It omitted the
+`Environment="LD_LIBRARY_PATH=/home/hltvserver/hlds"` line that production
+`hltv@.service` carries. Without it `hltv` cannot `dlopen steamclient.so` and
+spins in an unthrottled `SteamAPI_Init` retry loop — ~7% of a core per relay,
+and enough `[S_API FAIL]` output to put **46 GiB into a single `syslog.1`**
+(83% of that file's tail, split evenly across the three relay PIDs). It also
+collapsed journald's retention to a couple of hours. Fixed in
+`deploy-sync-monitor.sh` should this ever be redeployed. `/etc/logrotate.d/rsyslog`
+gained `maxsize 1G` so no future chatty process can reach that size between the
+daily timer runs.
+
+**Removing it is not free — mind the alerting.** `sync-health.timer` fires every
+15 min with `OnFailure=ktp-systemd-alert@%n.service`, so stopping the relays
+without removing the timer sent **41 Discord alerts over ~10 hours**. Kill the
+timer first next time.
+
+The 36 soak CSVs (Jun 28 → Aug 2, 131 MB) were pulled to `e2e/repro/soak-logs/`
+(gitignored) and verified byte-for-byte before the server copy was deleted.
+`sync-health.sh` existed only on the server and is now committed here.
