@@ -232,6 +232,25 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 { "event": "user_say", "user_id": "STEAM_0:0:123", "team_only": false, "message": "gg" }
 ```
 
+### Live State Events (socket-only — never persisted)
+
+```json
+{ "event": "weapon_active", "user_id": "STEAM_0:0:123", "weapon": "garand" }
+{ "event": "player_state", "players": [
+    { "user_id": "STEAM_0:0:123", "weapon": "garand", "nades": 2,
+      "health": 100, "prone_state": "standing|prone|deployed" }
+  ]
+}
+```
+
+These drive the live weapon icon and grenade pips on the player cards.
+
+- `weapon_active` is forward-driven (`dod_client_weaponswitch`), so it is immune to the half-1 task wedge. `player_state` is the 4 Hz `task_poll_player_state` batch and is not.
+- `player_state` carries **only alive players** — the POST is skipped entirely when nobody is alive, and dead players are omitted rather than sent with zeroes. The store leaves omitted players untouched.
+- Both are in `SOCKET_ONLY_EVENTS` (`ingest.ts`): fanned out to sockets but **not** written to `events.jsonl`, and there is **no reducer arm and no cache**, so a join snapshot carries no weapon/grenade data — a reloading overlay shows nothing until the next tick. This is also why event-stream invariants cannot cover them: the production fixture contains zero `player_state` records.
+- `nades` comes from `dodx_get_grenade_ammo`, a raw pdata read at a **runtime-detected offset**. Every failure path in that native returns `0`, which is indistinguishable from an empty pool — a wrong offset yields plausible, stable, entirely fabricated counts. See `Socket.nades.test.js` for the store contract.
+- `nade_throw` above is documented but **never emitted by the plugin** (a CS-era leftover); `Socket.jsx` increments a `nades_thrown` field no component reads. Do not build on it.
+
 ### Flag Events
 ```json
 { "event": "flags_init", "reason": "map_load|match_start|reset|tick", "flags": [
