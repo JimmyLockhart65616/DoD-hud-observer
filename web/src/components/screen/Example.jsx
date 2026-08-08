@@ -9,6 +9,7 @@ import PlayersRight from '../core/PlayersRight/PlayersRight';
 import Flags from '../core/Flags/Flags';
 import FlagFeed from '../core/FlagFeed/FlagFeed';
 import StatsBoard from '../core/StatsBoard/StatsBoard';
+import WavePill from '../core/Score/wave/WavePill';
 // PlayerObserved disabled: no HLTV signal yet to know which player the caster is watching.
 // import PlayerObserved from '../core/PlayerObserved/PlayerObserved';
 
@@ -41,6 +42,15 @@ function Example() {
     const timeleft      = useHudStore(s => s.timeleft);
     const timeleftAt    = useHudStore(s => s.timeleft_at);
     const statsBoard    = useHudStore(s => s.stats_board);
+
+    const waveAllies        = useHudStore(s => s.wave_allies);
+    const waveAlliesAt      = useHudStore(s => s.wave_allies_at);
+    const waveAlliesPending = useHudStore(s => s.wave_allies_pending);
+    const waveAxis          = useHudStore(s => s.wave_axis);
+    const waveAxisAt        = useHudStore(s => s.wave_axis_at);
+    const waveAxisPending   = useHudStore(s => s.wave_axis_pending);
+
+    const clockFrozen = roundState.round_freeze || roundState.round_end;
 
     return (
         <div className="grid-container">
@@ -89,13 +99,41 @@ function Example() {
                 <PlayerObserved players={[...alliesPlayers, ...axisPlayers]} />
             </div> */}
 
+            {/* Reinforcement-wave pills sit directly above each team's card strip,
+                next to the dead cards they explain. Deliberately NOT in the top bar:
+                .flags-bar is an absolute overlay across that same 72px band, so at
+                the ~1280 prod OBS canvas the allies side is already buried behind the
+                flag strip (see e2e/snapshots/fixed-1280x720.png — ALLIES itself is
+                hidden there). The bottom band has width to spare at every size. */}
             <div className="bottom-bar">
-                <div className="team-cards">
-                    <PlayersLeft players={alliesPlayers} />
+                <div className="team-column">
+                    <div className="team-wave-row team-wave-row-allies">
+                        <WavePill
+                            seconds={waveAllies}
+                            secondsAt={waveAlliesAt}
+                            pending={waveAlliesPending}
+                            side="allies"
+                            frozen={clockFrozen}
+                        />
+                    </div>
+                    <div className="team-cards">
+                        <PlayersLeft players={alliesPlayers} />
+                    </div>
                 </div>
                 <div className="bottom-center-gap" />
-                <div className="team-cards">
-                    <PlayersRight players={axisPlayers} />
+                <div className="team-column">
+                    <div className="team-wave-row team-wave-row-axis">
+                        <WavePill
+                            seconds={waveAxis}
+                            secondsAt={waveAxisAt}
+                            pending={waveAxisPending}
+                            side="axis"
+                            frozen={clockFrozen}
+                        />
+                    </div>
+                    <div className="team-cards">
+                        <PlayersRight players={axisPlayers} />
+                    </div>
                 </div>
             </div>
 

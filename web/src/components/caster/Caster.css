@@ -74,6 +74,14 @@
   padding: 0 6px;
 }
 
+/* WavePill is shared with the on-air overlay, where it sits above the card
+   strips at overlay scale. Size it up for the larger caster type; the
+   scoreline's flex gap already spaces it. */
+.caster-scoreline .wave-pill {
+  font-size: 16px;
+  align-self: center;
+}
+
 .caster-meta {
   display: flex;
   align-items: center;

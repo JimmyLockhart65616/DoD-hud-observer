@@ -236,20 +236,70 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 
 ```json
 { "event": "weapon_active", "user_id": "STEAM_0:0:123", "weapon": "garand" }
-{ "event": "player_state", "players": [
+{ "event": "player_state",
+  "waves": { "allies": { "in": 3.25, "pending": 2 },
+             "axis":   { "in": 7.75, "pending": 4 } },
+  "players": [
     { "user_id": "STEAM_0:0:123", "weapon": "garand", "nades": 2,
       "health": 100, "prone_state": "standing|prone|deployed" }
   ]
 }
 ```
 
-These drive the live weapon icon and grenade pips on the player cards.
+These drive the live weapon icon and grenade pips on the player cards, plus the
+reinforcement-wave pill above each team's card strip.
 
 - `weapon_active` is forward-driven (`dod_client_weaponswitch`), so it is immune to the half-1 task wedge. `player_state` is the 4 Hz `task_poll_player_state` batch and is not.
-- `player_state` carries **only alive players** — the POST is skipped entirely when nobody is alive, and dead players are omitted rather than sent with zeroes. The store leaves omitted players untouched.
+- `player_state` carries **only alive players** — dead players are omitted rather than sent with zeroes, and the store leaves omitted players untouched. The POST is skipped when there is nothing at all to say, but an empty `players` array still ships if a wave clock is running: a full team wipe is exactly when the pill matters.
 - Both are in `SOCKET_ONLY_EVENTS` (`ingest.ts`): fanned out to sockets but **not** written to `events.jsonl`, and there is **no reducer arm and no cache**, so a join snapshot carries no weapon/grenade data — a reloading overlay shows nothing until the next tick. This is also why event-stream invariants cannot cover them: the production fixture contains zero `player_state` records.
 - `nades` comes from `dodx_get_grenade_ammo`, a raw pdata read at a **runtime-detected offset**. Every failure path in that native returns `0`, which is indistinguishable from an empty pool — a wrong offset yields plausible, stable, entirely fabricated counts. See `Socket.nades.test.js` for the store contract.
 - `nade_throw` above is documented but **never emitted by the plugin** (a CS-era leftover); `Socket.jsx` increments a `nades_thrown` field no component reads. Do not build on it.
+
+#### Reinforcement wave clock (`waves`)
+
+DoD respawn is a **per-team reinforcement wave**, not a per-player countdown. The
+clock is idle while a side has nobody waiting, **arms on the death that takes it
+from 0 waiting to 1**, then fires every `mp_clan_respawntime` seconds returning
+everyone flagged ready. So a player who dies just before a wave is back almost
+instantly and one who dies just after waits a full period, and the two sides'
+phases are unrelated — never derive one from the other.
+
+- **A side is omitted whenever its clock is idle or unreadable**, and the store
+  nulls an omitted side rather than leaving it stale (`Socket.waves.test.js`).
+  The overlay hides that pill. A countdown still ticking after everyone
+  respawned is worse on air than no countdown.
+- `in` is seconds-REMAINING, never an absolute gametime — the frontend stamps the
+  receipt instant and counts down locally, exactly like `timeleft`/`timeleft_at`.
+  Since the HLTV delay buffer releases the event, receipt time *is* broadcast
+  time and no delay arithmetic is needed anywhere.
+- `pending` is computed server-side from the same set the clock keys on, so the
+  `+N` can never disagree with the timer beside it. It can over-count a player
+  who isn't ready to spawn yet (`CBasePlayer::m_imissedwave` — DoD makes them
+  miss the wave); there is no extension-mode read for `m_irdytospawn`, and
+  over-counting is the benign direction for a team-level number.
+- Source order in `hud_wave_time_f()`: idle → `-1.0`; then `dodx_get_wave_time()`
+  (CLOSED LOOP, bound optionally via `set_native_filter` — **no shipped dodx
+  exports it yet**); then the open-loop `mp_clan_respawntime` estimate against the
+  anchor armed in `client_death`. The estimate is gated on `mp_clan_match` — on a
+  pub the period comes from the map, so it would be confidently wrong; hide
+  instead. A changelevel makes elapsed negative and drops out, so the clock
+  simply hides until the next death re-arms it.
+- The anchor **re-anchors on every 0→1 transition** rather than only when empty.
+  That is what makes it self-correcting: a stale anchor from an earlier round,
+  half or map can't survive a lull, so no invalidation path has to be kept in
+  sync with every restart edge.
+- **Placement: above each team's card strip, NOT in the top bar.** `.flags-bar`
+  is an absolute overlay across the same 72px band as `.top-bar`, so at the
+  ~1280 prod OBS canvas the allies side of the top bar is already buried behind
+  the flag strip — `e2e/snapshots/fixed-1280x720.png` (June, pre-dating this
+  feature) shows the `ALLIES` label itself hidden. Anything added there is
+  invisible on the left at the real broadcast width. `.team-wave-row` has a
+  **fixed** height so the card strip doesn't bounce when a pill appears or idles
+  out. `/caster` puts the same component in `.caster-scoreline`, which has room.
+- `WavePill` hides itself once its anchor runs `STALE_AFTER_ZERO_SEC` (3s) past
+  zero with no refresh. The plugin re-sends at 4 Hz, so a real wave re-anchors
+  long before that; only a wedged poll task or a dead server trips it, and "0s"
+  frozen on air reads as a wave that never arrives.
 
 ### Flag Events
 ```json
@@ -536,6 +586,7 @@ cumulative-stats state machine (the `halfRows`/`halfSource`/`recordHalf`/
 precedence) survives adversarial 6v6 orderings:
 
 - [web/src/components/core/Socket/Socket.chaos.test.js](web/src/components/core/Socket/Socket.chaos.test.js) — summary-vs-marker precedence (both orderings), dropped-summary snapshot fallback, match-end cumulative totals (best_streak MAX'd), signal-less H2→OT boundary, prod double-boundary (ktp_match_start + half_start) counted once, reconnect + halftime team-swap carry by user_id, fresh-match carry/board reset, capout title
+- [web/src/components/core/Socket/Socket.waves.test.js](web/src/components/core/Socket/Socket.waves.test.js) — reinforcement-wave clock store contract: both-sides anchoring with a receipt stamp, one-sided block nulls the other side (no stale countdown), missing `waves` key clears both, applied on an empty/malformed `players` array, `pending` defaults, half + fresh-match boundary clears
 
 Mechanics: `socket.io-client` is mocked at module load (no real connection);
 each test mounts a fresh component (RTL auto-unmounts between tests, clearing

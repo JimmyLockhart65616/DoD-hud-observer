@@ -134,8 +134,14 @@ export default [
     ]}},
 
     // Mid-round snapshot: 1003/2002/2006 are dead by now (kills at 9s/10s/14s) and
-    // are intentionally absent — a couple of nades thrown.
-    { "player_state": { "time": 16000, "players": [
+    // are intentionally absent — a couple of nades thrown. First snapshot to carry
+    // the `waves` block: the wave clock is per-TEAM and arms on each side's first
+    // death, so the two sides have unrelated phases (the 4800 snapshot above has no
+    // `waves` key at all — nobody was dead yet, so neither clock was running).
+    { "player_state": { "time": 16000, "waves": {
+        "allies": { "in": 3.75, "pending": 1 },
+        "axis":   { "in": 8.25, "pending": 2 },
+    }, "players": [
         { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing" },
         { "user_id": "STEAM_0:0:1002", "weapon": "thompson", "nades": 2, "health": 100, "prone_state": "standing" },
         { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 1, "health": 88,  "prone_state": "deployed" },
@@ -144,6 +150,19 @@ export default [
         { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 1, "health": 100, "prone_state": "standing" },
         { "user_id": "STEAM_0:0:2003", "weapon": "kar",      "nades": 2, "health": 62,  "prone_state": "standing" },
         { "user_id": "STEAM_0:0:2004", "weapon": "mp44",     "nades": 1, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2005", "weapon": "kar",      "nades": 2, "health": 90,  "prone_state": "standing" },
+    ]}},
+
+    // Post-trade snapshot: both sides are down bodies and the allies wave is about
+    // to land — drives the pill's sub-3s "hot" state on the overlay.
+    { "player_state": { "time": 22500, "waves": {
+        "allies": { "in": 1.25, "pending": 3 },
+        "axis":   { "in": 6.50, "pending": 4 },
+    }, "players": [
+        { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 0, "health": 88,  "prone_state": "deployed" },
+        { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": 0, "health": 51,  "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 0, "health": 100, "prone_state": "standing" },
         { "user_id": "STEAM_0:0:2005", "weapon": "kar",      "nades": 2, "health": 90,  "prone_state": "standing" },
     ]}},
 

@@ -178,6 +178,17 @@ function handleHalfBoundary(newHalf) {
 
 // ─── Zustand Store ────────────────────────────────────────────────────────────
 
+// Both wave clocks idle. Spread into every boundary reset so a countdown from
+// the previous half/match can't survive into the next one.
+const WAVES_CLEARED = {
+    wave_allies:         null,
+    wave_allies_at:      null,
+    wave_allies_pending: 0,
+    wave_axis:           null,
+    wave_axis_at:        null,
+    wave_axis_pending:   0,
+};
+
 export const useHudStore = create(set => ({
 
     // Team scores (round wins)
@@ -228,12 +239,44 @@ export const useHudStore = create(set => ({
     timeleft:    null,
     timeleft_at: null,
 
+    // Reinforcement wave clocks, one per side. DoD respawn is a per-TEAM wave
+    // that arms on that side's first death and is idle while nobody is waiting,
+    // so the two sides have unrelated phases and either can be null at any time.
+    // null = clock idle or unreadable → the overlay hides that side's pill.
+    //
+    // Same anchor shape as timeleft: the plugin sends seconds-REMAINING and we
+    // stamp the receipt instant, so the countdown is automatically in broadcast
+    // frame (the value is released by the HLTV delay buffer, not read live).
+    wave_allies:         null,
+    wave_allies_at:      null,
+    wave_allies_pending: 0,
+    wave_axis:           null,
+    wave_axis_at:        null,
+    wave_axis_pending:   0,
+
     // ── Actions ──────────────────────────────────────────────────────────────
 
     setAlliesScore: (n) => set({ allies_score: n }),
     setAxisScore:   (n) => set({ axis_score: n }),
     setHalf:        (n) => set({ half: n }),
     setTimeleft:    (seconds) => set({ timeleft: seconds, timeleft_at: Date.now() }),
+
+    // `waves` is the optional team-level block on player_state. A side missing
+    // from it has an idle/unreadable clock and is nulled rather than left stale —
+    // a countdown that keeps ticking after everyone has respawned is worse than
+    // no countdown.
+    setWaves: (waves) => set(() => {
+        const now = Date.now();
+        const side = (s) => (s && typeof s.in === 'number')
+            ? { v: s.in, at: now, pending: s.pending ?? 0 }
+            : { v: null, at: null, pending: 0 };
+        const a = side(waves?.allies);
+        const x = side(waves?.axis);
+        return {
+            wave_allies: a.v, wave_allies_at: a.at, wave_allies_pending: a.pending,
+            wave_axis:   x.v, wave_axis_at:   x.at, wave_axis_pending:   x.pending,
+        };
+    }),
 
     setAlliesPlayers: (updater) => set(state => ({
         allies_players: typeof updater === 'function' ? updater(state.allies_players) : [...updater],
@@ -312,6 +355,7 @@ export const useHudStore = create(set => ({
             kill_streaks: {},
             timeleft: null,
             timeleft_at: null,
+            ...WAVES_CLEARED,
             allies_players: state.allies_players.map(wipe),
             axis_players: state.axis_players.map(wipe),
         };
@@ -332,6 +376,7 @@ export const useHudStore = create(set => ({
         flags: [],
         timeleft: null,
         timeleft_at: null,
+        ...WAVES_CLEARED,
         round_state: { round_end: false, round_freeze: false, round_start: false },
         ...(half === 1 ? { allies_score: 0, axis_score: 0 } : {}),
     })),
@@ -423,6 +468,7 @@ export const SocketStoreComponent = () => {
     const setHalf          = useHudStore(s => s.setHalf);
     const setRoundState    = useHudStore(s => s.setRoundState);
     const setTimeleft      = useHudStore(s => s.setTimeleft);
+    const setWaves         = useHudStore(s => s.setWaves);
     const resetHalf        = useHudStore(s => s.resetHalf);
     const resetMatch       = useHudStore(s => s.resetMatch);
     const resetStreaks     = useHudStore(s => s.resetStreaks);
@@ -617,9 +663,15 @@ export const SocketStoreComponent = () => {
         // hit), and prone stays owned by prone_change (it carries the shame
         // timestamp). Players absent from the array (dead/disconnected) are left
         // untouched — the kill/disconnect handlers already cleared them.
+        //
+        // Also carries the optional team-level `waves` block. That is applied
+        // BEFORE the players guard: on a full team wipe the plugin sends an empty
+        // players array with the wave clocks still running, which is exactly when
+        // the pill matters most.
 
         gameEvents.on('player_state', (raw) => {
             const e = JSON.parse(raw);
+            setWaves(e.waves);
             if (!Array.isArray(e.players)) return;
             const byId = {};
             e.players.forEach(p => { byId[p.user_id] = p; });

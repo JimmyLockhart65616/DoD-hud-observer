@@ -31,10 +31,20 @@
 native Float:dodx_get_round_time();
 #endif
 
+// dodx_get_wave_time: engine-authoritative seconds to a team's next
+// reinforcement wave (CDoDTeamPlay::m_fl{Allies,Axis}WaveTime). Not shipped by
+// any dodx yet — declared guarded and bound optionally exactly like
+// dodx_get_round_time above, so the plugin runs on the open-loop estimate today
+// and flips to the closed loop the moment a module carrying it lands, with no
+// second plugin deploy.
+#if !defined dodx_get_wave_time
+native Float:dodx_get_wave_time(team);
+#endif
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.2.2"
+#define VERSION "2.3.0"
 #define AUTHOR  "cadaver"
 
 #define MAX_PLAYERS     32
@@ -158,6 +168,29 @@ new Float:g_round_live_deadline = 0.0;
 new bool:g_awaiting_stat_rewipe = false;
 new g_golive_spawn_count = 0;
 new Float:g_golive_spawn_t0 = 0.0;
+
+// ─── Reinforcement wave clock ────────────────────────────────────────────────
+// DoD respawn is a per-TEAM reinforcement wave, not a per-player countdown. The
+// clock is idle while a team has nobody waiting, arms on the death that takes it
+// from 0 waiting to 1, then fires every mp_clan_respawntime seconds returning
+// everyone flagged ready — so a player who dies just before a wave is back
+// almost immediately and one who dies just after waits a full period. The two
+// sides arm independently and their phases are unrelated.
+//
+// g_wave_anchor[team] = gametime the clock armed, indexed by TEAM_* (0 unused).
+// Only meaningful while wave_pending(team) > 0; see hud_wave_time_f().
+new Float:g_wave_anchor[3];
+
+// dodx_get_wave_time() availability — same optional-native binding as
+// g_has_round_time_native. No shipped dodx exports it yet, so on today's fleet
+// this goes false at load and hud_wave_time_f() runs the open-loop estimate.
+new bool:g_has_wave_native = true;
+
+// Cached cvar pointers for the open-loop wave estimate. Resolved once in
+// task_init_config rather than hashed by name on every poll (hud_wave_time_f
+// runs twice per 0.25s tick). 0 = unresolved → estimate unavailable.
+new g_pcvar_respawntime = 0;
+new g_pcvar_clan_match  = 0;
 
 // Player state
 new g_player_team[MAX_PLAYERS + 1];
@@ -466,6 +499,17 @@ public task_init_config() {
     get_cvar_string("dod_hud_url", g_cvar_url, charsmax(g_cvar_url));
     get_cvar_string("dod_hud_key", g_cvar_key, charsmax(g_cvar_key));
     get_cvar_string("hostname",    g_hostname,  charsmax(g_hostname));
+
+    // Wave-clock cvars, resolved to pointers once (hud_wave_time_f reads them
+    // twice per 0.25s poll). These are engine cvars, always present.
+    g_pcvar_respawntime = get_cvar_pointer("mp_clan_respawntime");
+    g_pcvar_clan_match  = get_cvar_pointer("mp_clan_match");
+
+    // gametime restarts at 0 on a new map — drop anchors from the previous one.
+    // Belt and braces: hud_wave_time_f already rejects a negative elapsed, and
+    // client_death re-anchors on the first death either way.
+    g_wave_anchor[TEAM_ALLIES] = 0.0;
+    g_wave_anchor[TEAM_AXIS]   = 0.0;
 
     // Build persistent curl headers — ONCE per process, NEVER freed across
     // overlapping async requests. Same UAF class fixed in KTPHLTVRecorder
@@ -827,12 +871,78 @@ stock hud_timeleft() {
     return floatround(hud_timeleft_f(), floatround_floor);
 }
 
-// Optional-native binding: allow loading against pre-2.7.23 dodx modules that
-// don't export dodx_get_round_time. trap==0 = load-time bind failure — mark
-// the native unavailable and let the plugin load (hud_timeleft falls back to
-// the anchor). Anything else stays fatal: a genuinely missing core native
-// must keep failing loudly, and a runtime trap (trap==1) can only mean a
-// gating bug on our side.
+// ─── Reinforcement wave clock ────────────────────────────────────────────────
+
+// Players on `team` waiting on the next reinforcement wave. Doubles as the
+// "is the clock running" test: DoD's wave clock is idle while this is 0.
+//
+// Spectators, HLTV and unassigned slots are excluded — they never come back with
+// a wave. This can over-count by a player who is not yet ready to spawn (still
+// on the death cam, or sitting in the class menu): DoD makes them MISS the wave
+// (CBasePlayer::m_imissedwave) and wait for the next one. There is no
+// extension-mode read for m_irdytospawn, and over-counting is the benign
+// direction — the pill promises a team N bodies, not a named player.
+stock wave_pending(team) {
+    new n = 0;
+    for (new id = 1; id <= get_maxplayers(); id++) {
+        if (!is_user_connected(id)) continue;
+        if (is_user_hltv(id))       continue;
+        if (g_player_team[id] != team) continue;
+        if (g_player_alive[id])     continue;
+        n++;
+    }
+    return n;
+}
+
+// Seconds until `team`'s next reinforcement wave; -1.0 when there is no honest
+// answer, which the caller surfaces by omitting the side entirely (the overlay
+// hides the pill rather than showing a fabricated countdown).
+//
+// Source preference, mirroring hud_timeleft_f():
+// 1. Idle clock (nobody waiting) — -1.0 before consulting either source, since
+//    neither is meaningful and the engine field is likely a stale past value.
+// 2. dodx_get_wave_time() — CLOSED LOOP, the engine's own wave accounting.
+//    Correct on pubs and across every restart. Not shipped by any dodx yet.
+// 3. Open loop: mp_clan_respawntime against the anchor armed in client_death.
+//    Gated on mp_clan_match — on a pub the wave period comes from the map, not
+//    this cvar, so the estimate would be confidently wrong. A gametime
+//    regression (changelevel) yields a negative elapsed and drops out here, so
+//    the clock simply hides until the next death re-arms it.
+stock Float:hud_wave_time_f(team) {
+    if (team != TEAM_ALLIES && team != TEAM_AXIS) return -1.0;
+    if (wave_pending(team) <= 0) return -1.0;
+
+    if (g_has_wave_native) {
+        new Float:rem = dodx_get_wave_time(team);
+        if (rem >= 0.0) return rem;
+    }
+
+    if (!g_pcvar_respawntime || !g_pcvar_clan_match) return -1.0;
+    if (get_pcvar_num(g_pcvar_clan_match) == 0)      return -1.0;
+
+    new Float:period = get_pcvar_float(g_pcvar_respawntime);
+    if (period <= 0.0) return -1.0;
+
+    new Float:anchor = g_wave_anchor[team];
+    if (anchor <= 0.0) return -1.0;
+
+    new Float:elapsed = get_gametime() - anchor;
+    if (elapsed < 0.0) return -1.0;
+
+    // Pawn has no fmod — floor the quotient and subtract.
+    new cycles = floatround(elapsed / period, floatround_floor);
+    new Float:rem = period - (elapsed - float(cycles) * period);
+    if (rem < 0.0)     rem = 0.0;
+    if (rem > period)  rem = period;
+    return rem;
+}
+
+// Optional-native binding: allow loading against dodx modules that don't export
+// dodx_get_round_time (pre-2.7.23) or dodx_get_wave_time (every module shipped
+// so far). trap==0 = load-time bind failure — mark the native unavailable and
+// let the plugin load, falling back to the open-loop estimate. Anything else
+// stays fatal: a genuinely missing core native must keep failing loudly, and a
+// runtime trap (trap==1) can only mean a gating bug on our side.
 public plugin_natives() {
     set_native_filter("native_filter");
 }
@@ -840,6 +950,10 @@ public plugin_natives() {
 public native_filter(const name[], index, trap) {
     if (!trap && equal(name, "dodx_get_round_time")) {
         g_has_round_time_native = false;
+        return PLUGIN_HANDLED;
+    }
+    if (!trap && equal(name, "dodx_get_wave_time")) {
+        g_has_wave_native = false;
         return PLUGIN_HANDLED;
     }
     return PLUGIN_CONTINUE;
@@ -890,6 +1004,12 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
         g_lastSummaryAt[r] = 0.0;
     }
     g_lastHalfEndFwdAt = 0.0;
+
+    // Drop wave-clock anchors: the go-live mp_clan_restartround respawns the
+    // whole roster, so both sides' clocks go idle and re-arm on the first death
+    // of the live half.
+    g_wave_anchor[TEAM_ALLIES] = 0.0;
+    g_wave_anchor[TEAM_AXIS]   = 0.0;
 
     // Arm the round-live re-anchor + re-wipe. This forward fires ~mp_clan_timer
     // (~8-10s) BEFORE the go-live mp_clan_restartround rebases the half timer, zeroes
@@ -1400,6 +1520,21 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
     new killer_prone = (g_player_prone[killer] != PRONE_STANDING) ? 1 : 0;
     new bool:nade_kill = is_nade_wpn(wpnindex);
 
+    // Reinforcement-wave phase anchor. DoD's wave clock is idle while a team has
+    // nobody waiting and starts at the death that takes it from 0 waiting to 1,
+    // so that transition IS the phase. Evaluated BEFORE the victim is marked
+    // dead, hence pending == 0 here means this death armed the clock.
+    //
+    // Re-anchoring on every 0->1 transition (rather than only when the stored
+    // value is empty) is what makes this self-correcting: a stale anchor from an
+    // earlier round, half or map can never survive a lull, so no separate
+    // invalidation path has to be kept in sync with every restart edge.
+    new victim_team = g_player_team[victim];
+    if ((victim_team == TEAM_ALLIES || victim_team == TEAM_AXIS)
+        && wave_pending(victim_team) == 0) {
+        g_wave_anchor[victim_team] = get_gametime();
+    }
+
     g_player_alive[victim] = 0;
     g_player_prone[victim] = PRONE_STANDING;
 
@@ -1724,10 +1859,10 @@ public task_poll_player_state() {
         get_steamid(id, steamid, charsmax(steamid));
 
         // Defensive: stop before overflowing. Reserves room for this player's
-        // entry (<=192) AND post_event's envelope prefix (~165 with a match
-        // active) so a full 32-slot server can't truncate the wrapped payload
-        // mid-JSON. 6v6 stays well under this.
-        if (strlen(ps_json) > BUFFER_SIZE - 384) break;
+        // entry (<=192), the trailing wave block (<=96) AND post_event's envelope
+        // prefix (~165 with a match active) so a full 32-slot server can't
+        // truncate the wrapped payload mid-JSON. 6v6 stays well under this.
+        if (strlen(ps_json) > BUFFER_SIZE - 480) break;
 
         static pbuf[192];
         formatex(pbuf, charsmax(pbuf),
@@ -1737,10 +1872,41 @@ public task_poll_player_state() {
         first = false;
     }
 
-    add(ps_json, charsmax(ps_json), "]}");
+    add(ps_json, charsmax(ps_json), "]");
 
-    // Skip the POST entirely when nobody is alive (pre-spawn / between rounds).
-    if (!first && g_cvar_url[0]) post_event(ps_json);
+    // ── Team-level reinforcement-wave block ──────────────────────────────────
+    // A side is omitted entirely when its clock is idle (nobody waiting) or
+    // unreadable, so the overlay hides its pill instead of rendering a
+    // fabricated countdown. `pending` is sent rather than derived frontend-side
+    // from the store's dead count: it is the same set the clock itself keys on,
+    // so the pill can never disagree with the timer beside it.
+    new Float:wave_allies = hud_wave_time_f(TEAM_ALLIES);
+    new Float:wave_axis   = hud_wave_time_f(TEAM_AXIS);
+    new bool:have_wave = (wave_allies >= 0.0 || wave_axis >= 0.0);
+
+    if (have_wave) {
+        static wbuf[128];
+        new wlen = formatex(wbuf, charsmax(wbuf), ",^"waves^":{");
+        if (wave_allies >= 0.0) {
+            wlen += formatex(wbuf[wlen], charsmax(wbuf) - wlen,
+                "^"allies^":{^"in^":%.2f,^"pending^":%d}",
+                wave_allies, wave_pending(TEAM_ALLIES));
+        }
+        if (wave_axis >= 0.0) {
+            wlen += formatex(wbuf[wlen], charsmax(wbuf) - wlen,
+                "%s^"axis^":{^"in^":%.2f,^"pending^":%d}",
+                (wave_allies >= 0.0) ? "," : "", wave_axis, wave_pending(TEAM_AXIS));
+        }
+        formatex(wbuf[wlen], charsmax(wbuf) - wlen, "}");
+        add(ps_json, charsmax(ps_json), wbuf);
+    }
+
+    add(ps_json, charsmax(ps_json), "}");
+
+    // Skip the POST only when there is genuinely nothing to say. `first` alone
+    // is no longer the test: a full team wipe leaves the player array empty and
+    // is precisely when the wave clock matters most.
+    if ((!first || have_wave) && g_cvar_url[0]) post_event(ps_json);
 }
 
 public ev_team_score() {

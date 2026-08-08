@@ -12,6 +12,7 @@ import {
 import StatsTable from '../core/StatsBoard/StatsTable';
 import Flags from '../core/Flags/Flags';
 import Timer from '../core/Score/timer/Timer';
+import WavePill from '../core/Score/wave/WavePill';
 import { className as dodClassName } from '../core/dodClasses';
 import { getWeaponIcon } from '../screen/resources/weaponIcons';
 
@@ -236,6 +237,12 @@ function Caster() {
     const timeleft = useHudStore(s => s.timeleft);
     const timeleftAt = useHudStore(s => s.timeleft_at);
     const roundState = useHudStore(s => s.round_state);
+    const waveAllies = useHudStore(s => s.wave_allies);
+    const waveAlliesAt = useHudStore(s => s.wave_allies_at);
+    const waveAlliesPending = useHudStore(s => s.wave_allies_pending);
+    const waveAxis = useHudStore(s => s.wave_axis);
+    const waveAxisAt = useHudStore(s => s.wave_axis_at);
+    const waveAxisPending = useHudStore(s => s.wave_axis_pending);
     const killStreaks = useHudStore(s => s.kill_streaks);
     const killLog = useHudStore(s => s.kill_log);
 
@@ -309,6 +316,13 @@ function Caster() {
             <header className="caster-header">
                 <div className="caster-scoreline">
                     <span className="caster-team caster-allies">ALLIES</span>
+                    <WavePill
+                        seconds={waveAllies}
+                        secondsAt={waveAlliesAt}
+                        pending={waveAlliesPending}
+                        side="allies"
+                        frozen={roundState.round_freeze || roundState.round_end}
+                    />
                     <span className="caster-score">{alliesScore}</span>
                     <span className="caster-clock">
                         <Timer
@@ -318,6 +332,13 @@ function Caster() {
                         />
                     </span>
                     <span className="caster-score">{axisScore}</span>
+                    <WavePill
+                        seconds={waveAxis}
+                        secondsAt={waveAxisAt}
+                        pending={waveAxisPending}
+                        side="axis"
+                        frozen={roundState.round_freeze || roundState.round_end}
+                    />
                     <span className="caster-team caster-axis">AXIS</span>
                 </div>
                 <div className="caster-meta">

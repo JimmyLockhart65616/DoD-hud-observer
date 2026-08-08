@@ -63,6 +63,50 @@
 .team-alive-allies { margin-left: 10px; }
 .team-alive-axis   { margin-right: 10px; }
 
+/* Reinforcement-wave pill (e.g. "⟳3s +4") — seconds to that side's next respawn
+   wave and how many players it brings back. Lives in .team-wave-row above each
+   card strip on /screen and in .caster-scoreline on /caster; both containers
+   handle its placement, so it carries no margins of its own. Renders nothing
+   when that side's wave clock is idle. */
+.wave-pill {
+  display: inline-block;
+  font-size: 14px;
+  font-weight: 800;
+  color: #f2e5c8;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(242, 229, 200, 0.25);
+  border-radius: 10px;
+  padding: 1px 7px;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.wave-pill .wave-glyph {
+  opacity: 0.7;
+  font-weight: 400;
+  margin-right: 3px;
+}
+
+.wave-pill .wave-pending {
+  margin-left: 5px;
+  color: #fff;
+}
+
+/* Imminent wave. Pure CSS animation, never a JS timer — OBS throttles
+   background-tab intervals and a JS-driven pulse would stutter or stall. */
+.wave-pill.hot {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.55);
+  animation: wave-pulse 0.7s ease-in-out infinite;
+}
+
+@keyframes wave-pulse {
+  0%, 100% { background: rgba(0, 0, 0, 0.45); }
+  50%      { background: rgba(196, 48, 48, 0.75); }
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    SCORE BAR
    ═══════════════════════════════════════════════════════════════════ */
@@ -709,6 +753,17 @@
   gap: 8px;
 }
 
+/* One per side: the wave-pill row stacked over that team's card strip. The
+   column owns the horizontal flex the cards used to; .team-cards keeps its own
+   min-width:0 so the cards still pack/clip rather than overflow. */
+.team-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+}
+
 .team-cards {
   display: flex;
   flex: 1;
@@ -718,6 +773,18 @@
                        own min-width:0 + overflow:hidden. */
   gap: 3px;
 }
+
+/* Fixed height, not auto: the pill comes and goes as each side's wave clock
+   arms and idles, and a collapsing row would bounce the whole card strip up and
+   down on air. Reserve the band once and let it sit empty. */
+.team-wave-row {
+  display: flex;
+  align-items: center;
+  height: 20px;
+}
+
+.team-wave-row-allies { justify-content: flex-start; }
+.team-wave-row-axis   { justify-content: flex-end; }
 
 /* ── Player Card (Direction B: health on top, header, two icon rows) ── */
 .player-card {
