@@ -898,6 +898,12 @@ stock wave_pending(team) {
 // answer, which the caller surfaces by omitting the side entirely (the overlay
 // hides the pill rather than showing a fabricated countdown).
 //
+// `pending` is passed in rather than recomputed: the caller needs the same count
+// for the emitted `pending` field, and this runs on the 4 Hz poll path (which
+// already has a perf-warning history). Reading it once also makes the "+N can
+// never disagree with the timer beside it" guarantee structural instead of
+// incidental — both come from the same read of the same instant.
+//
 // Source preference, mirroring hud_timeleft_f():
 // 1. Idle clock (nobody waiting) — -1.0 before consulting either source, since
 //    neither is meaningful and the engine field is likely a stale past value.
@@ -908,9 +914,9 @@ stock wave_pending(team) {
 //    this cvar, so the estimate would be confidently wrong. A gametime
 //    regression (changelevel) yields a negative elapsed and drops out here, so
 //    the clock simply hides until the next death re-arms it.
-stock Float:hud_wave_time_f(team) {
+stock Float:hud_wave_time_f(team, pending) {
     if (team != TEAM_ALLIES && team != TEAM_AXIS) return -1.0;
-    if (wave_pending(team) <= 0) return -1.0;
+    if (pending <= 0) return -1.0;
 
     if (g_has_wave_native) {
         new Float:rem = dodx_get_wave_time(team);
@@ -1879,9 +1885,12 @@ public task_poll_player_state() {
     // unreadable, so the overlay hides its pill instead of rendering a
     // fabricated countdown. `pending` is sent rather than derived frontend-side
     // from the store's dead count: it is the same set the clock itself keys on,
-    // so the pill can never disagree with the timer beside it.
-    new Float:wave_allies = hud_wave_time_f(TEAM_ALLIES);
-    new Float:wave_axis   = hud_wave_time_f(TEAM_AXIS);
+    // and counted ONCE here for both uses, so the pill can never disagree with
+    // the timer beside it.
+    new pend_allies = wave_pending(TEAM_ALLIES);
+    new pend_axis   = wave_pending(TEAM_AXIS);
+    new Float:wave_allies = hud_wave_time_f(TEAM_ALLIES, pend_allies);
+    new Float:wave_axis   = hud_wave_time_f(TEAM_AXIS,   pend_axis);
     new bool:have_wave = (wave_allies >= 0.0 || wave_axis >= 0.0);
 
     if (have_wave) {
@@ -1890,12 +1899,12 @@ public task_poll_player_state() {
         if (wave_allies >= 0.0) {
             wlen += formatex(wbuf[wlen], charsmax(wbuf) - wlen,
                 "^"allies^":{^"in^":%.2f,^"pending^":%d}",
-                wave_allies, wave_pending(TEAM_ALLIES));
+                wave_allies, pend_allies);
         }
         if (wave_axis >= 0.0) {
             wlen += formatex(wbuf[wlen], charsmax(wbuf) - wlen,
                 "%s^"axis^":{^"in^":%.2f,^"pending^":%d}",
-                (wave_allies >= 0.0) ? "," : "", wave_axis, wave_pending(TEAM_AXIS));
+                (wave_allies >= 0.0) ? "," : "", wave_axis, pend_axis);
         }
         formatex(wbuf[wlen], charsmax(wbuf) - wlen, "}");
         add(ps_json, charsmax(ps_json), wbuf);
