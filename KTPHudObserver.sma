@@ -2194,10 +2194,17 @@ public controlpoints_init() {
 //
 // To derive an entry for a newly-affected map: watch for
 // `[DODX] BSP parse returned 0 CPs` (or a `BSP CP count != entity scan count`
-// mismatch) in the server log, play one match, then run
-// `scripts/cp-index-space.py <matches_dir> <map>` — the flag_id whose captures
-// carry a +2 team-score delta is the map's point_team_points=2 CP, which pins the
-// permutation. Background: docs/dodx-cp-index-space-findings.md.
+// mismatch) in the server log, then
+//   1. `scripts/cp-entity-dump.py <map.bsp>` — confirms the defect from the BSP
+//      itself and prints a candidate ordering, but read its ambiguity warnings:
+//      position alone cannot separate two flags at similar depth offset sideways
+//      (it backtests 1 of 4 on maps with a side objective), so it is a starting
+//      point, not an answer.
+//   2. play one match, then `scripts/cp-index-space.py <matches_dir> <map>` — the
+//      flag_id whose captures carry a +2 team-score delta is the map's
+//      point_team_points=2 CP, which pins the permutation.
+// Background: docs/dodx-cp-index-space-findings.md. The map-side fix (have the
+// mapper set point_index) is specified in docs/mapper-point-index-spec.md.
 //
 // dod_northbound also skips the reorder (4 of 5 CPs carry point_index, so the
 // counts mismatch) but its spawn order already equals the DLL's, so identity is
@@ -2208,7 +2215,8 @@ stock init_cp_index_remap() {
     new mapname[64];
     get_mapname(mapname, charsmax(mapname));
 
-    // dod_saints2_b3e / _b2 — no point_index on any CP. dodx array order is
+    // dod_saints2_b3e / _b2 — ships point_index=-1 on every CP (the key is
+    // present but unusable, so dodx's >= 0 filter drops it). dodx array order is
     // [Bridge, Allied 1st, Allied 2nd, Axis 2nd, Axis 1st]; the DLL orders them
     // allies->axis, which puts the bridge 3rd. VERIFIED on b3e across 65 prod
     // matches; b2 shares b3e's CP names, spawn order and relative geometry.
