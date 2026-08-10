@@ -44,7 +44,7 @@ native Float:dodx_get_wave_time(team);
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.3.0"
+#define VERSION "2.3.1"
 #define AUTHOR  "cadaver"
 
 #define MAX_PLAYERS     32
@@ -180,6 +180,27 @@ new Float:g_golive_spawn_t0 = 0.0;
 // g_wave_anchor[team] = gametime the clock armed, indexed by TEAM_* (0 unused).
 // Only meaningful while wave_pending(team) > 0; see hud_wave_time_f().
 new Float:g_wave_anchor[3];
+
+// Seconds the real wave lands AFTER anchor + mp_clan_respawntime. Measured on
+// the league fleet 2026-08-09 (broadcast overlay vs the players actually
+// appearing): the open-loop estimate ran consistently ~2s early, so the panel
+// hit 00:00 while the side was still waiting.
+//
+// Two mechanisms would produce exactly this and cannot be told apart from
+// outside the engine: a fixed post-death delay before DoD counts a body as
+// waiting on a wave (the death cam — client_death, which arms our anchor, fires
+// at the kill), or a true period simply longer than the cvar. Since the estimate
+// now runs exactly ONE cycle (see hud_wave_time_f), both are the same
+// arithmetic, so there is nothing to choose between. Moot the day
+// dodx_get_wave_time() ships — that path returns before any of this.
+#define WAVE_SPAWN_DELAY 2.0
+
+// How long the estimate may keep reading 0 past its own deadline before the side
+// is dropped. The prediction carries error, so hiding exactly on it would often
+// blank the panel a beat before the players appear; holding zero covers that and
+// reads as "any moment now". Bounded, because a panel parked on 00:00 reads as a
+// wave that never arrives.
+#define WAVE_OVERRUN_GRACE 1.5
 
 // dodx_get_wave_time() availability — same optional-native binding as
 // g_has_round_time_native. No shipped dodx exports it yet, so on today's fleet
@@ -909,11 +930,12 @@ stock wave_pending(team) {
 //    neither is meaningful and the engine field is likely a stale past value.
 // 2. dodx_get_wave_time() — CLOSED LOOP, the engine's own wave accounting.
 //    Correct on pubs and across every restart. Not shipped by any dodx yet.
-// 3. Open loop: mp_clan_respawntime against the anchor armed in client_death.
-//    Gated on mp_clan_match — on a pub the wave period comes from the map, not
-//    this cvar, so the estimate would be confidently wrong. A gametime
-//    regression (changelevel) yields a negative elapsed and drops out here, so
-//    the clock simply hides until the next death re-arms it.
+// 3. Open loop: mp_clan_respawntime (+ WAVE_SPAWN_DELAY) against the anchor
+//    armed in client_death. Gated on mp_clan_match — on a pub the wave period
+//    comes from the map, not this cvar, so the estimate would be confidently
+//    wrong. A gametime regression (changelevel) yields a negative elapsed and
+//    drops out here, so the clock simply hides until the next death re-arms it.
+//    Runs exactly ONE cycle and then gives up rather than wrapping; see below.
 stock Float:hud_wave_time_f(team, pending) {
     if (team != TEAM_ALLIES && team != TEAM_AXIS) return -1.0;
     if (pending <= 0) return -1.0;
@@ -935,11 +957,18 @@ stock Float:hud_wave_time_f(team, pending) {
     new Float:elapsed = get_gametime() - anchor;
     if (elapsed < 0.0) return -1.0;
 
-    // Pawn has no fmod — floor the quotient and subtract.
-    new cycles = floatround(elapsed / period, floatround_floor);
-    new Float:rem = period - (elapsed - float(cycles) * period);
-    if (rem < 0.0)     rem = 0.0;
-    if (rem > period)  rem = period;
+    new Float:rem = (period + WAVE_SPAWN_DELAY) - elapsed;
+
+    // Deliberately does NOT wrap into a second cycle. Still waiting past the
+    // deadline means the phase we anchored is no longer trustworthy — the usual
+    // cause is a player who died in the last moments before a wave and MISSED it
+    // (CBasePlayer::m_imissedwave), which extension mode cannot see. Restarting
+    // the countdown from the top puts a confident, fabricated 00:10 on air
+    // seconds after it hit zero, which is exactly what a caster reads as the
+    // respawn being further away than it is. Hide instead, and wait for the next
+    // 0->1 death to re-arm a phase we actually observed.
+    if (rem < -WAVE_OVERRUN_GRACE) return -1.0;
+    if (rem < 0.0)                 return 0.0;
     return rem;
 }
 

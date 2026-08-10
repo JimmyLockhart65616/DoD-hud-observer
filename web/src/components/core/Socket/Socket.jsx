@@ -184,10 +184,33 @@ const WAVES_CLEARED = {
     wave_allies:         null,
     wave_allies_at:      null,
     wave_allies_pending: 0,
+    wave_allies_wrapped: false,
     wave_axis:           null,
     wave_axis_at:        null,
     wave_axis_pending:   0,
+    wave_axis_wrapped:   false,
 };
+
+// A side's remaining time can only ever DECREASE within one arming of the clock:
+// the plugin derives it from gametime, and a legitimate re-arm can only follow a
+// poll where nobody was waiting — which omits the side and nulls it here first.
+// So a value that jumps UP is the open-loop estimate wrapping into a fresh cycle
+// because the wave outlived its predicted deadline, and on air that reads as the
+// countdown restarting from 00:10 a second after it reached zero.
+//
+// Drop the side when that happens and LATCH it: the next poll is 250ms later and
+// would otherwise re-admit the same bogus cycle at 00:09. The latch clears when
+// the clock genuinely goes idle (side omitted) or at a half/match boundary.
+//
+// Plugin 2.3.1 no longer wraps. This stays as the net for servers still running
+// an older build — the fleet activates a new .amxx on its own restart cycle, so
+// the two are never in step.
+//
+// Residual: a death landing inside the same 250ms poll as a wave re-arms without
+// an intervening idle poll, so a genuine new cycle reads as a wrap and is latched
+// off. It needs someone to die within a quarter-second of spawning, hiding is the
+// safe direction, and the latch clears at that side's next wave.
+const WAVE_WRAP_TOLERANCE_SEC = 1;
 
 export const useHudStore = create(set => ({
 
@@ -250,9 +273,11 @@ export const useHudStore = create(set => ({
     wave_allies:         null,
     wave_allies_at:      null,
     wave_allies_pending: 0,
+    wave_allies_wrapped: false,
     wave_axis:           null,
     wave_axis_at:        null,
     wave_axis_pending:   0,
+    wave_axis_wrapped:   false,
 
     // ── Actions ──────────────────────────────────────────────────────────────
 
@@ -265,17 +290,35 @@ export const useHudStore = create(set => ({
     // from it has an idle/unreadable clock and is nulled rather than left stale —
     // a countdown that keeps ticking after everyone has respawned is worse than
     // no countdown.
-    setWaves: (waves) => set(() => {
+    setWaves: (waves) => set(state => {
         const now = Date.now();
-        const side = (s) => (s && typeof s.in === 'number')
-            ? { v: s.in, at: now, pending: s.pending ?? 0 }
-            : { v: null, at: null, pending: 0 };
-        const a = side(waves?.allies);
-        const x = side(waves?.axis);
-        return {
-            wave_allies: a.v, wave_allies_at: a.at, wave_allies_pending: a.pending,
-            wave_axis:   x.v, wave_axis_at:   x.at, wave_axis_pending:   x.pending,
+
+        const side = (key, s) => {
+            if (!s || typeof s.in !== 'number') {
+                // Idle or unreadable — clear the side and release the wrap latch.
+                return {
+                    [`wave_${key}`]: null, [`wave_${key}_at`]: null,
+                    [`wave_${key}_pending`]: 0, [`wave_${key}_wrapped`]: false,
+                };
+            }
+
+            // Project the previous anchor forward to now; anything materially
+            // above it restarted the cycle rather than continuing it.
+            const prev   = state[`wave_${key}`];
+            const prevAt = state[`wave_${key}_at`];
+            const wrapped = state[`wave_${key}_wrapped`]
+                || (prev != null && prevAt != null
+                    && s.in > prev - (now - prevAt) / 1000 + WAVE_WRAP_TOLERANCE_SEC);
+
+            return {
+                [`wave_${key}`]:         wrapped ? null : s.in,
+                [`wave_${key}_at`]:      wrapped ? null : now,
+                [`wave_${key}_pending`]: s.pending ?? 0,
+                [`wave_${key}_wrapped`]: wrapped,
+            };
         };
+
+        return { ...side('allies', waves?.allies), ...side('axis', waves?.axis) };
     }),
 
     setAlliesPlayers: (updater) => set(state => ({

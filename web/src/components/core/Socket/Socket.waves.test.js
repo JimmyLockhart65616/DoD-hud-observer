@@ -12,6 +12,8 @@
  *   - a snapshot with no `waves` key at all clears both
  *   - the block is applied even when `players` is empty (a full team wipe is
  *     exactly when the pill matters) or malformed
+ *   - a countdown that jumps back UP is a wrapped open-loop estimate, not a new
+ *     wave: the side is dropped and LATCHED off until the clock goes idle
  *   - half and match boundaries clear both clocks
  *
  * A stale countdown is the failure mode worth guarding: a pill still ticking
@@ -144,6 +146,71 @@ describe('Socket store machine — reinforcement wave clocks', () => {
         expect(s.allies).toBeNull();
         expect(s.alliesPending).toBe(0);
         expect(s.axis).toBe(6.0);
+    });
+
+    // ── Wrap guard ───────────────────────────────────────────────────────────
+    //
+    // Pre-2.3.1 plugins ran the open-loop estimate modulo the respawn period, so
+    // a wave that outlived its predicted deadline restarted the countdown from
+    // the top — 00:00 followed a second later by a confident 00:10. Within one
+    // arming the remaining time only ever falls, and a real re-arm can only come
+    // after an idle poll (which nulls the side first), so an increase is always
+    // that wrap.
+
+    it('drops a side whose countdown jumps back up', () => {
+        const { store, emit } = setup();
+        snapshot(emit, { allies: { in: 0.25, pending: 2 }, axis: { in: 7.75, pending: 1 } });
+
+        // Deadline passed with the side still waiting: the old estimate wraps.
+        snapshot(emit, { allies: { in: 10.0, pending: 2 }, axis: { in: 7.0, pending: 1 } });
+
+        const s = state(store);
+        expect(s.allies).toBeNull();
+        expect(s.alliesAt).toBeNull();
+        // The other side is untouched — the phases are unrelated.
+        expect(s.axis).toBe(7.0);
+    });
+
+    it('stays dropped for the rest of the wrapped cycle', () => {
+        const { store, emit } = setup();
+        snapshot(emit, { allies: { in: 0.25, pending: 2 } });
+        snapshot(emit, { allies: { in: 10.0, pending: 2 } });
+
+        // 250ms later the same bogus cycle would otherwise re-enter at 00:09.
+        snapshot(emit, { allies: { in: 9.75, pending: 2 } });
+        expect(state(store).allies).toBeNull();
+    });
+
+    it('re-admits the side once the clock goes idle', () => {
+        const { store, emit } = setup();
+        snapshot(emit, { allies: { in: 0.25, pending: 2 } });
+        snapshot(emit, { allies: { in: 10.0, pending: 2 } });
+
+        // Wave lands, nobody waiting — the plugin omits the side, releasing the latch.
+        snapshot(emit, {});
+        expect(state(store).allies).toBeNull();
+
+        snapshot(emit, { allies: { in: 10.0, pending: 1 } });
+        expect(state(store).allies).toBe(10.0);
+    });
+
+    it('tolerates sub-second jitter without dropping the side', () => {
+        const { store, emit } = setup();
+        snapshot(emit, { allies: { in: 5.0, pending: 2 } });
+        snapshot(emit, { allies: { in: 5.4, pending: 2 } });
+
+        expect(state(store).allies).toBe(5.4);
+    });
+
+    it('releases the wrap latch at a half boundary', () => {
+        const { store, emit } = setup();
+        snapshot(emit, { allies: { in: 0.25, pending: 2 } });
+        snapshot(emit, { allies: { in: 10.0, pending: 2 } });
+
+        emit('half_start', { event: 'half_start', half: 2, timeleft: 1200 });
+        snapshot(emit, { allies: { in: 8.0, pending: 3 } });
+
+        expect(state(store).allies).toBe(8.0);
     });
 
     it('clears both clocks at the half boundary', () => {

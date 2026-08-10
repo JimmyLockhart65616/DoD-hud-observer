@@ -312,6 +312,25 @@ phases are unrelated — never derive one from the other.
   pub the period comes from the map, so it would be confidently wrong; hide
   instead. A changelevel makes elapsed negative and drops out, so the clock
   simply hides until the next death re-arms it.
+- The estimated deadline is `anchor + mp_clan_respawntime + WAVE_SPAWN_DELAY`
+  (2.0s, plugin 2.3.1). Measured on the fleet 2026-08-09: waves land ~2s later
+  than the bare cvar, so the panel used to hit `00:00` while the side was still
+  waiting. A fixed post-death delay before DoD counts a body as waiting (the
+  death cam — `client_death` fires at the kill) and a true period longer than the
+  cvar are indistinguishable from outside the engine, and since the estimate now
+  runs **exactly one cycle** they are the same arithmetic anyway.
+- **The estimate never wraps into a second cycle.** Past the deadline it reads
+  `0` for `WAVE_OVERRUN_GRACE` (1.5s, covering its own error so the panel doesn't
+  blank a beat before the players appear) and then returns `-1.0`, hiding the
+  side until the next 0→1 death re-arms an observed phase. Still waiting past the
+  deadline usually means somebody died in the last moments before a wave and
+  missed it — invisible in extension mode — so a fresh `00:10` seconds after zero
+  is fabricated, and reads on air as the respawn being further away than it is.
+  `Socket.jsx` independently drops+latches any side whose remaining time jumps up
+  (`WAVE_WRAP_TOLERANCE_SEC`): within one arming it can only fall, and a real
+  re-arm always follows an idle poll that nulls the side first. That net exists
+  because the frontend deploys instantly while the fleet picks up a new `.amxx`
+  on its own restart cycle.
 - The anchor **re-anchors on every 0→1 transition** rather than only when empty.
   That is what makes it self-correcting: a stale anchor from an earlier round,
   half or map can't survive a lull, so no invalidation path has to be kept in
