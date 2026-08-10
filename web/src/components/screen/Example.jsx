@@ -10,6 +10,7 @@ import Flags from '../core/Flags/Flags';
 import FlagFeed from '../core/FlagFeed/FlagFeed';
 import StatsBoard from '../core/StatsBoard/StatsBoard';
 import WavePill from '../core/Score/wave/WavePill';
+import EditableTeamName from '../core/TeamName/EditableTeamName';
 // PlayerObserved disabled: no HLTV signal yet to know which player the caster is watching.
 // import PlayerObserved from '../core/PlayerObserved/PlayerObserved';
 
@@ -19,8 +20,6 @@ import './Screen.css';
 
 function Example() {
 
-    const team1Name = 'ALLIES';
-    const team2Name = 'AXIS';
     const logoLeft = 'default.png';
     const logoRight = 'default.png';
 
@@ -30,9 +29,6 @@ function Example() {
 
     const alliesPlayers = useHudStore(s => s.allies_players);
     const axisPlayers   = useHudStore(s => s.axis_players);
-
-    const alliesAlive = alliesPlayers.filter(p => !p.dead).length;
-    const axisAlive   = axisPlayers.filter(p => !p.dead).length;
     const kills         = useHudStore(s => s.kills);
     const alliesScore   = useHudStore(s => s.allies_score);
     const axisScore     = useHudStore(s => s.axis_score);
@@ -71,8 +67,7 @@ function Example() {
 
             <div className="top-bar">
                 <span className="team-name team-name-allies">
-                    {team1Name}
-                    <span className="team-alive team-alive-allies" title="Players alive">{alliesAlive}</span>
+                    <EditableTeamName side="allies" />
                 </span>
                 <Score
                     roundState={roundState}
@@ -84,8 +79,7 @@ function Example() {
                     timeleftAt={timeleftAt}
                 />
                 <span className="team-name team-name-axis">
-                    <span className="team-alive team-alive-axis" title="Players alive">{axisAlive}</span>
-                    {team2Name}
+                    <EditableTeamName side="axis" />
                 </span>
             </div>
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import { getWeaponIcon } from '../../screen/resources/weaponIcons';
+import { useTeamName } from '../TeamName/teamNames';
 
 // One team's per-player stat table. Extracted from StatsBoard so the transient
 // on-air board and the persistent caster page (/caster) render the same table
@@ -49,6 +50,10 @@ const StatsTable = ({
     sortDir = 'desc',
     onSort,          // caster page only — makes the headers clickable
 }) => {
+    // Whatever the caster typed over the top-bar label, so the board doesn't say
+    // ALLIES while the bar above it says the team's actual name.
+    const label = useTeamName(team);
+
     const col = STAT_COLUMNS.find(c => c.key === sortKey);
     const cmp = col ? col.value : (p => p.damage ?? 0);
     const dir = sortDir === 'asc' ? -1 : 1;
@@ -84,7 +89,7 @@ const StatsTable = ({
 
     return (
         <div className={`stats-board-team stats-board-${team}`}>
-            <div className="stats-board-team-name">{team === 'allies' ? 'ALLIES' : 'AXIS'}</div>
+            <div className="stats-board-team-name">{label}</div>
             <table className="stats-board-table">
                 <thead>
                     <tr>

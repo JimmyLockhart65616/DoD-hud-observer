@@ -15,6 +15,25 @@ class Welcome extends React.Component {
                             <li><a href="/help">Viewer Guide</a> — how to set up and use the HUD in OBS</li>
                         </ul>
                         <h5 style={{ marginTop: '32px' }}>
+                            What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-08-09</small>
+                        </h5>
+                        <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>
+                            <li>
+                                Custom team names — double-click either team name in the top bar and type it in
+                                (in OBS: right-click the source → Interact). It's remembered on that machine until
+                                you change it, so it's a one-time thing per event; ⇄ swaps the two names at
+                                halftime. The stats board picks the names up too. You can also set them from the
+                                source URL instead: <code>/screen?allies=BLACK+SHEEP&amp;axis=DAS+REICH</code>
+                            </li>
+                            <li>Respawn timer — each team's card strip now shows the seconds until that side's next reinforcement wave</li>
+                            <li>
+                                Flag ownership fixes — flags now start the map owned by the right side on maps with
+                                default-owned flags (donner, kalt, flash, saints2), and the bar resets correctly
+                                after a round restart or a capout instead of going grey and staying grey
+                            </li>
+                            <li>Removed the per-team alive counter from the top bar — the player cards already show who's down</li>
+                        </ul>
+                        <h5 style={{ marginTop: '32px' }}>
                             What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-06-25</small>
                         </h5>
                         <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>

@@ -45,23 +45,46 @@
   text-align: left;
 }
 
-/* Per-team alive counter (e.g. "6" / "4") — sits beside the team name,
-   toward the center score. Derived from per-player dead state. */
-.team-alive {
-  display: inline-block;
-  font-size: 16px;
-  font-weight: 800;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.35);
-  border-radius: 10px;
-  padding: 1px 8px;
-  min-width: 14px;
-  text-align: center;
-  vertical-align: middle;
+/* Team labels are renameable in place — double-click, type, Enter (see
+   core/TeamName/EditableTeamName.jsx). Nothing about the resting on-air look
+   changes: the plain text carries no affordance, only a cursor and a tooltip
+   the broadcast can't see. */
+.team-name-text {
+  cursor: text;
 }
 
-.team-alive-allies { margin-left: 10px; }
-.team-alive-axis   { margin-right: 10px; }
+.team-name-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.team-name-input {
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  background: rgba(0, 0, 0, 0.5);
+  border: none;
+  border-bottom: 2px solid currentColor;
+  border-radius: 3px;
+  padding: 0 6px;
+  outline: none;
+  /* #root sets user-select:none for the overlay; the editor needs it back or a
+     caster can't select the text they're replacing. */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.team-name-swap {
+  font-size: 15px;
+  line-height: 1;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  padding: 3px 6px;
+  cursor: pointer;
+}
 
 /* ── Reinforcements panel ─────────────────────────────────────────────
    Seconds to that side's next respawn wave, drawn as DoD's own
