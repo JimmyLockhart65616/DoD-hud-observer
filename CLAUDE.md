@@ -127,6 +127,30 @@ When adding natives (to dodx, reapi, or a new KTP module):
 - **Allies** vs **Axis** only (British team de-scoped)
 - Team assignment tracked per-player via `player_connect` and `player_team_change` events
 
+### Broadcast team names (caster-editable)
+
+The `ALLIES`/`AXIS` labels in the top bar and on the stats board are display-only
+overrides resolved by `web/src/components/core/TeamName/teamNames.js`, in order:
+`?allies=`/`?axis=` query params → `localStorage['hud.team_names']` → the side
+default. Nothing reaches the backend, the plugin or match metadata — a name is
+typed once on the machine running the overlay and is not part of match state, so
+there is nothing to provision per match and nothing to reset afterwards.
+
+- Edited in place on `/screen`: **double-click**, type, Enter (`EditableTeamName`).
+  Double, never single — this renders on air. OBS only forwards mouse events while
+  a source is in Interact mode, so the resting overlay is unaffected.
+- A URL-pinned side renders as plain text with **no editor**: an edit that silently
+  loses to the URL on the next reload is worse than no edit control.
+- ⇄ (edit mode only) swaps the pair for the halftime side change. It swaps the
+  STORED pair, so a side left at its default stays at its default rather than
+  having the literal string `AXIS` written onto it.
+- Names bind to the SIDE, not to a roster. Teams swap at halftime — that is what
+  ⇄ is for; nothing swaps them automatically.
+- `StatsTable` reads the same names, so the board can't say `ALLIES` while the bar
+  above it says the team. `/hq` deliberately does NOT — it shows many servers at
+  once and one browser's local override would be wrong on most of the strips.
+- Contract pinned by `teamNames.test.js`.
+
 ---
 
 ## Player Identity
