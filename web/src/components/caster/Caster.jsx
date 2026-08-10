@@ -239,10 +239,8 @@ function Caster() {
     const roundState = useHudStore(s => s.round_state);
     const waveAllies = useHudStore(s => s.wave_allies);
     const waveAlliesAt = useHudStore(s => s.wave_allies_at);
-    const waveAlliesPending = useHudStore(s => s.wave_allies_pending);
     const waveAxis = useHudStore(s => s.wave_axis);
     const waveAxisAt = useHudStore(s => s.wave_axis_at);
-    const waveAxisPending = useHudStore(s => s.wave_axis_pending);
     const killStreaks = useHudStore(s => s.kill_streaks);
     const killLog = useHudStore(s => s.kill_log);
 
@@ -319,7 +317,6 @@ function Caster() {
                     <WavePill
                         seconds={waveAllies}
                         secondsAt={waveAlliesAt}
-                        pending={waveAlliesPending}
                         side="allies"
                         frozen={roundState.round_freeze || roundState.round_end}
                     />
@@ -335,7 +332,6 @@ function Caster() {
                     <WavePill
                         seconds={waveAxis}
                         secondsAt={waveAxisAt}
-                        pending={waveAxisPending}
                         side="axis"
                         frozen={roundState.round_freeze || roundState.round_end}
                     />

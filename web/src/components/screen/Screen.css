@@ -63,48 +63,106 @@
 .team-alive-allies { margin-left: 10px; }
 .team-alive-axis   { margin-right: 10px; }
 
-/* Reinforcement-wave pill (e.g. "⟳3s +4") — seconds to that side's next respawn
-   wave and how many players it brings back. Lives in .team-wave-row above each
-   card strip on /screen and in .caster-scoreline on /caster; both containers
-   handle its placement, so it carries no margins of its own. Renders nothing
-   when that side's wave clock is idle. */
-.wave-pill {
-  display: inline-block;
-  font-size: 14px;
-  font-weight: 800;
-  color: #f2e5c8;
-  background: rgba(0, 0, 0, 0.45);
-  border: 1px solid rgba(242, 229, 200, 0.25);
-  border-radius: 10px;
-  padding: 1px 7px;
-  vertical-align: middle;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.3px;
+/* ── Reinforcements panel ─────────────────────────────────────────────
+   Seconds to that side's next respawn wave, drawn as DoD's own
+   `hud_reinforcements` HUD element rather than a generic pill.
+
+   Every colour below is sampled off the real sprite — hud_layout.spr region
+   (81,0,129,58), per dod/sprites/hud.txt — so this reads as the same object the
+   players are looking at: gunmetal plate #4a4a4a→#383531, olive-brass bezel
+   #4e452f/#2f2718, near-black recesses, #a7a7a7 highlights. The game's layout
+   is four MM:SS windows split by a colon; our waves are always under a minute,
+   so it sits at 00:07 the way the client would show it.
+
+   Lives in .team-wave-row above each card strip on /screen and in
+   .caster-scoreline on /caster; both containers own its placement, so it
+   carries no margins. Renders nothing when that side's wave clock is idle. */
+.wave-panel {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 7px 4px;
+  border-radius: 2px;
+  background: linear-gradient(#4a4a4a, #383531);
+  border: 1px solid #262624;
+  box-shadow:
+    inset 0 1px 0 rgba(167, 167, 167, 0.28),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.5),
+    0 1px 3px rgba(0, 0, 0, 0.55);
   white-space: nowrap;
 }
 
-.wave-pill .wave-glyph {
-  opacity: 0.7;
-  font-weight: 400;
-  margin-right: 3px;
+/* Stencil label, embossed into the plate: dark glyphs with a one-pixel light
+   bottom edge, the same low-contrast cut as the sprite. */
+.wave-panel .wave-label {
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  color: #23231f;
+  text-shadow: 0 1px 0 rgba(167, 167, 167, 0.30);
+  line-height: 1;
 }
 
-.wave-pill .wave-pending {
-  margin-left: 5px;
-  color: #fff;
+/* Brass-bezel housing around the digit windows. */
+.wave-panel .wave-readout {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 3px;
+  border: 1px solid #4e452f;
+  border-radius: 1px;
+  background: #2f2718;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.7);
 }
 
-/* Imminent wave. Pure CSS animation, never a JS timer — OBS throttles
-   background-tab intervals and a JS-driven pulse would stutter or stall. */
-.wave-pill.hot {
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.55);
-  animation: wave-pulse 0.7s ease-in-out infinite;
+/* Recessed window + odometer digit. */
+.wave-panel .wave-digit {
+  display: inline-block;
+  min-width: 11px;
+  padding: 1px 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: #cfcfc8;
+  background: linear-gradient(#1b1b1b, #111010);
+  border-radius: 1px;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.9);
 }
 
-@keyframes wave-pulse {
-  0%, 100% { background: rgba(0, 0, 0, 0.45); }
-  50%      { background: rgba(196, 48, 48, 0.75); }
+.wave-panel .wave-colon {
+  width: 3px;
+  height: 11px;
+  position: relative;
+}
+
+.wave-panel .wave-colon::before,
+.wave-panel .wave-colon::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  width: 3px;
+  height: 3px;
+  background: #cfcfc8;
+  border-radius: 1px;
+}
+
+.wave-panel .wave-colon::before { top: 1px; }
+.wave-panel .wave-colon::after  { bottom: 1px; }
+
+/* Imminent wave — the digits glow hot rather than the plate changing colour, so
+   the object still reads as the same piece of equipment. Pure CSS animation,
+   never a JS timer: OBS throttles background-tab intervals and a JS-driven
+   pulse would stutter or stall outright. */
+.wave-panel.hot .wave-digit {
+  animation: wave-digit-pulse 0.7s ease-in-out infinite;
+}
+
+@keyframes wave-digit-pulse {
+  0%, 100% { color: #cfcfc8; background: linear-gradient(#1b1b1b, #111010); }
+  50%      { color: #ffd9a0; background: linear-gradient(#3a1a12, #2a1109); }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -779,12 +837,15 @@
    down on air. Reserve the band once and let it sit empty. */
 .team-wave-row {
   display: flex;
-  align-items: center;
-  height: 20px;
+  align-items: flex-end;
+  height: 36px;   /* fits the reinforcements plate; keep in sync with .wave-panel */
 }
 
-.team-wave-row-allies { justify-content: flex-start; }
-.team-wave-row-axis   { justify-content: flex-end; }
+/* Centred over the team's card block, not flush to the outer edge — it reads as
+   belonging to that team rather than floating at the screen edge. Both sides use
+   the same rule; the side class stays for per-team styling hooks. */
+.team-wave-row-allies,
+.team-wave-row-axis { justify-content: center; }
 
 /* ── Player Card (Direction B: health on top, header, two icon rows) ── */
 .player-card {

@@ -74,11 +74,13 @@
   padding: 0 6px;
 }
 
-/* WavePill is shared with the on-air overlay, where it sits above the card
-   strips at overlay scale. Size it up for the larger caster type; the
-   scoreline's flex gap already spaces it. */
-.caster-scoreline .wave-pill {
-  font-size: 16px;
+/* The reinforcements plate is shared with the on-air overlay, where it sits
+   above the card strips at overlay scale. Scale it up as a unit for the larger
+   caster type rather than re-specifying its internals — the plate is a piece of
+   sampled-from-sprite artwork and should keep its proportions. */
+.caster-scoreline .wave-panel {
+  transform: scale(1.15);
+  transform-origin: center;
   align-self: center;
 }
 

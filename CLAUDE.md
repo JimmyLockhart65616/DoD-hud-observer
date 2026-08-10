@@ -272,11 +272,15 @@ phases are unrelated — never derive one from the other.
   receipt instant and counts down locally, exactly like `timeleft`/`timeleft_at`.
   Since the HLTV delay buffer releases the event, receipt time *is* broadcast
   time and no delay arithmetic is needed anywhere.
-- `pending` is computed server-side from the same set the clock keys on, so the
-  `+N` can never disagree with the timer beside it. It can over-count a player
-  who isn't ready to spawn yet (`CBasePlayer::m_imissedwave` — DoD makes them
-  miss the wave); there is no extension-mode read for `m_irdytospawn`, and
-  over-counting is the benign direction for a team-level number.
+- `pending` is still emitted but is **deliberately not rendered** (caster
+  feedback 2026-08-09: redundant, the dead player cards already show who is
+  waiting). It is kept on the wire because it is the same count the clock gates
+  on server-side and costs nothing, and dropping it would mean a fleet plugin
+  redeploy for one integer — but do not treat it as dead like `nade_throw`: the
+  store still records it, nothing reads it. If you re-surface it, note it can
+  over-count a player who isn't ready to spawn yet
+  (`CBasePlayer::m_imissedwave` — DoD makes them miss the wave); there is no
+  extension-mode read for `m_irdytospawn`.
 - Source order in `hud_wave_time_f()`: idle → `-1.0`; then `dodx_get_wave_time()`
   (CLOSED LOOP, bound optionally via `set_native_filter` — **no shipped dodx
   exports it yet**); then the open-loop `mp_clan_respawntime` estimate against the
@@ -288,18 +292,29 @@ phases are unrelated — never derive one from the other.
   That is what makes it self-correcting: a stale anchor from an earlier round,
   half or map can't survive a lull, so no invalidation path has to be kept in
   sync with every restart edge.
-- **Placement: above each team's card strip, NOT in the top bar.** `.flags-bar`
-  is an absolute overlay across the same 72px band as `.top-bar`, so at the
-  ~1280 prod OBS canvas the allies side of the top bar is already buried behind
-  the flag strip — `e2e/snapshots/fixed-1280x720.png` (June, pre-dating this
-  feature) shows the `ALLIES` label itself hidden. Anything added there is
-  invisible on the left at the real broadcast width. `.team-wave-row` has a
-  **fixed** height so the card strip doesn't bounce when a pill appears or idles
-  out. `/caster` puts the same component in `.caster-scoreline`, which has room.
+- **Rendered as the game's own `hud_reinforcements` panel**, not a generic
+  badge: gunmetal plate, embossed stencil label, brass-bezel housing of four
+  recessed MM:SS windows split by a colon. Every colour is sampled off the real
+  sprite — `hud_layout.spr` region `(81,0,129,58)` per `dod/sprites/hud.txt`
+  (plate `#4a4a4a`→`#383531`, bezel `#4e452f`/`#2f2718`, near-black recesses,
+  `#a7a7a7` highlights). Recreated in CSS rather than shipping the bitmap: it
+  scales to any canvas and needs no pixel alignment against a fixed sprite. Our
+  waves are always under a minute so it reads `00:07`, the same MM:SS the client
+  shows. **DoD DOES show players a reinforcement countdown** — an earlier version
+  of this doc claimed it didn't.
+- **Placement: centred above each team's card strip, NOT in the top bar.**
+  `.flags-bar` is an absolute overlay across the same 72px band as `.top-bar`,
+  so at the ~1280 prod OBS canvas the allies side of the top bar is already
+  buried behind the flag strip — `e2e/snapshots/fixed-1280x720.png` (June,
+  pre-dating this feature) shows the `ALLIES` label itself hidden, a collision
+  that is **still unfixed**. Anything added there is invisible on the left at the
+  real broadcast width. `.team-wave-row` has a **fixed** height so the card strip
+  doesn't bounce when the panel appears or idles out. `/caster` puts the same
+  component in `.caster-scoreline`, scaled up as a unit.
 - `WavePill` hides itself once its anchor runs `STALE_AFTER_ZERO_SEC` (3s) past
   zero with no refresh. The plugin re-sends at 4 Hz, so a real wave re-anchors
-  long before that; only a wedged poll task or a dead server trips it, and "0s"
-  frozen on air reads as a wave that never arrives.
+  long before that; only a wedged poll task or a dead server trips it, and
+  `00:00` frozen on air reads as a wave that never arrives.
 
 ### Flag Events
 ```json

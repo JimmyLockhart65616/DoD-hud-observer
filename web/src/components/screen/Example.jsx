@@ -45,10 +45,8 @@ function Example() {
 
     const waveAllies        = useHudStore(s => s.wave_allies);
     const waveAlliesAt      = useHudStore(s => s.wave_allies_at);
-    const waveAlliesPending = useHudStore(s => s.wave_allies_pending);
     const waveAxis          = useHudStore(s => s.wave_axis);
     const waveAxisAt        = useHudStore(s => s.wave_axis_at);
-    const waveAxisPending   = useHudStore(s => s.wave_axis_pending);
 
     const clockFrozen = roundState.round_freeze || roundState.round_end;
 
@@ -111,7 +109,6 @@ function Example() {
                         <WavePill
                             seconds={waveAllies}
                             secondsAt={waveAlliesAt}
-                            pending={waveAlliesPending}
                             side="allies"
                             frozen={clockFrozen}
                         />
@@ -126,7 +123,6 @@ function Example() {
                         <WavePill
                             seconds={waveAxis}
                             secondsAt={waveAxisAt}
-                            pending={waveAxisPending}
                             side="axis"
                             frozen={clockFrozen}
                         />
