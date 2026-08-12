@@ -44,6 +44,11 @@ function Example() {
     const waveAxis          = useHudStore(s => s.wave_axis);
     const waveAxisAt        = useHudStore(s => s.wave_axis_at);
 
+    const scoringIn         = useHudStore(s => s.scoring_in);
+    const scoringAt         = useHudStore(s => s.scoring_at);
+    const scoringAllies     = useHudStore(s => s.scoring_allies);
+    const scoringAxis       = useHudStore(s => s.scoring_axis);
+
     const clockFrozen = roundState.round_freeze || roundState.round_end;
 
     return (
@@ -77,6 +82,10 @@ function Example() {
                     logoRight={logoRight}
                     timeleft={timeleft}
                     timeleftAt={timeleftAt}
+                    scoringIn={scoringIn}
+                    scoringAt={scoringAt}
+                    scoringAllies={scoringAllies}
+                    scoringAxis={scoringAxis}
                 />
                 <span className="team-name team-name-axis">
                     <EditableTeamName side="axis" />

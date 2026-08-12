@@ -84,6 +84,24 @@
   align-self: center;
 }
 
+/* Score / clock with their scoring-tick figures stacked underneath. The
+   scoreline is align-items:baseline so the big numerals line up; a stack has
+   no single meaningful baseline, so it centres instead. */
+.caster-score-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  align-self: center;
+  gap: 3px;
+}
+
+/* Same components as the on-air overlay, scaled up as a unit for caster type
+   rather than re-specifying them. */
+.caster-score-stack .tick-award,
+.caster-score-stack .tick-clock {
+  font-size: 14px;
+}
+
 .caster-meta {
   display: flex;
   align-items: center;

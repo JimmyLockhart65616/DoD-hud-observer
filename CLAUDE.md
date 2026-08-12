@@ -263,6 +263,7 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 { "event": "player_state",
   "waves": { "allies": { "in": 3.25, "pending": 2 },
              "axis":   { "in": 7.75, "pending": 4 } },
+  "scoring": { "in": 12.75, "every": 30.50, "allies": 4, "axis": 2 },
   "players": [
     { "user_id": "STEAM_0:0:123", "weapon": "garand", "nades": 2,
       "health": 100, "prone_state": "standing|prone|deployed" }
@@ -270,11 +271,13 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 }
 ```
 
-These drive the live weapon icon and grenade pips on the player cards, plus the
-reinforcement-wave pill above each team's card strip.
+These drive the live weapon icon and grenade pips on the player cards, the
+reinforcement-wave pill above each team's card strip, and the territorial
+scoring-tick countdown + projected points in the top-bar score pill.
 
 - `weapon_active` is forward-driven (`dod_client_weaponswitch`), so it is immune to the half-1 task wedge. `player_state` is the 4 Hz `task_poll_player_state` batch and is not.
-- `player_state` carries **only alive players** — dead players are omitted rather than sent with zeroes, and the store leaves omitted players untouched. The POST is skipped when there is nothing at all to say, but an empty `players` array still ships if a wave clock is running: a full team wipe is exactly when the pill matters.
+- `player_state` carries **only alive players** — dead players are omitted rather than sent with zeroes, and the store leaves omitted players untouched. The POST is skipped when there is nothing at all to say, but an empty `players` array still ships if a wave clock or the scoring tick is running: a full team wipe is exactly when those matter.
+- **Buffer budget.** `task_poll_player_state` guards at `BUFFER_SIZE - 576`, the sum of everything appended after the check: one more player row (192) + the `waves` block (96) + the `scoring` block (96) + `post_event`'s envelope prefix (165) + 27 slack. Adding another trailing block means redoing that arithmetic, not guessing — the comment at the guard carries the table.
 - Both are in `SOCKET_ONLY_EVENTS` (`ingest.ts`): fanned out to sockets but **not** written to `events.jsonl`, and there is **no reducer arm and no cache**, so a join snapshot carries no weapon/grenade data — a reloading overlay shows nothing until the next tick. This is also why event-stream invariants cannot cover them: the production fixture contains zero `player_state` records.
 - `nades` comes from `dodx_get_grenade_ammo`, a raw pdata read at a **runtime-detected offset**. Every failure path in that native returns `0`, which is indistinguishable from an empty pool — a wrong offset yields plausible, stable, entirely fabricated counts. See `Socket.nades.test.js` for the store contract.
 - `nade_throw` above is documented but **never emitted by the plugin** (a CS-era leftover); `Socket.jsx` increments a `nades_thrown` field no component reads. Do not build on it.
@@ -358,6 +361,105 @@ phases are unrelated — never derive one from the other.
   zero with no refresh. The plugin re-sends at 4 Hz, so a real wave re-anchors
   long before that; only a wedged poll task or a dead server trips it, and
   `00:00` frozen on air reads as a wave that never arrives.
+
+#### Territorial scoring tick (`scoring`)
+
+DoD awards periodic team points for holding control points, from the map's
+`dod_control_point_master`, on that entity's own clock. **The game client shows
+this NOWHERE** — not the countdown, not the amount — which is the entire reason
+it is worth putting on a broadcast overlay: "can Axis hold mid for one more
+tick?" is often the whole tactical story of a half and is currently invisible.
+
+**ONE shared clock plus two per-team award numbers** — the map has a single
+master — so this is deliberately NOT shaped like `waves`, which is two
+independent per-team phases. The two halves also fail independently: the timing
+is an observation, the amount is a model.
+
+- **The award rule is `W × count(CPs held by team whose default_owner != team)`.**
+  A team banks nothing for sitting on its own home flags; a neutral-default point
+  counts for whoever holds it. **No per-flag constant fits** — solving the linear
+  system contradicts — so the award genuinely depends on holder-vs-default, and
+  `g_flag_default_owner[]` (dodx `CP_default_owner`, i.e. the BSP
+  `point_default_owner` parse) is a hard input.
+- **`W` is LEARNED online, not read.** The obvious source, `CP_pointvalue`, is
+  unusable: the Linux `pd_dcp` branch is one int short so it actually reads
+  `m_iIndex` (`docs/dodx-cp-index-space-findings.md`). Each confirmed tick
+  derives `W = delta/count`, requiring exact division AND agreement across both
+  teams; the first violation latches the numbers off **for the rest of the map**
+  and logs the evidence. Published only after `TICK_W_STREAK_REQ` (3) agreeing
+  ticks. `dod_hud_score_award 0` kills the numbers by rcon mid-broadcast without
+  touching the clock.
+- **Validated on exactly ONE recorded map** (`match-1777342963-NY1`,
+  `dod_thunder2`, whose CPs carry donner's name tokens), where `W = 2`. Run
+  `node e2e/repro/score-tick-analyze.cjs <events.jsonl> --defaults AAnXX` over a
+  recording from a second map before trusting the numbers on air there —
+  ideally `dod_anzio`, whose all-neutral defaults would directly falsify the
+  "non-default" rule. Until then every degradation path above leaves the
+  countdown up and the numbers dark, which is the safe direction.
+- **Source order**: `dodx_get_score_tick_time()` (CLOSED LOOP, reads
+  `CControlPointMaster::m_fGivePointsTime` gated on `m_bActive`; bound optionally
+  via `set_native_filter`, shipped in KTPAMXX but **the fleet lags module
+  releases**) → the observed-phase estimator → `-1.0`, which omits the whole
+  block and hides the panel.
+- **The period is MEASURED, never taken from a cvar.** Real spacing is a
+  rock-stable **30.50s** against an `m_iGivePointsDelay` of 30 — the master only
+  awards on its own 0.5s think — so a cvar-derived estimate slips 0.5s per tick.
+  Confirmed three independent ways: TeamScore deltas in the recorded fixture,
+  the native's countdown wall-clock on a live local server, and
+  `m_fGivePointsTime` itself stepping `33.00 → 63.50`.
+- **The period is PER MAP and varies wildly.** Measured locally 2026-08-11:
+  `dod_anzio` 30s, **`dod_flash` 900s** (15 minutes). Two consequences, both
+  load-bearing:
+  - `every` must ride the wire. Without it the store falls back to a fixed 60s
+    ceiling and would silently reject **every** update on a long-period map. On
+    the closed-loop path the estimator never locks a measured period, so `every`
+    comes from `dodx_get_score_tick_period()` (nominal delay + 1.0s, since real
+    spacing runs longer than the configured delay).
+  - Above `TICK_MAX_USEFUL_PERIOD` (180s) the plugin omits the block entirely.
+    The panel answers "can they hold this for one more tick?", which only exists
+    when ticks are a recurring beat; on flash the award is vestigial and a
+    13-minute countdown beside the score is noise.
+  The estimator re-anchors on every observed tick, so it can never drift and can
+  never honestly report more than one period; `Socket.jsx` enforces that as a
+  ceiling on `in` (the wave clock's "can only fall" guard does NOT apply — this
+  is a sawtooth that legitimately jumps back up once per cycle).
+- **The discriminator is grid + phase.** Ticks land on an exact 0.5s gametime
+  grid; cap awards nearly all do not (75 of 140 score-increase frames on-grid in
+  the fixture). Rejected outright: negative deltas (score reset), `>= 20` to one
+  team (the +40 capout bonus, and the +118 half-2 seeding KTPMatchHandler writes
+  into gamerules), anything inside a restart cascade window, and — while not yet
+  locked — any frame within `TICK_CAP_PROXIMITY` of a capture. A cap-dirty frame
+  once locked still confirms PHASE but never feeds `W`.
+- **A 0/0 tick is COMPLETELY INVISIBLE** — DoD emits no `TeamScore` at all for
+  it. Every half opens with ~3 such slots while both teams sit on home flags, so
+  the estimator rolls its anchor through silence and only counts a strike when
+  the model said something *should* have been awarded. Treating silence as
+  failure would drop the lock every single half.
+- **The grid re-phases on every round restart** (the fixture's h1 grid breaks at
+  the 1109.50 capout and re-locks on a new phase), and is anchored on the go-live
+  restart — both halves back-extrapolate to `half_start + ~9.6s` (`mp_clan_timer`).
+  So the phase is never derivable, only observable. Cost of the open-loop path:
+  ~130s blind at each half start, ~95s to re-lock after a restart, live ~85% of a
+  match. The closed-loop native removes all of it.
+- **Placement: attached to the score, in the top-bar centre.** The award sits
+  under the score digit it is about to change, the countdown under the half
+  clock. **Width-neutrality is load-bearing** — `.flags-bar` runs to x≈530 while
+  `.score` is ~190px wide, leaving ~15px clearance at the 1280 prod canvas, and
+  `.score` is `overflow:hidden`. Both additions are fixed-height slots BELOW
+  existing content and add no horizontal extent. `/caster` stacks the same
+  components in `.caster-scoreline`; `/hq` deliberately gets nothing.
+- **`+0` is real information**, not an absence — it says a side banks nothing on
+  the next tick. Guarded by `typeof === 'number'` in the store and by dedicated
+  tests both store- and component-side; a plain falsy check is the bug.
+- **The algorithm's only executable specification is
+  `backend/src/invariants/scoreTick.ts`**, pinned against the production fixture
+  (71 ticks, 0 false positives, `W = 2`, locks at h1 393.5 / h1 1204 / h2 223.5)
+  plus synthetic streams for the paths that match never reaches. The Pawn side
+  mirrors it line for line with identical constant names — change one, change
+  both. Event-stream invariants **cannot** cover this: `player_state` is
+  socket-only, so no fixture contains a `scoring` block; that test over the
+  persisted `team_score` stream is the substitute. The mocker authors the
+  estimator's OUTPUT and can never exercise its input.
 
 ### Flag Events
 ```json

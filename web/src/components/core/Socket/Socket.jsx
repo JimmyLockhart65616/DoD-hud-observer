@@ -212,6 +212,32 @@ const WAVES_CLEARED = {
 // safe direction, and the latch clears at that side's next wave.
 const WAVE_WRAP_TOLERANCE_SEC = 1;
 
+// The territorial scoring clock, idle. Spread into every boundary reset for the
+// same reason as WAVES_CLEARED.
+const SCORING_CLEARED = {
+    scoring_in:     null,
+    scoring_at:     null,
+    scoring_every:  null,
+    scoring_allies: null,
+    scoring_axis:   null,
+};
+
+// Unlike the wave clocks, `scoring_in` legitimately jumps back UP once per
+// cycle — it is a sawtooth, resetting to ~`every` the instant a tick lands — so
+// the WAVE_WRAP_TOLERANCE_SEC "can only fall" guard does not apply here.
+//
+// The analogous net is a CEILING: the plugin can never honestly report more than
+// one period of remaining time, because its estimator re-anchors on every
+// observed tick and refuses to extrapolate past one cycle. Anything above that
+// is a broken or older emitter, and a countdown reading further out than the
+// real one is exactly the mistake that makes a caster call the wrong moment.
+//
+// Same rationale as the wave latch: the frontend deploys instantly while the
+// fleet picks up a new .amxx on its own restart cycle, so the two are never in
+// step and the store has to be defensive about what the wire says.
+const SCORING_MAX_IN_SEC = 60;      // used only when the plugin omits `every`
+const SCORING_IN_TOLERANCE = 1;
+
 export const useHudStore = create(set => ({
 
     // Team scores (round wins)
@@ -279,6 +305,21 @@ export const useHudStore = create(set => ({
     wave_axis_pending:   0,
     wave_axis_wrapped:   false,
 
+    // Territorial scoring tick: DoD's periodic team-point award for holding
+    // control points, which the game client shows NOWHERE. ONE shared clock —
+    // the map has a single control-point master — plus a per-team projected
+    // award, so this is deliberately not shaped like the two-phase wave clocks.
+    //
+    // Same receipt-stamped anchor as timeleft/waves. The award pair is null
+    // independently of the clock: the plugin learns what a point is worth online
+    // and withholds the numbers (keeping the countdown) whenever it can't
+    // corroborate them.
+    scoring_in:     null,
+    scoring_at:     null,
+    scoring_every:  null,
+    scoring_allies: null,
+    scoring_axis:   null,
+
     // ── Actions ──────────────────────────────────────────────────────────────
 
     setAlliesScore: (n) => set({ allies_score: n }),
@@ -319,6 +360,34 @@ export const useHudStore = create(set => ({
         };
 
         return { ...side('allies', waves?.allies), ...side('axis', waves?.axis) };
+    }),
+
+    // `scoring` is the optional team-level block on player_state. Absent means
+    // the plugin has no honest answer — it hasn't locked the tick phase yet, a
+    // round restart just re-phased the grid, or the map has no scoring master —
+    // so everything is cleared and the panel hides rather than showing a
+    // countdown to an award that may not land when it says.
+    setScoring: (s) => set(() => {
+        if (!s || typeof s.in !== 'number' || s.in < 0) return { ...SCORING_CLEARED };
+
+        const every = typeof s.every === 'number' && s.every > 0 ? s.every : null;
+        if (s.in > (every ?? SCORING_MAX_IN_SEC) + SCORING_IN_TOLERANCE) {
+            return { ...SCORING_CLEARED };
+        }
+
+        // The award is a PAIR or nothing. A half-populated block would render one
+        // side's points against a blank for the other, which reads as "they get
+        // nothing" rather than "we don't know" — the opposite of the truth.
+        // Note `typeof`, not truthiness: +0 is a real and useful projection.
+        const paired = typeof s.allies === 'number' && typeof s.axis === 'number';
+
+        return {
+            scoring_in:     s.in,
+            scoring_at:     Date.now(),
+            scoring_every:  every,
+            scoring_allies: paired ? s.allies : null,
+            scoring_axis:   paired ? s.axis   : null,
+        };
     }),
 
     setAlliesPlayers: (updater) => set(state => ({
@@ -399,6 +468,7 @@ export const useHudStore = create(set => ({
             timeleft: null,
             timeleft_at: null,
             ...WAVES_CLEARED,
+            ...SCORING_CLEARED,
             allies_players: state.allies_players.map(wipe),
             axis_players: state.axis_players.map(wipe),
         };
@@ -420,6 +490,7 @@ export const useHudStore = create(set => ({
         timeleft: null,
         timeleft_at: null,
         ...WAVES_CLEARED,
+        ...SCORING_CLEARED,
         round_state: { round_end: false, round_freeze: false, round_start: false },
         ...(half === 1 ? { allies_score: 0, axis_score: 0 } : {}),
     })),
@@ -512,6 +583,7 @@ export const SocketStoreComponent = () => {
     const setRoundState    = useHudStore(s => s.setRoundState);
     const setTimeleft      = useHudStore(s => s.setTimeleft);
     const setWaves         = useHudStore(s => s.setWaves);
+    const setScoring       = useHudStore(s => s.setScoring);
     const resetHalf        = useHudStore(s => s.resetHalf);
     const resetMatch       = useHudStore(s => s.resetMatch);
     const resetStreaks     = useHudStore(s => s.resetStreaks);
@@ -710,11 +782,13 @@ export const SocketStoreComponent = () => {
         // Also carries the optional team-level `waves` block. That is applied
         // BEFORE the players guard: on a full team wipe the plugin sends an empty
         // players array with the wave clocks still running, which is exactly when
-        // the pill matters most.
+        // the pill matters most. The scoring tick is team-level for the same
+        // reason — it keeps counting down whether anyone is alive or not.
 
         gameEvents.on('player_state', (raw) => {
             const e = JSON.parse(raw);
             setWaves(e.waves);
+            setScoring(e.scoring);
             if (!Array.isArray(e.players)) return;
             const byId = {};
             e.players.forEach(p => { byId[p.user_id] = p; });

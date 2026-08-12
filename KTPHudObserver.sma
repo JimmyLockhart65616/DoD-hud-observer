@@ -41,10 +41,30 @@ native Float:dodx_get_round_time();
 native Float:dodx_get_wave_time(team);
 #endif
 
+// dodx_get_score_tick_time: engine-authoritative seconds to the map's next
+// TERRITORIAL scoring tick, straight off dod_control_point_master
+// (CControlPointMaster::m_fGivePointsTime). Declared guarded and bound
+// optionally exactly like the two above, so the plugin runs the observed-phase
+// estimator on today's fleet and flips to the closed loop the moment a module
+// carrying it lands, with no second plugin deploy.
+#if !defined dodx_get_score_tick_time
+native Float:dodx_get_score_tick_time();
+#endif
+
+// dodx_get_score_tick_period: the map's nominal scoring period
+// (CControlPointMaster::m_iGivePointsDelay). Only needed on the closed-loop
+// path, where the native answers the countdown directly and the open-loop
+// estimator never locks a MEASURED period — without this the wire carries no
+// `every` and the frontend has to fall back to a fixed ceiling, which a map
+// with a long period would trip. Bound optionally like the rest.
+#if !defined dodx_get_score_tick_period
+native dodx_get_score_tick_period();
+#endif
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.3.1"
+#define VERSION "2.4.0"
 #define AUTHOR  "cadaver"
 
 #define MAX_PLAYERS     32
@@ -212,6 +232,93 @@ new bool:g_has_wave_native = true;
 // runs twice per 0.25s tick). 0 = unresolved → estimate unavailable.
 new g_pcvar_respawntime = 0;
 new g_pcvar_clan_match  = 0;
+
+// ─── Territorial scoring tick ────────────────────────────────────────────────
+// DoD awards periodic team points for holding control points, from the map's
+// dod_control_point_master, on that entity's own clock. The DoD client shows
+// this NOWHERE — not the countdown, not the amount — which is the whole reason
+// it is worth putting on a broadcast overlay.
+//
+// Mirrors backend/src/invariants/scoreTick.ts line for line, with the same
+// constant names. That module is the executable specification and is pinned
+// against a real recorded match (71 ticks, 0 false positives); this side is
+// otherwise untestable, so if you change behaviour here change it there too.
+//
+// Measured on 1777342963-NY1 (dod_thunder2):
+//   - period exactly 30.50s (m_iGivePointsDelay 30 + the master's 0.5s think)
+//   - ticks land on an exact 0.5s gametime grid; cap awards nearly all do not
+//   - the grid is anchored on the go-live restart and RE-PHASES on every round
+//     restart, so the phase is never derivable — only observable
+//   - a 0/0 tick emits NO TeamScore at all, so silence is normal, not a fault
+#define TICK_GRID_QUANTUM   0.50   // CControlPointMaster think granularity
+#define TICK_GRID_TOL       0.06   // covers a 16 fps frame
+#define TICK_PERIOD_MIN     20.0   // plausible m_iGivePointsDelay band
+#define TICK_PERIOD_MAX     45.0
+#define TICK_PHASE_TOL      0.25
+#define TICK_CAP_PROXIMITY  0.30
+#define TICK_CAPOUT_FLOOR   20     // a single-team delta this big is a round-win
+                                   // bonus or the half-2 score seeding, never a tick
+#define TICK_OVERRUN_GRACE  0.75
+#define TICK_MISS_STRIKES   2      // silent slots with a NONZERO projection before unlocking
+#define TICK_MAX_BLIND_ROLL 8
+#define TICK_W_STREAK_REQ   3
+#define TICK_W_MAX          8
+#define TICK_RESET_WINDOW   3.0    // after a restart cascade marker, score deltas are noise
+
+// Longest scoring period still worth putting on air. The panel answers "can
+// they hold this flag for one more tick?" — a question that only exists when
+// ticks are a recurring beat of the round.
+//
+// Not hypothetical: measured locally 2026-08-11, dod_anzio runs a 30s period
+// while dod_flash runs 900s (15 minutes). On flash the territorial award is
+// vestigial — the map is decided by captures — and a 13-minute countdown next
+// to the score is noise that pushes the caster's eye to something that will not
+// happen this round. Above this bound the block is omitted entirely.
+#define TICK_MAX_USEFUL_PERIOD 180.0
+
+// dodx_get_score_tick_time() availability — same optional binding as
+// g_has_wave_native. Goes false at load on any dodx that predates the native.
+new bool:g_has_score_tick_native = true;
+new bool:g_has_score_period_native = true;
+
+// Frame accumulation. TeamScore is broadcast once per scoreboard refresh, not
+// once per score change (1444 messages for 71 ticks in the recorded match, with
+// one frame producing 25), so a frame is opened on the first message at a given
+// gametime and closed lazily when a later gametime is seen.
+new Float:g_ts_frame_gt;
+new g_ts_frame_hi[3];        // running max per team within the open frame
+new g_ts_frame_cnt[3];       // non-default-held counts snapshotted at frame OPEN
+new bool:g_ts_frame_open;
+new bool:g_ts_frame_capdirty;
+new g_ts_last[3];            // last frame-closed score, indexed TEAM_*
+new bool:g_ts_seeded;
+
+// Phase state.
+new Float:g_ts_anchor;       // gametime of the last CONFIRMED tick
+new Float:g_ts_cand_gt;      // bootstrap candidate (0 = none)
+new g_ts_cand_d[3];
+new g_ts_cand_cnt[3];
+new Float:g_ts_period;       // MEASURED from the last two adjacent confirmations
+new bool:g_ts_locked;
+new g_ts_strikes, g_ts_blind_rolls;
+// Declared separately on purpose: in Pawn `new Float:a, b;` tags only `a`, so a
+// shared declaration would leave the second one untagged and every assignment
+// from get_gametime() would be a silent tag mismatch.
+new Float:g_ts_last_cap_gt;
+new Float:g_ts_last_reset_gt;
+
+// Award model: award[team] = W * count(CPs held whose default owner != team).
+// W is LEARNED online and cross-checked across both teams every tick, because
+// the obvious source is unusable: dodx's CP_pointvalue reads m_iIndex on Linux
+// (the pd_dcp branch is one int short — docs/dodx-cp-index-space-findings.md).
+new g_ts_w, g_ts_w_streak;
+new bool:g_ts_w_failed;      // latched off for the rest of the map on first violation
+new g_pcvar_score_award = 0; // dod_hud_score_award — rcon kill switch for the numbers
+
+// Grid self-check: if a server's frame timing never lands on the 0.5s grid the
+// gate would hide the panel forever with no explanation. Detect and fall back.
+new bool:g_ts_grid_ok;
+new g_ts_grid_seen, g_ts_grid_miss;
 
 // Player state
 new g_player_team[MAX_PLAYERS + 1];
@@ -424,6 +531,11 @@ public plugin_init() {
 
     register_cvar("dod_hud_url", "http://127.0.0.1:8088/ingest", FCVAR_SERVER);
     register_cvar("dod_hud_key", "",                              FCVAR_PROTECTED);
+    // On-air kill switch for the PROJECTED SCORING POINTS only — the tick
+    // countdown is an observation and is unaffected. The award model is fitted
+    // to one recorded map; this lets an operator pull the numbers mid-broadcast
+    // by rcon if they ever look wrong, without a redeploy.
+    register_cvar("dod_hud_score_award", "1", FCVAR_SERVER);
 
     // Round events (log events)
     register_logevent("ev_round_start", 2, "1=World triggered", "2=Round_Start");
@@ -498,6 +610,9 @@ public plugin_cfg() {
     g_cp_reset_until = 0.0;
     g_cp_reset_task_pending = false;
 
+    // New map: new grid phase, and a new answer to what a control point is worth.
+    score_tick_reset(false);
+
     // Clear any stragglers from the previous map, then re-arm.
     remove_task(TASK_ID_INIT_CONFIG);
     remove_task(TASK_ID_POLL_PLAYER_STATE);
@@ -525,12 +640,34 @@ public task_init_config() {
     // twice per 0.25s poll). These are engine cvars, always present.
     g_pcvar_respawntime = get_cvar_pointer("mp_clan_respawntime");
     g_pcvar_clan_match  = get_cvar_pointer("mp_clan_match");
+    g_pcvar_score_award = get_cvar_pointer("dod_hud_score_award");
 
     // gametime restarts at 0 on a new map — drop anchors from the previous one.
     // Belt and braces: hud_wave_time_f already rejects a negative elapsed, and
     // client_death re-anchors on the first death either way.
     g_wave_anchor[TEAM_ALLIES] = 0.0;
     g_wave_anchor[TEAM_AXIS]   = 0.0;
+
+    // Same reason, plus the learned award weight and the grid verdict are
+    // properties of the map we just left.
+    score_tick_reset(false);
+
+    // Census of CP default owners. The award model is built entirely on these,
+    // and a dodx predating the BSP point_default_owner parse reports 0 for every
+    // CP — which silently turns "points held beyond your own" into "all points
+    // held" and makes the projection wrong rather than absent. The online W
+    // check catches it within three ticks, but an operator wants to see it
+    // BEFORE a match, not diagnose it afterwards.
+    if (g_flag_count > 0) {
+        new owned = 0;
+        for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
+            if (g_flag_default_owner[f] != 0) owned++;
+        }
+        if (owned == 0) {
+            server_print("[HUD] score-tick: %d CPs, NONE with a default owner — dodx is likely \
+pre-2.7.26 (no BSP point_default_owner parse); projected points will stay hidden", g_flag_count);
+        }
+    }
 
     // Build persistent curl headers — ONCE per process, NEVER freed across
     // overlapping async requests. Same UAF class fixed in KTPHLTVRecorder
@@ -972,6 +1109,286 @@ stock Float:hud_wave_time_f(team, pending) {
     return rem;
 }
 
+// ─── Territorial scoring tick ────────────────────────────────────────────────
+
+// Control points held by `team` whose DEFAULT owner is somebody else. This is
+// the award model's only input: a team banks nothing for sitting on its own
+// home flags, and a neutral-default point counts for whoever holds it.
+stock non_default_held(team) {
+    new n = 0;
+    for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
+        if (g_flag_owner[f] == team && g_flag_default_owner[f] != team) n++;
+    }
+    return n;
+}
+
+// Full reset. keep_model=true preserves the learned weight and the grid verdict,
+// which are properties of the MAP, not of the current phase — a go-live or a
+// round restart re-phases the clock but does not change what a flag is worth.
+stock score_tick_reset(bool:keep_model) {
+    g_ts_frame_open     = false;
+    g_ts_frame_capdirty = false;
+    g_ts_frame_gt       = 0.0;
+    g_ts_anchor         = 0.0;
+    g_ts_cand_gt        = 0.0;
+    g_ts_period         = 0.0;
+    g_ts_locked         = false;
+    g_ts_strikes        = 0;
+    g_ts_blind_rolls    = 0;
+
+    if (!keep_model) {
+        g_ts_seeded     = false;
+        g_ts_last[TEAM_ALLIES] = 0;
+        g_ts_last[TEAM_AXIS]   = 0;
+        g_ts_w          = 0;
+        g_ts_w_streak   = 0;
+        g_ts_w_failed   = false;
+        g_ts_grid_ok    = true;
+        g_ts_grid_seen  = 0;
+        g_ts_grid_miss  = 0;
+        g_ts_last_cap_gt   = 0.0;
+        g_ts_last_reset_gt = 0.0;
+    }
+}
+
+// Learn W from a confirmed, capture-free tick. Requires exact division AND
+// agreement across both teams; any violation latches the numbers off for the
+// rest of the map and prints the evidence, so a model that does not hold on an
+// unvalidated map self-reports instead of putting a wrong number on air.
+stock score_tick_learn(dA, dX, cA, cX) {
+    if (g_ts_w_failed) return;
+
+    new bad = 0;
+    if (cA == 0 && dA != 0) bad = 1;
+    if (cX == 0 && dX != 0) bad = 1;
+
+    new wA = 0, wX = 0;
+    if (!bad) {
+        if (cA > 0) { if (dA % cA == 0) wA = dA / cA; else bad = 1; }
+        if (cX > 0) { if (dX % cX == 0) wX = dX / cX; else bad = 1; }
+    }
+    if (!bad && wA > 0 && wX > 0 && wA != wX) bad = 1;
+
+    new w = wA ? wA : wX;
+    if (!bad && w > 0) {
+        if (w < 1 || w > TICK_W_MAX)       bad = 1;
+        else if (g_ts_w && w != g_ts_w)    bad = 1;
+    }
+
+    if (bad) {
+        g_ts_w_failed = true;
+        g_ts_w        = 0;
+        g_ts_w_streak = 0;
+        server_print("[HUD] score-tick: award model VIOLATED at %.2f (dA=%d dX=%d held=%d/%d w=%d) \
+— projected points disabled for this map", get_gametime(), dA, dX, cA, cX, g_ts_w);
+        return;
+    }
+    if (w <= 0) return;   // a 0/0 slot teaches nothing
+
+    g_ts_w = w;
+    g_ts_w_streak++;
+}
+
+// Advance the anchor across slots that produced no visible award.
+//
+// A silent slot is only EVIDENCE OF A WRONG PHASE when the model said something
+// should have been awarded. With both counts zero the award was 0/0, and DoD
+// emits no TeamScore at all for that — silence is exactly what we predicted.
+// Every half opens with ~3 such slots while both teams sit on their home flags,
+// so treating silence as failure would drop the lock every single half.
+// The test reads live counts only, so it works before W is known.
+stock score_tick_roll(Float:gt) {
+    while (g_ts_locked && g_ts_period > 0.0
+           && gt > g_ts_anchor + g_ts_period + TICK_OVERRUN_GRACE) {
+        if (non_default_held(TEAM_ALLIES) + non_default_held(TEAM_AXIS) != 0) {
+            if (++g_ts_strikes >= TICK_MISS_STRIKES) { score_tick_reset(true); return; }
+        } else {
+            g_ts_strikes = 0;
+        }
+        if (++g_ts_blind_rolls > TICK_MAX_BLIND_ROLL) { score_tick_reset(true); return; }
+        g_ts_anchor += g_ts_period;
+    }
+}
+
+stock bool:score_tick_on_grid(Float:gt) {
+    new Float:q = gt / TICK_GRID_QUANTUM;
+    new Float:err = q - float(floatround(q, floatround_round));
+    return (floatabs(err) * TICK_GRID_QUANTUM) <= TICK_GRID_TOL;
+}
+
+// Classify one closed frame.
+stock score_tick_close(Float:gt, dA, dX, cA, cX, bool:capdirty) {
+    // Score went backwards: a half or warmup reset. Nothing from before it —
+    // including the model — belongs to what follows.
+    if (dA < 0 || dX < 0) { score_tick_reset(false); return; }
+    if (dA == 0 && dX == 0) return;
+
+    // A round-win bonus (+40 observed) or the half-2 score seeding (+118, the
+    // half-1 totals written into gamerules by KTPMatchHandler). Both re-phase
+    // the grid; neither is a tick.
+    if (dA >= TICK_CAPOUT_FLOOR || dX >= TICK_CAPOUT_FLOOR) {
+        g_ts_last_reset_gt = gt;
+        score_tick_reset(true);
+        return;
+    }
+    if (gt - g_ts_last_reset_gt < TICK_RESET_WINDOW) return;
+
+    // Grid self-check over the first 12 candidate deltas of the map.
+    if (g_ts_grid_ok && g_ts_grid_seen < 12) {
+        g_ts_grid_seen++;
+        if (!score_tick_on_grid(gt)) g_ts_grid_miss++;
+        if (g_ts_grid_seen >= 12 && g_ts_grid_miss >= 12) {
+            g_ts_grid_ok = false;
+            server_print("[HUD] score-tick: no scoring frame landed on the %.2fs grid \
+— falling back to phase-only detection", TICK_GRID_QUANTUM);
+        }
+    }
+    if (g_ts_grid_ok && !score_tick_on_grid(gt)) return;
+
+    if (g_ts_locked && g_ts_period > 0.0) {
+        new Float:k = (gt - g_ts_anchor) / g_ts_period;
+        new slots   = floatround(k, floatround_round);
+        if (slots >= 1
+            && floatabs(gt - (g_ts_anchor + float(slots) * g_ts_period)) <= TICK_PHASE_TOL) {
+            // Re-measure only from ADJACENT confirmations: a gap spanning a
+            // silent slot divides out the very jitter being measured.
+            if (slots == 1) g_ts_period = gt - g_ts_anchor;
+            g_ts_anchor      = gt;
+            g_ts_strikes     = 0;
+            g_ts_blind_rolls = 0;
+            // A capture-contaminated frame still confirms PHASE, but its delta
+            // carries the capture award too, so it must never feed the model
+            // and must never be judged a violation.
+            if (!capdirty) score_tick_learn(dA, dX, cA, cX);
+        }
+        // Plausible but off-phase = a capture award. Ignore it.
+        return;
+    }
+
+    // Bootstrap. A capture-contaminated frame is a bad seed: both its delta and
+    // its timing are wrong.
+    if (capdirty) return;
+
+    if (g_ts_cand_gt > 0.0) {
+        new Float:gap = gt - g_ts_cand_gt;
+        if (gap >= TICK_PERIOD_MIN && gap <= TICK_PERIOD_MAX) {
+            g_ts_locked      = true;
+            g_ts_period      = gap;
+            g_ts_anchor      = gt;
+            g_ts_strikes     = 0;
+            g_ts_blind_rolls = 0;
+            // Both frames are real ticks; the candidate's counts were snapshotted
+            // at its own frame open. Feeding both saves a period of award latency.
+            score_tick_learn(g_ts_cand_d[TEAM_ALLIES], g_ts_cand_d[TEAM_AXIS],
+                             g_ts_cand_cnt[TEAM_ALLIES], g_ts_cand_cnt[TEAM_AXIS]);
+            score_tick_learn(dA, dX, cA, cX);
+            g_ts_cand_gt = 0.0;
+            return;
+        }
+    }
+
+    g_ts_cand_gt = gt;
+    g_ts_cand_d[TEAM_ALLIES]   = dA;
+    g_ts_cand_d[TEAM_AXIS]     = dX;
+    g_ts_cand_cnt[TEAM_ALLIES] = cA;
+    g_ts_cand_cnt[TEAM_AXIS]   = cX;
+}
+
+// Close the open frame if we have moved past its gametime. Called from both the
+// TeamScore handler and the 4 Hz poll, so a frame settles within 250ms without
+// a set_task of its own — deliberately, since arming a task from inside a
+// message handler is the KTPAMXX shared-SP-forward hazard (see
+// arm_cp_reset_window).
+stock score_frame_settle() {
+    if (!g_ts_frame_open) return;
+    if (get_gametime() <= g_ts_frame_gt) return;
+
+    new Float:gt = g_ts_frame_gt;
+    new dA = g_ts_frame_hi[TEAM_ALLIES] - g_ts_last[TEAM_ALLIES];
+    new dX = g_ts_frame_hi[TEAM_AXIS]   - g_ts_last[TEAM_AXIS];
+    new cA = g_ts_frame_cnt[TEAM_ALLIES];
+    new cX = g_ts_frame_cnt[TEAM_AXIS];
+    new bool:capdirty = g_ts_frame_capdirty;
+
+    g_ts_last[TEAM_ALLIES] = g_ts_frame_hi[TEAM_ALLIES];
+    g_ts_last[TEAM_AXIS]   = g_ts_frame_hi[TEAM_AXIS];
+    g_ts_frame_open        = false;
+
+    if (!g_ts_seeded) { g_ts_seeded = true; return; }   // first frame is the baseline
+
+    score_tick_close(gt, dA, dX, cA, cX, capdirty);
+}
+
+// Accumulate a TeamScore broadcast into the current frame.
+stock score_tick_observe(allies, axis) {
+    score_frame_settle();
+
+    new Float:gt = get_gametime();
+    if (!g_ts_frame_open) {
+        g_ts_frame_open     = true;
+        g_ts_frame_gt       = gt;
+        g_ts_frame_hi[TEAM_ALLIES] = allies;
+        g_ts_frame_hi[TEAM_AXIS]   = axis;
+        // Snapshot the counts at frame OPEN: a capture landing later in the same
+        // instant must not retroactively change what the master was looking at.
+        g_ts_frame_cnt[TEAM_ALLIES] = non_default_held(TEAM_ALLIES);
+        g_ts_frame_cnt[TEAM_AXIS]   = non_default_held(TEAM_AXIS);
+        g_ts_frame_capdirty = (gt - g_ts_last_cap_gt) <= TICK_CAP_PROXIMITY;
+    } else {
+        if (allies > g_ts_frame_hi[TEAM_ALLIES]) g_ts_frame_hi[TEAM_ALLIES] = allies;
+        if (axis   > g_ts_frame_hi[TEAM_AXIS])   g_ts_frame_hi[TEAM_AXIS]   = axis;
+    }
+}
+
+// Seconds to the next territorial scoring tick; -1.0 when there is no honest
+// answer, which the caller surfaces by omitting the whole `scoring` block.
+//
+// Source preference, mirroring hud_wave_time_f() / hud_timeleft_f():
+// 1. dodx_get_score_tick_time() — CLOSED LOOP, straight off the master entity.
+//    Correct immediately, across every restart, with no lock-on.
+// 2. Observed-phase estimator: anchored on every CONFIRMED tick, period MEASURED
+//    from the last two adjacent confirmations. Because it re-anchors each cycle
+//    it cannot drift — and it must be measured, not taken from a cvar: the real
+//    spacing is 30.50s against an m_iGivePointsDelay of 30, so a cvar-derived
+//    estimate would slip half a second every tick.
+// 3. -1.0.
+//
+// Unlike hud_wave_time_f this DOES roll into the next cycle, because here
+// silence is a predicted outcome rather than an unobservable failure. The
+// no-fabrication rule is kept by the strike and blind-roll bounds instead: the
+// countdown never survives TICK_MISS_STRIKES slots that owed a visible award,
+// nor TICK_MAX_BLIND_ROLL slots in total, without a fresh confirmation.
+stock Float:hud_score_tick_time_f() {
+    score_frame_settle();
+
+    if (g_has_score_tick_native) {
+        new Float:rem = dodx_get_score_tick_time();
+        if (rem >= 0.0) return rem;
+    }
+
+    if (!g_ts_locked || g_ts_period <= 0.0) return -1.0;
+
+    new Float:gt = get_gametime();
+    if (gt < g_ts_anchor) { score_tick_reset(false); return -1.0; }   // changelevel
+
+    score_tick_roll(gt);
+    if (!g_ts_locked) return -1.0;
+
+    new Float:rem = (g_ts_anchor + g_ts_period) - gt;
+    if (rem < -TICK_OVERRUN_GRACE) return -1.0;
+    if (rem < 0.0)                 return 0.0;
+    return rem;
+}
+
+// Projected award for `team` on the next tick; -1 = unknown, omit the fields.
+stock hud_score_award(team) {
+    if (g_ts_w_failed || g_ts_w <= 0)              return -1;
+    if (g_ts_w_streak < TICK_W_STREAK_REQ)         return -1;
+    if (g_pcvar_score_award
+        && get_pcvar_num(g_pcvar_score_award) == 0) return -1;
+    return g_ts_w * non_default_held(team);
+}
+
 // Optional-native binding: allow loading against dodx modules that don't export
 // dodx_get_round_time (pre-2.7.23) or dodx_get_wave_time (every module shipped
 // so far). trap==0 = load-time bind failure — mark the native unavailable and
@@ -989,6 +1406,14 @@ public native_filter(const name[], index, trap) {
     }
     if (!trap && equal(name, "dodx_get_wave_time")) {
         g_has_wave_native = false;
+        return PLUGIN_HANDLED;
+    }
+    if (!trap && equal(name, "dodx_get_score_tick_time")) {
+        g_has_score_tick_native = false;
+        return PLUGIN_HANDLED;
+    }
+    if (!trap && equal(name, "dodx_get_score_tick_period")) {
+        g_has_score_period_native = false;
         return PLUGIN_HANDLED;
     }
     return PLUGIN_CONTINUE;
@@ -1045,6 +1470,13 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
     // of the live half.
     g_wave_anchor[TEAM_ALLIES] = 0.0;
     g_wave_anchor[TEAM_AXIS]   = 0.0;
+
+    // Drop the scoring-tick phase for the same reason — the go-live
+    // mp_clan_restartround rebases the control-point master's clock, so the grid
+    // we locked during warmup is off-phase for the live half. keep_model: what a
+    // flag is worth belongs to the map, not to the phase, and re-learning it
+    // would cost three more ticks of dead air on the numbers.
+    score_tick_reset(true);
 
     // Arm the round-live re-anchor + re-wipe. This forward fires ~mp_clan_timer
     // (~8-10s) BEFORE the go-live mp_clan_restartround rebases the half timer, zeroes
@@ -1893,11 +2325,22 @@ public task_poll_player_state() {
         new steamid[32];
         get_steamid(id, steamid, charsmax(steamid));
 
-        // Defensive: stop before overflowing. Reserves room for this player's
-        // entry (<=192), the trailing wave block (<=96) AND post_event's envelope
-        // prefix (~165 with a match active) so a full 32-slot server can't
-        // truncate the wrapped payload mid-JSON. 6v6 stays well under this.
-        if (strlen(ps_json) > BUFFER_SIZE - 480) break;
+        // Defensive: stop before overflowing. The reserve is the sum of every
+        // thing still to be appended after this point — keep the arithmetic here
+        // honest when adding another trailing block, rather than guessing:
+        //
+        //     one more player entry (pbuf)                       192
+        //     trailing waves block   (wbuf, worst case 82)         96
+        //     trailing scoring block (sbuf, worst case 69)         96
+        //     post_event envelope prefix (full match_id + map)    165
+        //     slack                                                27
+        //                                                        ----
+        //                                                         576
+        //
+        // 6v6 runs ~1380 bytes, 39% of the resulting 3520 threshold; a 32-slot
+        // pub truncates at ~29 whole player rows instead of ~30. Truncation is
+        // always on a whole entry, so the JSON stays valid either way.
+        if (strlen(ps_json) > BUFFER_SIZE - 576) break;
 
         static pbuf[192];
         formatex(pbuf, charsmax(pbuf),
@@ -1939,12 +2382,62 @@ public task_poll_player_state() {
         add(ps_json, charsmax(ps_json), wbuf);
     }
 
+    // ── Team-level territorial scoring-tick block ────────────────────────────
+    // ONE shared clock (the map has a single control-point master) plus a
+    // per-team projected award — unlike waves, which are two independent
+    // per-team phases. The whole block is omitted when there is no honest
+    // answer, and the award PAIR is omitted independently of the clock: an
+    // unvalidated map, a stale dodx with no CP default owners, or an operator
+    // pulling dod_hud_score_award all leave the countdown up and the numbers
+    // dark, which is the useful half of the degradation.
+    new Float:tick_in = hud_score_tick_time_f();
+
+    // `every` bounds the countdown frontend-side ("in can never exceed one
+    // period"). Prefer the MEASURED period; on the closed-loop path the native
+    // answers the countdown directly so the estimator never locks one, and the
+    // map's nominal delay stands in. Zero means neither is known — emitting it
+    // would trip that guard and hide the panel exactly when the clock is most
+    // trustworthy, so it is omitted instead.
+    new Float:every = g_ts_period;
+    if (every <= 0.0 && g_has_score_period_native) {
+        new nominal = dodx_get_score_tick_period();
+        // The real spacing runs slightly longer than the configured delay
+        // (30.49s measured against a delay of 30 — the master only awards on
+        // its own think), so the bound has to sit above it or it would reject
+        // the honest value at the top of each cycle.
+        if (nominal > 0) every = float(nominal) + 1.0;
+    }
+
+    // A period far longer than a round's tactical rhythm is not worth showing;
+    // see TICK_MAX_USEFUL_PERIOD. Gate on the period we actually know about —
+    // an unknown period is NOT assumed to be long, since the open-loop
+    // estimator only ever locks periods inside [TICK_PERIOD_MIN, MAX] anyway.
+    new bool:have_tick = (tick_in >= 0.0)
+        && (every <= 0.0 || every <= TICK_MAX_USEFUL_PERIOD);
+
+    if (have_tick) {
+        new aw_a = hud_score_award(TEAM_ALLIES);
+        new aw_x = hud_score_award(TEAM_AXIS);
+        static sbuf[128];
+        new slen = formatex(sbuf, charsmax(sbuf), ",^"scoring^":{^"in^":%.2f", tick_in);
+        if (every > 0.0) {
+            slen += formatex(sbuf[slen], charsmax(sbuf) - slen,
+                ",^"every^":%.2f", every);
+        }
+        if (aw_a >= 0 && aw_x >= 0) {
+            slen += formatex(sbuf[slen], charsmax(sbuf) - slen,
+                ",^"allies^":%d,^"axis^":%d", aw_a, aw_x);
+        }
+        formatex(sbuf[slen], charsmax(sbuf) - slen, "}");
+        add(ps_json, charsmax(ps_json), sbuf);
+    }
+
     add(ps_json, charsmax(ps_json), "}");
 
     // Skip the POST only when there is genuinely nothing to say. `first` alone
     // is no longer the test: a full team wipe leaves the player array empty and
     // is precisely when the wave clock matters most.
-    if ((!first || have_wave) && g_cvar_url[0]) post_event(ps_json);
+    if ((!first || have_wave || have_tick) && g_cvar_url[0]) post_event(ps_json);
 }
 
 public ev_team_score() {
@@ -1954,6 +2447,11 @@ public ev_team_score() {
     // which silently dropped tick-scoring increments and per-cap updates.
     new allies = dodx_get_team_score(TEAM_ALLIES);
     new axis   = dodx_get_team_score(TEAM_AXIS);
+
+    // Feed the territorial-tick estimator. This is the ONLY observation point
+    // for it: the master's award clock is invisible everywhere else, and its
+    // awards surface purely as TeamScore broadcasts.
+    score_tick_observe(allies, axis);
 
     new json[128];
     formatex(json, charsmax(json),
@@ -2467,6 +2965,12 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
         // That was the "flags don't reset after a capout" bug.
         arm_cp_reset_window();
 
+        // Same marker for the scoring-tick estimator: a restart cascade rebases
+        // the master's clock, and the score noise it produces is not a tick.
+        // Marked on the CASCADE, not on the +40 capout delta — a .restarthalf or
+        // sv_restartround produces this cascade with no bonus at all.
+        g_ts_last_reset_gt = get_gametime();
+
         g_flag_owner[cp_index] = new_owner;
         if (!g_flag_emit_pending[cp_index]) g_flag_pending_captor_count[cp_index] = 0;
         // Round-restart neutral cascade lands here: it zeroes every zone count,
@@ -2490,6 +2994,7 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
     // is 0 everywhere, so neither path can fire and behaviour is unchanged.
     if (g_cp_reset_until > get_gametime()
         && g_flag_default_owner[cp_index] == new_owner) {
+        g_ts_last_reset_gt = get_gametime();
         g_flag_owner[cp_index] = new_owner;
         if (!g_flag_emit_pending[cp_index]) g_flag_pending_captor_count[cp_index] = 0;
         break_queue_clear(cp_index);
@@ -2514,6 +3019,11 @@ public dod_control_point_captured(cp_index, new_owner, old_owner) {
     g_flag_capping_team[cp_index]         = 0;
     g_flag_contested[cp_index]            = false;
     g_flag_last_progress[cp_index]        = -1;
+
+    // A genuine capture awards team points of its own, at an arbitrary instant.
+    // Mark it so a TeamScore frame landing within TICK_CAP_PROXIMITY is never
+    // used to seed the tick phase, and never feeds the award model.
+    g_ts_last_cap_gt = get_gametime();
     // A completed cap is NOT a break — drop any pending break candidates so the
     // post-cap zone-count drop (cappers leaving) can't be mis-credited as one.
     break_queue_clear(cp_index);

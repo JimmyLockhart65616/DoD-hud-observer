@@ -189,6 +189,68 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+   TERRITORIAL SCORING TICK
+   DoD's periodic team-point award for holding control points — a clock
+   the game client shows nowhere. Countdown under the half clock, and
+   each side's projected points under the score digit they will change.
+
+   WIDTH-NEUTRALITY IS LOAD-BEARING. .flags-bar is an absolute overlay
+   running to x≈530 while .score is only ~190px wide, so at the ~1280
+   prod OBS canvas the score pill clears the flag strip by roughly 15px
+   (see the placement note in Example.jsx). Both additions therefore sit
+   BELOW existing content in fixed-height slots and add no horizontal
+   extent — .team-score's 40px content box is unchanged. .score is also
+   overflow:hidden, so nothing here may overhang its parent.
+
+   Both slots are always rendered at a fixed height even when empty: the
+   panel comes and goes as the plugin locks, unlocks and re-locks the
+   tick phase, and a collapsing slot would jog the whole score bar on air.
+   ═══════════════════════════════════════════════════════════════════ */
+.tick-award-slot,
+.tick-clock-slot {
+  display: block;
+  height: 12px;
+  line-height: 12px;
+  margin-top: 2px;
+  text-align: center;
+}
+
+.tick-award {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+/* Matches .team-name-allies / .team-name-axis so the number reads as
+   belonging to that side without repeating the label. */
+.tick-award-allies { color: #8FA847; }
+.tick-award-axis   { color: #C43030; }
+
+.tick-clock {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+  /* Quiet: this sits directly under the half clock and must not compete
+     with it. Same family, roughly half the size, dimmed. */
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* Pure CSS, never a JS timer — same reason as .wave-panel.hot above:
+   OBS throttles background-tab intervals and a JS-driven pulse would
+   stutter or stall outright. */
+.tick-clock.hot {
+  animation: tick-clock-pulse 0.7s ease-in-out infinite;
+}
+
+@keyframes tick-clock-pulse {
+  0%, 100% { color: rgba(255, 255, 255, 0.55); }
+  50%      { color: #ffd9a0; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    SCORE BAR
    ═══════════════════════════════════════════════════════════════════ */
 .score {
@@ -216,14 +278,29 @@
   object-fit: contain;
 }
 
+/* Column, so the projected-tick award can sit under the digit without
+   widening the pill. There is no global box-sizing reset in this app, so
+   min-width applies to the CONTENT box and the horizontal footprint is
+   unchanged by anything stacked below. */
 .score .team-score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   font-size: 28px;
   padding: 0 14px;
   min-width: 40px;
   text-align: center;
 }
 
+.score .team-score-value {
+  line-height: 1.1;
+}
+
 .score .timer-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   font-size: 22px;
   padding: 6px 16px;
   background-color: rgba(0, 0, 0, 0.3);

@@ -138,10 +138,21 @@ export default [
     // the `waves` block: the wave clock is per-TEAM and arms on each side's first
     // death, so the two sides have unrelated phases (the 4800 snapshot above has no
     // `waves` key at all — nobody was dead yet, so neither clock was running).
+    //
+    // Also the first to carry `scoring` — DoD's territorial point award for
+    // holding control points. ONE shared clock (the map has a single
+    // control-point master) plus each side's projected points, unlike `waves`,
+    // which is two independent per-team phases.
+    //
+    // NOTE these fixtures author the ESTIMATOR'S OUTPUT, never its input. The
+    // plugin reconstructs this clock from TeamScore broadcasts, and none of that
+    // detection — the 0.5s grid test, the phase lock, the online learning of what
+    // a control point is worth — is exercised by the mocker at all. Its only test
+    // is backend/src/invariants/scoreTick.ts against the recorded fixture.
     { "player_state": { "time": 16000, "waves": {
         "allies": { "in": 3.75, "pending": 1 },
         "axis":   { "in": 8.25, "pending": 2 },
-    }, "players": [
+    }, "scoring": { "in": 21.25, "every": 30.5, "allies": 4, "axis": 2 }, "players": [
         { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing" },
         { "user_id": "STEAM_0:0:1002", "weapon": "thompson", "nades": 2, "health": 100, "prone_state": "standing" },
         { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 1, "health": 88,  "prone_state": "deployed" },
@@ -153,12 +164,26 @@ export default [
         { "user_id": "STEAM_0:0:2005", "weapon": "kar",      "nades": 2, "health": 90,  "prone_state": "standing" },
     ]}},
 
+    // Scoring clock with NO award pair — the plugin has locked the tick phase but
+    // has not corroborated what a control point is worth (an unvalidated map, a
+    // dodx too old to report CP default owners, or `dod_hud_score_award 0`). The
+    // countdown renders, the numbers stay dark. This degraded shape is the one
+    // most likely to hit the fleet first and would otherwise never be seen locally.
+    { "player_state": { "time": 19000,
+      "scoring": { "in": 12.00, "every": 30.5 }, "players": [
+        { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 1, "health": 100, "prone_state": "standing" },
+    ]}},
+
     // Post-trade snapshot: both sides are down bodies and the allies wave is about
-    // to land — drives the pill's sub-3s "hot" state on the overlay.
+    // to land — drives the pill's sub-3s "hot" state on the overlay. The scoring
+    // tick is about to land too (sub-3s drives .tick-clock.hot), and axis are on
+    // +0: they hold only their own home flags, which is real information, not an
+    // absent value.
     { "player_state": { "time": 22500, "waves": {
         "allies": { "in": 1.25, "pending": 3 },
         "axis":   { "in": 6.50, "pending": 4 },
-    }, "players": [
+    }, "scoring": { "in": 2.75, "every": 30.5, "allies": 4, "axis": 0 }, "players": [
         { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing" },
         { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 0, "health": 88,  "prone_state": "deployed" },
         { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": 0, "health": 51,  "prone_state": "standing" },

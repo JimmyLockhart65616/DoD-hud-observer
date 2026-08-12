@@ -13,6 +13,8 @@ import StatsTable from '../core/StatsBoard/StatsTable';
 import Flags from '../core/Flags/Flags';
 import Timer from '../core/Score/timer/Timer';
 import WavePill from '../core/Score/wave/WavePill';
+import TickClock from '../core/Score/tick/TickClock';
+import TickAward from '../core/Score/tick/TickAward';
 import { className as dodClassName } from '../core/dodClasses';
 import { getWeaponIcon } from '../screen/resources/weaponIcons';
 
@@ -241,6 +243,10 @@ function Caster() {
     const waveAlliesAt = useHudStore(s => s.wave_allies_at);
     const waveAxis = useHudStore(s => s.wave_axis);
     const waveAxisAt = useHudStore(s => s.wave_axis_at);
+    const scoringIn = useHudStore(s => s.scoring_in);
+    const scoringAt = useHudStore(s => s.scoring_at);
+    const scoringAllies = useHudStore(s => s.scoring_allies);
+    const scoringAxis = useHudStore(s => s.scoring_axis);
     const killStreaks = useHudStore(s => s.kill_streaks);
     const killLog = useHudStore(s => s.kill_log);
 
@@ -320,15 +326,31 @@ function Caster() {
                         side="allies"
                         frozen={roundState.round_freeze || roundState.round_end}
                     />
-                    <span className="caster-score">{alliesScore}</span>
-                    <span className="caster-clock">
-                        <Timer
-                            timeleft={timeleft}
-                            timeleftAt={timeleftAt}
+                    {/* Same stacking as /screen: each side's projected scoring
+                        points under the score they will change, and the shared
+                        tick countdown under the half clock. */}
+                    <span className="caster-score-stack">
+                        <span className="caster-score">{alliesScore}</span>
+                        <TickAward value={scoringAllies} side="allies" />
+                    </span>
+                    <span className="caster-score-stack">
+                        <span className="caster-clock">
+                            <Timer
+                                timeleft={timeleft}
+                                timeleftAt={timeleftAt}
+                                frozen={roundState.round_freeze || roundState.round_end}
+                            />
+                        </span>
+                        <TickClock
+                            seconds={scoringIn}
+                            secondsAt={scoringAt}
                             frozen={roundState.round_freeze || roundState.round_end}
                         />
                     </span>
-                    <span className="caster-score">{axisScore}</span>
+                    <span className="caster-score-stack">
+                        <span className="caster-score">{axisScore}</span>
+                        <TickAward value={scoringAxis} side="axis" />
+                    </span>
                     <WavePill
                         seconds={waveAxis}
                         secondsAt={waveAxisAt}

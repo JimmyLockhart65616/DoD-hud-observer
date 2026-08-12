@@ -105,6 +105,50 @@ test.describe('HUD Mocker Timeline', () => {
         await expect(page.locator('.axis-score')).toHaveText('0');
         await takeScreenshot(page, '07b-tick-scoring');
 
+        // ── Checkpoint 7c: scoring-tick panel at the PROD canvas ─────
+        // The territorial scoring tick renders inside the top-bar score pill,
+        // and `.flags-bar` is an absolute overlay across that same 72px band.
+        // At 1920 there is room to spare; the ~1280 prod OBS canvas is where
+        // the two nearly meet, and it is the width that actually goes on air.
+        // Assert the pill still clears the flag strip and still fits the band,
+        // so a future style edit that widens or grows it fails here rather than
+        // during a broadcast.
+        await page.setViewportSize({ width: 1280, height: 720 });
+        await page.waitForTimeout(300);
+
+        const geo = await page.evaluate(() => {
+            const rect = (sel: string) => {
+                const el = document.querySelector(sel);
+                return el ? el.getBoundingClientRect() : null;
+            };
+            let flagsRight = 0;
+            document.querySelectorAll('.flags-bar *').forEach((el) => {
+                const b = el.getBoundingClientRect();
+                if (b.width > 0) flagsRight = Math.max(flagsRight, b.right);
+            });
+            const score = rect('.score');
+            return {
+                flagsRight,
+                scoreLeft: score ? score.left : 0,
+                scoreHeight: score ? score.height : 0,
+                topBarHeight: rect('.top-bar')?.height ?? 0,
+                hasAward: !!document.querySelector('.tick-award'),
+                hasClock: !!document.querySelector('.tick-clock'),
+            };
+        });
+
+        // The panel is what we came to look at — if it isn't rendering, the
+        // clearance numbers below are meaningless.
+        expect(geo.hasAward || geo.hasClock).toBe(true);
+        // Width-neutrality: the score pill must not have grown left into the
+        // flag strip. Both live in the same absolute band, so overlap is silent.
+        expect(geo.scoreLeft).toBeGreaterThan(geo.flagsRight);
+        // And it must still fit the gradient band; taller spills onto transparency.
+        expect(geo.scoreHeight).toBeLessThanOrEqual(geo.topBarHeight);
+
+        await takeScreenshot(page, '07c-tick-scoring-1280');
+        await page.setViewportSize({ width: 1920, height: 1080 });
+
         // ── Checkpoint 8: Round end (30s) — cumulative 2-0 ──────────
         await page.waitForFunction(
             () => {
