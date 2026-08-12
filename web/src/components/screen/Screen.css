@@ -206,13 +206,50 @@
    panel comes and goes as the plugin locks, unlocks and re-locks the
    tick phase, and a collapsing slot would jog the whole score bar on air.
    ═══════════════════════════════════════════════════════════════════ */
-.tick-award-slot,
-.tick-clock-slot {
+.tick-award-slot {
   display: block;
   height: 12px;
   line-height: 12px;
   margin-top: 2px;
   text-align: center;
+}
+
+/* Taller than the award slot: it carries a stacked label + digits. Fixed, for
+   the same reason — the panel comes and goes as the tick phase locks. */
+.tick-clock-slot {
+  display: block;
+  height: 21px;
+  margin-top: 2px;
+  text-align: center;
+}
+
+/* Quiet: this sits directly under the half clock and must not compete with
+   it. Same family, roughly half the size, dimmed. The colour lives here rather
+   than on the digits so the .hot pulse can inherit down to them while leaving
+   the label alone. */
+.tick-clock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* 8px keeps "NEXT SCORE" narrower than the half clock directly above it, so
+   adding it cannot widen .score into the flag strip. */
+.tick-clock-label {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-bottom: 1px;
+}
+
+.tick-clock-value {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
 }
 
 .tick-award {
@@ -228,15 +265,9 @@
 .tick-award-allies { color: #8FA847; }
 .tick-award-axis   { color: #C43030; }
 
-.tick-clock {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  font-variant-numeric: tabular-nums;
-  /* Quiet: this sits directly under the half clock and must not compete
-     with it. Same family, roughly half the size, dimmed. */
-  color: rgba(255, 255, 255, 0.55);
-}
+/* Quiet: this sits directly under the half clock and must not compete with
+   it. Same family, roughly half the size, dimmed. */
+.tick-clock { color: rgba(255, 255, 255, 0.55); }
 
 /* Pure CSS, never a JS timer — same reason as .wave-panel.hot above:
    OBS throttles background-tab intervals and a JS-driven pulse would

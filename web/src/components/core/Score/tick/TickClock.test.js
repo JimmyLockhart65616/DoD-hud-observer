@@ -28,7 +28,10 @@ function renderClock(over) {
     const { container, rerender } = render(<TickClock {...props(over)} />);
     return {
         container,
-        text: () => container.querySelector('.tick-clock')?.textContent ?? null,
+        // Read the digits specifically — .tick-clock also carries the label, so
+        // its textContent would be "NEXT SCORE0:06".
+        text: () => container.querySelector('.tick-clock-value')?.textContent ?? null,
+        label: () => container.querySelector('.tick-clock-label')?.textContent ?? null,
         hot: () => !!container.querySelector('.tick-clock.hot'),
         rerender: (next) => rerender(<TickClock {...props(next)} />),
     };
@@ -47,6 +50,13 @@ describe('TickClock', () => {
     it('renders the remaining seconds as M:SS', () => {
         const c = renderClock({ seconds: 6 });
         expect(c.text()).toBe('0:06');
+    });
+
+    it('labels itself, since the countdown is meaningless unlabelled', () => {
+        // The game never shows this clock, so a bare number next to the half
+        // timer reads as a second match clock.
+        const c = renderClock({ seconds: 6 });
+        expect(c.label()).toBe('NEXT SCORE');
     });
 
     it('pads and formats past a minute', () => {

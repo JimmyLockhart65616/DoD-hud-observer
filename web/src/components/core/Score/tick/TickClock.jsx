@@ -56,9 +56,16 @@ const TickClock = ({ seconds, secondsAt, frozen }) => {
     const classes = ['tick-clock'];
     if (display <= 3) classes.push('hot');
 
+    // Labelled, because the countdown is meaningless on its own to anyone who
+    // hasn't been told what it is — and nobody has, since the game never shows
+    // this clock. The label stacks ABOVE the digits rather than beside them:
+    // .score must not grow horizontally (see the CSS header for the flags-bar
+    // clearance), and at 8px "NEXT SCORE" is still narrower than the half clock
+    // it sits under, so it costs nothing in width.
     return (
-        <span className={classes.join(' ')} title="Next scoring tick">
-            {mm}:{String(ss).padStart(2, '0')}
+        <span className={classes.join(' ')} title="Time until each team is awarded points for the flags it holds">
+            <span className="tick-clock-label">NEXT SCORE</span>
+            <span className="tick-clock-value">{mm}:{String(ss).padStart(2, '0')}</span>
         </span>
     );
 };

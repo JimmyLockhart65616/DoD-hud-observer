@@ -15,6 +15,28 @@ class Welcome extends React.Component {
                             <li><a href="/help">Viewer Guide</a> — how to set up and use the HUD in OBS</li>
                         </ul>
                         <h5 style={{ marginTop: '32px' }}>
+                            What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-08-11</small>
+                        </h5>
+                        <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>
+                            <li>
+                                Scoring timer — DoD quietly awards each team points for the flags it holds, on a
+                                repeating timer the game itself never shows you anywhere. The top bar now counts down
+                                to the next award (<strong>NEXT SCORE</strong>, under the match clock), and each team's
+                                score shows what it's about to gain, e.g. <code>+4</code>. You only score for ground
+                                you've taken — sitting on your own starting flags pays nothing, which is why a team
+                                can show <code>+0</code>
+                            </li>
+                            <li>
+                                The award figures only appear once the numbers have been checked against the live
+                                scoreboard, so on an unusual map you may see the countdown with no <code>+N</code> beside
+                                the scores. The timer itself is always accurate
+                            </li>
+                            <li>
+                                Maps where the award is rare (some run it as little as once every 15 minutes) hide the
+                                timer entirely rather than show a countdown nobody is playing to
+                            </li>
+                        </ul>
+                        <h5 style={{ marginTop: '32px' }}>
                             What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-08-09</small>
                         </h5>
                         <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>
