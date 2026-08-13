@@ -2390,7 +2390,25 @@ public task_poll_player_state() {
     // unvalidated map, a stale dodx with no CP default owners, or an operator
     // pulling dod_hud_score_award all leave the countdown up and the numbers
     // dark, which is the useful half of the degradation.
+    // Nobody on a team means nothing is being broadcast and nothing can be
+    // captured, so the scoring countdown is real but pointless. This gate is
+    // NOT cosmetic: without it an idle server POSTs this block at 4 Hz forever,
+    // where the pre-2.4.0 build posted nothing at all. Measured on the fleet
+    // 2026-08-13 — per-server ingest went 2.07 -> 5.55 eps and every one of
+    // those frames carried an empty player array. Roster-gated, not
+    // alive-gated: a full team wipe still ships, which is when it matters most.
+    new roster = 0;
+    for (new id = 1; id <= get_maxplayers() && id <= MAX_PLAYERS; id++) {
+        if (!is_user_connected(id) || is_user_hltv(id)) continue;
+        if (g_player_team[id] == TEAM_ALLIES || g_player_team[id] == TEAM_AXIS) { roster = 1; break; }
+    }
+
+    // Still CALL the estimator with an empty roster — it settles open score
+    // frames and rolls its anchor, and skipping that would leave stale state to
+    // be interpreted against a much later gametime once players arrive. Only
+    // the emission is suppressed.
     new Float:tick_in = hud_score_tick_time_f();
+    if (!roster) tick_in = -1.0;
 
     // `every` bounds the countdown frontend-side ("in can never exceed one
     // period"). Prefer the MEASURED period; on the closed-loop path the native
