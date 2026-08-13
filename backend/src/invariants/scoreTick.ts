@@ -56,6 +56,22 @@ export const TICK_PERIOD_MIN = 20.0;     // plausible m_iGivePointsDelay band
 export const TICK_PERIOD_MAX = 45.0;
 export const TICK_PHASE_TOL = 0.25;
 export const TICK_CAP_PROXIMITY = 0.30;
+
+/**
+ * How late a `flag_captured` record lands relative to the capture it describes.
+ *
+ * OFFLINE ONLY, and load-bearing. The plugin marks cap proximity from the
+ * SYNCHRONOUS `dod_control_point_captured` forward, so it knows the true instant.
+ * The persisted stream does not: `flag_captured` is emitted `DEFER_DELAY` (0.5s)
+ * later, so that dod_score_event has filled the captor batch.
+ *
+ * A cap award therefore appears in the stream up to ~0.5s BEFORE the
+ * flag_captured that explains it. A backward-only proximity window never sees
+ * it, mistakes the cap award for a tick, and then reports the award model as
+ * violated — which is exactly what a first pass over dod_anzio produced
+ * (allies "scoring while holding no flags", 0.55s before their own cap landed).
+ */
+export const TICK_CAP_DEFER = 0.5;
 export const TICK_CAPOUT_FLOOR = 20;     // any single-team delta >= this is a bonus/seed, not a tick
 export const TICK_OVERRUN_GRACE = 0.75;
 export const TICK_MISS_STRIKES = 2;      // silent slots with a NONZERO projection before unlocking
@@ -297,6 +313,25 @@ function buildFrames(events: ReadonlyArray<StreamEvent>, opts: ScoreTickOptions)
     closePending();
 
     timeline.sort((p, q) => (p.half - q.half) || (p.gt - q.gt) || (p.kind === 'cap' ? -1 : 1));
+
+    // Re-mark cap proximity BIDIRECTIONALLY. `flag_captured` lands TICK_CAP_DEFER
+    // after the capture it describes, so a cap award shows up in the stream
+    // BEFORE its own cap record — invisible to the backward-only window computed
+    // at frame open. The same window also covers the ownership lag: held counts
+    // only update when the deferred record arrives, so a frame inside it may be
+    // scored against pre-capture ownership.
+    //
+    // The plugin needs none of this: it marks caps from the synchronous
+    // dod_control_point_captured forward and knows the true instant.
+    const capTimes = timeline.filter(e => e.kind === 'cap').map(e => ({ half: e.half, gt: e.gt }));
+    for (const e of timeline) {
+        if (e.kind !== 'frame' || !e.frame) continue;
+        const dirty = capTimes.some(c => c.half === e.half
+            && e.gt >= c.gt - TICK_CAP_DEFER - TICK_CAP_PROXIMITY
+            && e.gt <= c.gt + TICK_CAP_PROXIMITY);
+        if (dirty) e.frame.capDirty = true;
+    }
+
     return { frames, events: timeline };
 }
 
