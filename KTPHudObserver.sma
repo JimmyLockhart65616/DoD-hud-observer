@@ -64,7 +64,7 @@ native dodx_get_score_tick_period();
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.4.0"
+#define VERSION "2.5.0"
 #define AUTHOR  "cadaver"
 
 #define MAX_PLAYERS     32
@@ -350,6 +350,23 @@ new g_player_deaths[MAX_PLAYERS + 1];
 // Only enemy damage accumulates (client_damage skips self + team hits), so
 // assists can never be earned by teammates.
 new g_dmg_taken[MAX_PLAYERS + 1][MAX_PLAYERS + 1];
+
+// Last known health per slot — where client_damage recovers the victim's PRE-hit
+// health from. Seeded on spawn and at the roster dump, then updated from
+// client_damage's own POST-hit read on EVERY hit.
+//
+// dodx reports (int)pev->dmg_take verbatim (KTPAMXX modules/dod/dodx/usermsg.cpp)
+// and never clamps it to the victim's remaining health, so the killing blow's
+// overkill used to be banked in full. Measured on the NY1 production fixture:
+// 95,608 reported vs ~61,000 actually applied — 37% inflation, 53.6% of hits
+// overkilling, per-player inflation +42% to +77%. `damage` is the StatsBoard's
+// default sort key AND its MVP award, so that flipped the MVP on 2 of 4
+// team-halves and re-ordered rows on 3 of 4. It was never cosmetic.
+//
+// 0 = unknown (fresh slot, not yet seeded, or dead); client_damage falls back to
+// post + damage, which IS the pre-hit health whenever the engine applied the
+// reported number unmodified.
+new g_last_health[MAX_PLAYERS + 1];
 
 #define ASSIST_DAMAGE_THRESHOLD 50
 
@@ -826,6 +843,9 @@ stock reset_player_stats_slot(id) {
     g_player_teamkills[id]   = 0;
     g_player_cur_streak[id]  = 0;
     g_player_best_streak[id] = 0;
+    // Unknown until the next spawn / roster dump re-seeds it — client_damage
+    // runs on its post + damage fallback while this reads 0.
+    g_last_health[id]        = 0;
     for (new j = 0; j <= MAX_PLAYERS; j++) {
         g_dmg_taken[id][j] = 0;
         g_dmg_taken[j][id] = 0;
@@ -1712,6 +1732,11 @@ stock do_roster_dump() {
 
         g_player_prone[id] = PRONE_STANDING;
         g_player_alive[id] = alive ? 1 : 0;
+        // Re-seed the applied-damage baseline. ktp_match_start wipes every slot
+        // (wipe_all_stat_accumulators) immediately before this dump, so without
+        // this everyone alive across the go-live restart would run client_damage's
+        // fallback on their first hit of the half.
+        g_last_health[id]  = alive ? health : 0;
 
         formatex(json, charsmax(json),
             "{^"event^":^"roster_player^",^"user_id^":^"%s^",^"name^":^"%s^",^"team^":^"%s^",^"alive^":%s,^"class_id^":%d,^"weapon_primary^":^"%s^",^"weapon_secondary^":^"%s^",^"health^":%d}",
@@ -1899,6 +1924,9 @@ public dod_client_spawn(id) {
     g_player_team[id]  = team;
     g_player_prone[id] = PRONE_STANDING;
     g_player_alive[id] = 1;
+    // Fresh life at full health — the baseline every applied-damage clamp in
+    // client_damage measures against.
+    g_last_health[id]  = get_user_health(id);
 
     // Fresh life — clear damage taken so assist credit only spans one life.
     for (new a = 0; a <= MAX_PLAYERS; a++) {
@@ -1933,15 +1961,57 @@ public dod_client_changeteam(id, team, oldteam) {
 }
 
 // DODX forward: client_damage (fires on every hit)
+//
+// `damage` here is what dodx reported: (int)pev->dmg_take, the RAW amount the
+// game DLL charged, post-dod_damage_pre but NEVER clamped to the victim's
+// remaining health. Crediting it verbatim banked the killing blow's overkill —
+// a 120-damage garand hit on a 40 HP victim scored 120.
+//
+// We credit APPLIED damage: the health the victim actually lost, capped at what
+// dodx reported. `pre` is the previous hit's post-hit health (seeded at spawn and
+// at the roster dump); `victim_health` is this hit's, which goes negative on
+// overkill.
+//
+//     applied = min(damage, max(0, pre - max(victim_health, 0)))
+//
+// The min() is what makes this survive KTPGrenadeDamage, which IS deployed
+// fleet-wide and reduces grenade damage through dodx's dod_damage_pre heal-back.
+// On a RAW-lethal grenade hit dodx skips the heal-back (it gates on the victim
+// still being alive) but still forwards the REDUCED number, so victim_health sits
+// further below zero than the reported damage explains. A naive
+// `damage + min(victim_health, 0)` would under-report there, sometimes to 0;
+// capping the health drop at `damage` credits the reduced hit in full and never
+// more than dodx said.
+//
+// Fallback when the baseline is missing or desynced (pre <= 0, or pre < the
+// post-hit read, meaning the victim gained health we never observed): take
+// post + damage as the pre-hit health, which degrades to the naive form — exact
+// whenever the engine applied the reported number unmodified. Validated on all
+// 1086 damage events of the NY1 fixture: victim_health + damage always lands in
+// (0,100], so pre-hit health is reliably recoverable.
 public client_damage(attacker, victim, damage, wpnindex, hitplace, TK) {
     if (attacker < 1 || attacker > MAX_PLAYERS) return;
     if (victim < 1 || victim > MAX_PLAYERS) return;
 
+    // POST-hit health — negative on overkill. Read BEFORE anything is credited.
+    new victim_health = get_user_health(victim);
+
+    new pre = g_last_health[victim];
+    if (pre <= 0 || pre < victim_health) pre = victim_health + damage;
+    new applied = min(damage, max(0, pre - max(victim_health, 0)));
+
+    // Keep the baseline in sync for EVERY hit. Self-damage, fall damage and team
+    // hits all move the victim's health even though they credit nothing, so this
+    // MUST stay outside the accumulate gate below — inside it, the next enemy hit
+    // reads a stale-high `pre` and silently over-reports again.
+    g_last_health[victim] = victim_health;
+
     // Accumulate enemy damage only — self-damage and team hits earn nothing.
-    // Matrix row feeds assist attribution at client_death.
+    // Matrix row feeds assist attribution at client_death, on the SAME applied
+    // value so the 50-damage assist threshold measures what the board shows.
     if (attacker != victim && !TK) {
-        g_dmg_taken[victim][attacker] += damage;
-        g_player_damage[attacker] += damage;
+        g_dmg_taken[victim][attacker] += applied;
+        g_player_damage[attacker] += applied;
         g_player_hits[attacker]++;
         if (hitplace == 1) g_player_hs_hits[attacker]++;
     }
@@ -1951,12 +2021,13 @@ public client_damage(attacker, victim, damage, wpnindex, hitplace, TK) {
     get_steamid(victim, victim_steam, charsmax(victim_steam));
     xmod_get_wpnlogname(wpnindex, weapon, charsmax(weapon));
 
-    new victim_health = get_user_health(victim);
-
+    // `damage` on the wire is the APPLIED number (what the accumulators bank);
+    // `damage_raw` preserves dodx's report so a post-deploy capture can be audited
+    // against the pre-2.5.0 streams without a second build.
     new json[512];
     formatex(json, charsmax(json),
-        "{^"event^":^"damage^",^"attacker_id^":^"%s^",^"victim_id^":^"%s^",^"damage^":%d,^"weapon^":^"%s^",^"hitplace^":%d,^"victim_health^":%d}",
-        attacker_steam, victim_steam, damage, weapon, hitplace, victim_health);
+        "{^"event^":^"damage^",^"attacker_id^":^"%s^",^"victim_id^":^"%s^",^"damage^":%d,^"damage_raw^":%d,^"weapon^":^"%s^",^"hitplace^":%d,^"victim_health^":%d}",
+        attacker_steam, victim_steam, applied, damage, weapon, hitplace, victim_health);
     post_event(json);
 }
 
@@ -2004,6 +2075,7 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
 
     g_player_alive[victim] = 0;
     g_player_prone[victim] = PRONE_STANDING;
+    g_last_health[victim]  = 0;   // life over — dod_client_spawn re-seeds it
 
     // Bump the teamkiller's running TK count BEFORE building the kill JSON so
     // the kill feed can surface it (e.g. "Polak (TK x2)"). Counted per half.

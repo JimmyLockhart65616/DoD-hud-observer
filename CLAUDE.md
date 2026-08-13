@@ -246,6 +246,8 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
   "weapon": "garand", "kill_type": "normal|suicide|teamkill", "kill_class": "gun|nade",
   "headshot": false, "victim_prone": false, "killer_prone": false,
   "assist_ids": ["STEAM_0:0:789"] }
+{ "event": "damage", "attacker_id": "STEAM_0:0:123", "victim_id": "STEAM_0:0:456",
+  "damage": 40, "damage_raw": 120, "weapon": "garand", "hitplace": 1, "victim_health": -80 }
 { "event": "prone_change", "user_id": "STEAM_0:0:123",
   "state": "standing|prone|deployed", "timestamp": 1234567890000 }
 { "event": "weapon_pickup", "user_id": "STEAM_0:0:123", "weapon": "mp40" }
@@ -255,6 +257,45 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 { "event": "caster_observed_player", "user_id": "STEAM_0:0:123" }
 { "event": "user_say", "user_id": "STEAM_0:0:123", "team_only": false, "message": "gg" }
 ```
+
+#### `damage` — applied vs raw
+
+`damage` is **APPLIED damage since plugin 2.5.0**: the health the victim actually
+lost, capped at what dodx reported. `damage_raw` is dodx's own number —
+`(int)pev->dmg_take` as read in `Client_Health_End`
+(`KTPAMXX modules/dod/dodx/usermsg.cpp`), which the game DLL never clamps to the
+victim's remaining health (`pev->dmg_take += flTake` then `pev->health -= flTake`,
+so health goes negative).
+
+Crediting raw meant the killing blow's overkill was banked in full. On the NY1
+fixture that inflated 1086 hits from ~61,000 to **95,608 — 37% of every damage
+number was health the victim never had**, with 53.6% of hits overkilling and
+per-player inflation of +42% to +77%. `damage` is the StatsBoard's default sort key
+**and** its MVP award (`StatsTable.jsx`), so this flipped the MVP on 2 of 4
+team-halves and re-ordered rows on 3 of 4. It was never a cosmetic error.
+
+- **Pre-hit health is recovered from `g_last_health[]`**, seeded on spawn and at the
+  roster dump (`ktp_match_start` wipes every slot immediately before that dump) and
+  updated from the post-hit `get_user_health(victim)` on **every** hit — including
+  self, fall and team damage, which credit nothing but still move health. That
+  update sits deliberately **outside** the `attacker != victim && !TK` accumulate
+  gate; move it inside and the next enemy hit reads a stale-high baseline and
+  silently over-reports again.
+- **The cap is `min(damage, health_drop)`, not `damage + min(victim_health, 0)`.**
+  `KTPGrenadeDamage.amxx` is deployed fleet-wide and reduces grenade damage through
+  dodx's `dod_damage_pre` heal-back, which dodx **skips when the victim is already
+  dead** while still forwarding the reduced number. Subtracting raw overkill from a
+  reduced value under-reports, sometimes to 0.
+- Validated on all 1086 fixture events: `victim_health + damage` always lands in
+  `(0,100]`, so the pre-hit health is reliably recoverable. Pinned by
+  `backend/src/__tests__/damageCorrection.test.ts`, which also pins the naive model's
+  total so a future "simplification" fails loudly.
+- `victim_health` is **unchanged** and is still the health-bar source
+  (`ingest.ts`, `Socket.jsx`). `damage_raw` is audit-only — nothing on the render
+  path reads it. Guarded by the `damage-applied-bound` invariant
+  (`0 <= damage <= damage_raw`), which is gated on `damage_raw` being present so it
+  is a no-op on every pre-2.5.0 capture.
+- `hits` / `hs_hits` still count a hit that applies 0 damage. A hit is a hit.
 
 ### Live State Events (socket-only — never persisted)
 
@@ -568,7 +609,7 @@ every CP in one frame.
   names of the final flag's captors) are present only on that reason and title the board.
 
 - Accumulators are half-scoped (reset on `ktp_match_start`), slot-scoped (reset on
-  connect/disconnect). Assist = 50+ enemy damage to a victim since their last spawn,
+  connect/disconnect). Assist = 50+ *applied* enemy damage to a victim since their last spawn,
   killed by someone else. `kill_class` "nade" = wpnindex ∈ {13,14,15,16,36} (grenades + mills bomb).
   `cap_breaks` = defensive stat: killed an enemy capper standing on the point (separate
   from `caps`, which is offensive). Credited via the breaker's `player_score`.

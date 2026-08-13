@@ -260,7 +260,11 @@ test.describe('HUD Mocker Timeline', () => {
         await expect(page.locator('.stats-board-title')).toHaveText('ALLIES CAPOUT BY omenator');
         await expect(page.locator('.stats-board-score')).toHaveCount(0);
         // mogers (now allies) led the sweep with 2 caps — CAP column (2nd from last).
-        const mogersCapout = page.locator('.stats-board-allies tbody tr').first();
+        // Located by name, not by row position: the board sorts by damage, and
+        // since the applied-damage correction mogers' overkill garand credits 40
+        // rather than 120, which puts bad (60) on the top row instead.
+        const mogersCapout = page.locator('.stats-board-allies tbody tr')
+            .filter({ has: page.getByText('mogers') });
         await expect(mogersCapout.locator('.stats-board-player-col')).toContainText('mogers');
         await expect(mogersCapout.locator('td').nth(7)).toHaveText('2');
         await takeScreenshot(page, '12-capout-board');

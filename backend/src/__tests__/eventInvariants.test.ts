@@ -11,6 +11,7 @@ import {
     summaryRosterNonEmpty,
     capBreakConsistency,
     flagsInitReason,
+    damageAppliedBound,
     checkEventStream,
     StreamEvent,
 } from '../invariants/eventInvariants';
@@ -237,6 +238,50 @@ describe('flags_init reason schema', () => {
     it('enumSanity also rejects a bad owner inside a snapshot', () => {
         const v = enumSanity([snap(1, 'reset', 'british')]);
         expect(v.map(x => x.invariant)).toEqual(['enum-flag-owner']);
+    });
+});
+
+describe('damage-applied bound — guarded, forward-looking', () => {
+    // dmg(applied, raw) — since plugin 2.5.0 `damage` is applied damage and
+    // `damage_raw` is dodx's unclamped (int)pev->dmg_take.
+    const dmg = (half: number, damage: number, damage_raw?: number, victim_health = 0): StreamEvent => ({
+        event: 'damage', half, attacker_id: 'STEAM_0:0:1', victim_id: 'STEAM_0:0:2',
+        weapon: 'garand', hitplace: 2, damage, victim_health,
+        ...(damage_raw === undefined ? {} : { damage_raw }),
+    });
+
+    it('is a no-op on a pre-2.5.0 stream (no damage_raw field anywhere)', () => {
+        // The NY1 fixture is exactly this shape: raw damage in `damage`, no
+        // damage_raw. The guard is why this invariant cannot false-positive on it.
+        expect(damageAppliedBound([dmg(1, 120, undefined, -80), dmg(1, 55, undefined, 45)])).toEqual([]);
+    });
+
+    it('passes on a correctly clamped overkill hit', () => {
+        // 120 raw onto a 40 HP victim: applied 40, health lands at -80.
+        expect(damageAppliedBound([dmg(1, 40, 120, -80), dmg(1, 55, 55, 45)])).toEqual([]);
+    });
+
+    it('fires when damage exceeds damage_raw (clamp crediting overkill again)', () => {
+        const v = damageAppliedBound([dmg(1, 130, 120, -80)]);
+        expect(v).toHaveLength(1);
+        expect(v[0].invariant).toBe('damage-applied-exceeds-raw');
+        expect(v[0].message).toContain('half 1');
+    });
+
+    it('fires when the clamp underflows to a negative', () => {
+        const v = damageAppliedBound([dmg(1, -5, 120, -80)]);
+        expect(v.map(x => x.invariant)).toEqual(['damage-applied-negative']);
+    });
+
+    it('is per-half: a clean half-1 does not mask a broken half-2', () => {
+        const v = damageAppliedBound([dmg(1, 40, 120, -80), dmg(2, 130, 120, -80)]);
+        expect(v.map(x => x.message)).toEqual([expect.stringContaining('half 2')]);
+    });
+
+    it('reports a per-half count with samples, not one violation per event', () => {
+        const v = damageAppliedBound([dmg(1, 130, 120), dmg(1, 140, 120), dmg(1, 150, 120), dmg(1, 160, 120)]);
+        expect(v).toHaveLength(1);
+        expect(v[0].message).toContain('4 damage event(s)');
     });
 });
 

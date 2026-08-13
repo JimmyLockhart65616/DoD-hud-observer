@@ -21,6 +21,13 @@
  *     legitimately drop a player's accumulators.
  *   - "every scored user_id had a prior player_connect" — the warmup race emits
  *     player_score for ~5 users before their connect in the real fixture.
+ *   - "victim_health >= 0 implies damage === damage_raw" — true by construction
+ *     today, but any external heal (admin plugin, future dodx behaviour) desyncs
+ *     the g_last_health baseline and makes it fire on legitimate data.
+ *   - "at least one overkill hit must show damage < damage_raw" — it would catch a
+ *     field-emitted-but-clamp-dead regression, but it cannot be validated against
+ *     real data until a post-2.5.0 match is archived. Add it then, with the same
+ *     validated-on-real-data pedigree as everything else here.
  */
 
 export type StreamEvent = Record<string, any>;
@@ -305,7 +312,59 @@ export const flagsInitReason: Invariant = (events) => {
 };
 
 /** All invariants, in evaluation order. Reused by tests and (later) the audit harness. */
-export const INVARIANTS: ReadonlyArray<Invariant> = [capCreditObjScore, capCreditCaps, enumSanity, summaryRosterNonEmpty, capBreakConsistency, flagsInitReason];
+/**
+ * DAMAGE-APPLIED BOUND (guarded, forward-looking).
+ *
+ * Since plugin 2.5.0 the `damage` field is APPLIED damage — the health the victim
+ * actually lost — and `damage_raw` is what dodx reported: (int)pev->dmg_take, which
+ * the game DLL never clamps to remaining health. Before the clamp, the killing
+ * blow's overkill was banked in full: 37% of all reported damage on the NY1 fixture
+ * (95,608 raw vs ~61,000 applied), which flipped the StatsBoard MVP on 2 of 4
+ * team-halves.
+ *
+ * The property: 0 <= damage <= damage_raw. A regression that re-emits raw into
+ * `damage` breaks the upper bound; a broken clamp breaks the lower one.
+ *
+ * GUARDED on damage_raw being present anywhere in the stream, so this is a total
+ * no-op on every pre-2.5.0 capture (including the NY1 fixture, which has no
+ * damage_raw field at all) and cannot false-positive on archived data.
+ */
+export const damageAppliedBound: Invariant = (events) => {
+    if (!events.some(e => e.event === 'damage' && typeof e.damage_raw === 'number')) return [];
+
+    const negative = new Map<number, StreamEvent[]>();
+    const exceeds = new Map<number, StreamEvent[]>();
+    for (const e of events) {
+        if (e.event !== 'damage') continue;
+        if (typeof e.damage !== 'number' || typeof e.damage_raw !== 'number') continue;
+        const bucket = e.damage < 0 ? negative : e.damage > e.damage_raw ? exceeds : null;
+        if (!bucket) continue;
+        const half = halfOf(e);
+        if (!bucket.has(half)) bucket.set(half, []);
+        bucket.get(half)!.push(e);
+    }
+
+    const sample = (rows: StreamEvent[]) => rows.slice(0, 3)
+        .map(e => `${e.attacker_id}->${e.victim_id} ${e.weapon} damage=${e.damage} raw=${e.damage_raw} victim_health=${e.victim_health}`)
+        .join('; ');
+
+    const out: InvariantViolation[] = [];
+    for (const [half, rows] of negative) {
+        out.push({
+            invariant: 'damage-applied-negative',
+            message: `half ${half}: ${rows.length} damage event(s) with damage < 0 — the applied-damage clamp in client_damage underflowed. Samples: ${sample(rows)}`,
+        });
+    }
+    for (const [half, rows] of exceeds) {
+        out.push({
+            invariant: 'damage-applied-exceeds-raw',
+            message: `half ${half}: ${rows.length} damage event(s) with damage > damage_raw — applied damage can never exceed what dodx reported, so the clamp is crediting overkill again (g_last_health desync, likely the baseline update drifting inside the accumulate gate). Samples: ${sample(rows)}`,
+        });
+    }
+    return out;
+};
+
+export const INVARIANTS: ReadonlyArray<Invariant> = [capCreditObjScore, capCreditCaps, enumSanity, summaryRosterNonEmpty, capBreakConsistency, flagsInitReason, damageAppliedBound];
 
 /** Run every invariant over an emitted event stream and return all violations. */
 export function checkEventStream(events: ReadonlyArray<StreamEvent>): InvariantViolation[] {

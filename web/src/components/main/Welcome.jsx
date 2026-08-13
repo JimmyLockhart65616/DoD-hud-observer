@@ -35,6 +35,13 @@ class Welcome extends React.Component {
                                 Maps where the award is rare (some run it as little as once every 15 minutes) hide the
                                 timer entirely rather than show a countdown nobody is playing to
                             </li>
+                            <li>
+                                Damage numbers corrected — the <strong>DMG</strong> column was counting the whole hit
+                                even when it was more than the player had left, so a 120-damage rifle shot on someone
+                                with 40 health scored 120 instead of 40. It now counts damage actually done. Figures
+                                are around a third lower across the board, and the damage ranking and MVP highlight on
+                                the stats board are now the real ones
+                            </li>
                         </ul>
                         <h5 style={{ marginTop: '32px' }}>
                             What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-08-09</small>

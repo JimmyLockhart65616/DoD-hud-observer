@@ -2,7 +2,15 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
     testDir: './e2e',
-    timeout: 90_000,
+    // The single spec walks the WHOLE mocker script: TIMELINE_END is 75s
+    // (e2e/helpers/mocker-timeline.ts) and the match_end board lands at ~77s, and
+    // none of that starts until the page has loaded and the socket has connected —
+    // the mocker begins emitting on connect. At the old 90s this left <15s for a
+    // cold CRA compile + first paint, so the run failed partway down the timeline
+    // (checkpoint 11) on any machine that wasn't warm. 180s is ~2.3x the scripted
+    // length: still fails fast if the timeline genuinely stalls, but no longer
+    // races the dev server. Raise TIMELINE_END and this needs raising with it.
+    timeout: 180_000,
     expect: { timeout: 10_000 },
     fullyParallel: false,
     retries: 0,
