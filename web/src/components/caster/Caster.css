@@ -117,6 +117,16 @@
   color: #d8dae8;
 }
 
+/* Only rendered between periods (warm-up, halftime, OT break, final) — the gold
+   already used for the active scope chip, since "the clock is not running" is
+   the thing a caster most needs to notice at a glance. */
+.caster-phase {
+  font-weight: 900;
+  font-size: 15px;
+  letter-spacing: 1px;
+  color: #ffd700;
+}
+
 .caster-server {
   font-weight: 700;
   letter-spacing: 0.4px;

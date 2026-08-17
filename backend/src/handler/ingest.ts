@@ -32,6 +32,22 @@ const PLAYER_STAT_FIELDS = [
     'caps', 'cap_breaks', 'best_streak',
 ] as const;
 
+// Broadcast phase, computed ENTIRELY plugin-side (KTPHudObserver compute_phase)
+// from signals that work in KTPAMXX extension mode. The backend caches and
+// forwards it verbatim and never synthesises one: `matchActive`/`half` cannot
+// tell halftime from live play (ktp_half_end clears no match identity), which is
+// the whole reason this event exists.
+export type MatchPhase =
+    'idle' | 'pregame' | 'golive' | 'live' | 'halftime' | 'ot_break' | 'postmatch';
+
+// How long after a ktp_match_end an `idle` phase is still shown as `postmatch`.
+// Belt-and-braces for the post-match changelevel: the plugin holds `postmatch`
+// on a get_systime() deadline, but if plugin globals do NOT survive a map change
+// that hold is lost at map load and the plugin starts reporting `idle` while the
+// FINAL STATS board is still up. Matches hud.json's statsboard_match_displaytime.
+// Only ever UPGRADES idle — it can never downgrade a phase the plugin asserted.
+const POSTMATCH_HOLD_MS = 90_000;
+
 interface ServerState {
     players: Map<string, any>;    // user_id → latest player_connect/spawn/score state
     team_score: any | null;       // latest team_score event
@@ -50,6 +66,13 @@ interface ServerState {
     matchActive: boolean;         // true between ktp_match_start and ktp_match_end.
                                   // HQ board only. Deliberately separate from `half`,
                                   // which is never cleared (see the ktp_match_end arm).
+    phase: MatchPhase | null;     // latest match_phase.phase. null = plugin older than
+                                  // 2.3.0, or no match_phase seen since a backend restart.
+    phase_mode: string;           // latest match_phase.mode — KTPMatchHandler's raw
+                                  // _ktp_mode ("" | "h2" | "otN"). Names the OT round
+                                  // during a break, when `half` still holds the last one.
+    matchEndedAt: number;         // Date.now() when the (delayed) ktp_match_end landed.
+                                  // Drives the postmatch hold — see POSTMATCH_HOLD_MS.
 }
 
 const serverStates = new Map<string, ServerState>();
@@ -67,6 +90,9 @@ function getOrCreateState(server: string): ServerState {
             halftime_summary: null,
             map: null,
             matchActive: false,
+            phase: null,
+            phase_mode: '',
+            matchEndedAt: 0,
         });
     }
     return serverStates.get(server)!;
@@ -101,6 +127,19 @@ function updateServerState(server: string, event: any): void {
             // seed a late joiner's HUD — so it can't double as "a match is
             // running". Hence this separate flag.
             state.matchActive = (event.event === 'ktp_match_start');
+            // Arms (or disarms) the postmatch hold. `phase` itself is deliberately
+            // NOT reset here: match_phase rides its own POST and can land either
+            // side of this one, so clearing would blank the badge for up to a poll
+            // interval at every match boundary.
+            state.matchEndedAt = (event.event === 'ktp_match_end') ? now : 0;
+            break;
+        case 'match_phase':
+            // Authoritative and self-contained — see the MatchPhase type comment.
+            // Guarded on the type so a malformed POST can't blank a good phase.
+            if (typeof event.phase === 'string') {
+                state.phase = event.phase as MatchPhase;
+                state.phase_mode = typeof event.mode === 'string' ? event.mode : '';
+            }
             break;
         case 'player_connect':
             state.players.set(event.user_id, {
@@ -264,6 +303,22 @@ function updateServerState(server: string, event: any): void {
 }
 
 /**
+ * The phase as it should be READ, applying the post-match hold.
+ *
+ * Shared by getServerSnapshot and getCachedServerView so the overlay and the HQ
+ * board can never disagree about the phase — the same reason those two share the
+ * stale-player filter and the timeleft age-adjustment verbatim.
+ */
+function effectivePhase(state: ServerState): MatchPhase | null {
+    if (state.phase === 'idle'
+        && state.matchEndedAt > 0
+        && Date.now() - state.matchEndedAt < POSTMATCH_HOLD_MS) {
+        return 'postmatch';
+    }
+    return state.phase;
+}
+
+/**
  * Returns the number of human players currently on Allies or Axis for a given
  * server. Applies the same PLAYER_STALE_MS filter used by getServerSnapshot so
  * ghost players from missed disconnects don't inflate the count. HLTV bots sit
@@ -295,6 +350,15 @@ export function getServerSnapshot(server: string): string[] {
     // Replay half number first so the HUD's top-of-screen renders the right half.
     if (state.half != null) {
         events.push(JSON.stringify({ event: 'half_start', half: state.half }));
+    }
+
+    // Phase immediately after half_start, never before: the frontend's half-1
+    // boundary handler clears the phase slice, so a phase replayed ahead of it
+    // would be wiped by its own snapshot. Also after it because the badge reads
+    // `half` for the live-phase label.
+    const phase = effectivePhase(state);
+    if (phase) {
+        events.push(JSON.stringify({ event: 'match_phase', phase, mode: state.phase_mode }));
     }
 
     // Replay flags
@@ -400,6 +464,12 @@ export interface CachedServerView {
     map: string | null;
     half: number | null;
     roundPhase: 'freeze' | 'live' | 'end' | null;
+    // NOTE roundPhase is permanently null on the real fleet — round_start/
+    // round_end come only from register_logevent handlers, which never fire in
+    // extension mode (productionFixture.test.ts). `phase` is the live successor;
+    // roundPhase is kept only until the fleet is fully on plugin 2.3.0.
+    phase: MatchPhase | null;
+    phaseMode: string;
     matchActive: boolean;
     alliesScore: number | null;
     axisScore: number | null;
@@ -424,6 +494,7 @@ export function getCachedServerView(server: string): CachedServerView {
     if (!state) {
         return {
             hasCache: false, map: null, half: null, roundPhase: null,
+            phase: null, phaseMode: '',
             matchActive: false, alliesScore: null, axisScore: null,
             timeleft: null, flags: [], allies: [], axis: [],
         };
@@ -459,6 +530,8 @@ export function getCachedServerView(server: string): CachedServerView {
         map: state.map,
         half: state.half,
         roundPhase: state.round_phase,
+        phase: effectivePhase(state),
+        phaseMode: state.phase_mode,
         matchActive: state.matchActive,
         alliesScore: state.team_score?.allies_score ?? null,
         axisScore: state.team_score?.axis_score ?? null,

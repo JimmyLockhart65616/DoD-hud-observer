@@ -146,6 +146,11 @@ function handleHalfBoundary(newHalf) {
         halfSource = {};
         lastRoundEndByHalf = {};
         setStatsBoard(null);
+        // The previous match's phase must not survive into this one. Cleared
+        // ONLY on a fresh match, never at the half-2/OT boundary: the phase POST
+        // is independent of ktp_match_start and routinely lands before it, and
+        // clearing there would blank the badge at every halftime.
+        useHudStore.getState().setMatchPhase(null, '');
     } else if (newHalf >= 2) {
         // Record the completed half's stats. Prefer the last round_end snapshot
         // for that half — the store snapshot is empty here when the changelevel
@@ -288,6 +293,20 @@ export const useHudStore = create(set => ({
     timeleft:    null,
     timeleft_at: null,
 
+    // Broadcast phase from the plugin's match_phase event:
+    // idle | pregame | golive | live | halftime | ot_break | postmatch.
+    //
+    // Computed entirely plugin-side and never inferred here. `half` cannot stand
+    // in for it: the plugin's match state stays "active on half 1" right through
+    // halftime, which is precisely the window the badge exists to name.
+    //
+    // null until the first event lands — an older plugin, or a fresh tab before
+    // the snapshot replay. The badge renders nothing rather than guessing.
+    match_phase: null,
+    // KTPMatchHandler's raw _ktp_mode ("" | "h2" | "otN"), so an OT break can name
+    // the round that is coming while `half` still holds the one that just ended.
+    match_mode: '',
+
     // Reinforcement wave clocks, one per side. DoD respawn is a per-TEAM wave
     // that arms on that side's first death and is idle while nobody is waiting,
     // so the two sides have unrelated phases and either can be null at any time.
@@ -326,6 +345,7 @@ export const useHudStore = create(set => ({
     setAxisScore:   (n) => set({ axis_score: n }),
     setHalf:        (n) => set({ half: n }),
     setTimeleft:    (seconds) => set({ timeleft: seconds, timeleft_at: Date.now() }),
+    setMatchPhase:  (phase, mode) => set({ match_phase: phase, match_mode: mode ?? '' }),
 
     // `waves` is the optional team-level block on player_state. A side missing
     // from it has an idle/unreadable clock and is nulled rather than left stale —
@@ -582,6 +602,7 @@ export const SocketStoreComponent = () => {
     const setHalf          = useHudStore(s => s.setHalf);
     const setRoundState    = useHudStore(s => s.setRoundState);
     const setTimeleft      = useHudStore(s => s.setTimeleft);
+    const setMatchPhase    = useHudStore(s => s.setMatchPhase);
     const setWaves         = useHudStore(s => s.setWaves);
     const setScoring       = useHudStore(s => s.setScoring);
     const resetHalf        = useHudStore(s => s.resetHalf);
@@ -1031,6 +1052,16 @@ export const SocketStoreComponent = () => {
             handleHalfBoundary(e.half);
             resetMatch(e.half);
             if (e.half != null) setHalf(e.half);
+        });
+
+        // Broadcast phase — the only signal that separates warm-up, halftime and
+        // post-match from live play. Computed plugin-side; nothing here infers it.
+        // Guarded on the type so a malformed POST leaves a good phase standing
+        // rather than blanking the badge on air.
+        gameEvents.on('match_phase', (raw) => {
+            const e = typeof raw === 'string' ? JSON.parse(raw) : (raw ?? {});
+            if (typeof e.phase !== 'string') return;
+            setMatchPhase(e.phase, e.mode);
         });
 
         // Snapshot row from the plugin's do_roster_dump or backend snapshot

@@ -41,6 +41,13 @@ export type Invariant = (events: ReadonlyArray<StreamEvent>) => InvariantViolati
 
 const TEAM_VALUES = new Set(['allies', 'axis', 'spectator', 'neutral']);
 const FLAG_OWNER_VALUES = new Set(['allies', 'axis', 'neutral']);
+// Mirrors MatchPhase in handler/ingest.ts and compute_phase() in the plugin.
+// A misspelled phase degrades silently — the HQ board falls through to its
+// legacy branch and the overlay badge just renders nothing — so it needs to
+// fail loudly here instead.
+const PHASE_VALUES = new Set([
+    'idle', 'pregame', 'golive', 'live', 'halftime', 'ot_break', 'postmatch',
+]);
 
 function halfOf(e: StreamEvent): number {
     return typeof e.half === 'number' ? e.half : 0;
@@ -138,7 +145,11 @@ export const capCreditCaps: Invariant = (events) => {
 export const enumSanity: Invariant = (events) => {
     const badTeams = new Set<string>();
     const badOwners = new Set<string>();
+    const badPhases = new Set<string>();
     for (const e of events) {
+        if (e.event === 'match_phase' && typeof e.phase === 'string' && !PHASE_VALUES.has(e.phase)) {
+            badPhases.add(e.phase);
+        }
         if (typeof e.team === 'string' && !TEAM_VALUES.has(e.team)) badTeams.add(e.team);
         if (e.event === 'flag_captured' && typeof e.new_owner === 'string' && !FLAG_OWNER_VALUES.has(e.new_owner)) {
             badOwners.add(e.new_owner);
@@ -157,6 +168,9 @@ export const enumSanity: Invariant = (events) => {
     }
     for (const o of badOwners) {
         out.push({ invariant: 'enum-flag-owner', message: `flag_captured with invalid new_owner "${o}" (expected allies|axis|neutral)` });
+    }
+    for (const p of badPhases) {
+        out.push({ invariant: 'enum-phase', message: `match_phase with invalid phase "${p}" (expected ${[...PHASE_VALUES].join('|')})` });
     }
     return out;
 };

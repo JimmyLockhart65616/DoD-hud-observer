@@ -26,6 +26,9 @@
  *     schema was incomplete — only listed victim_prone).
  *   - player_team_change can emit team: "spectator" (codified in production fixture).
  *   - prone_change emits state: "standing" on player spawn, not just transitions.
+ *   - match_phase is authored only at its transitions. The real plugin also
+ *     re-sends it as a 30s heartbeat and computes it from a state machine that
+ *     no mocker can exercise — see the note at the first one below.
  *
  * Extension-mode constraints:
  *   - flag_zone_players carries integer counts (allies_count/axis_count), NOT id arrays.
@@ -52,10 +55,20 @@ export default [
     // ══  HALF 1  (Allies = team 1001-1006, Axis = team 2001-2006)  ═════════
     // ══════════════════════════════════════════════════════════════════════════
 
+    // Broadcast phase. The plugin computes this from KTPMatchHandler's forwards
+    // plus the engine's own go-live edge and emits it on every transition; only
+    // the transitions are authored here. NOTE this exercises the badge's
+    // rendering and the backend's caching ONLY — the phase state machine itself
+    // is plugin-side and can only be tested against a real engine.
+    { "match_phase": { "time": 20, "phase": "golive", "mode": "" } },
+
     { "half_start": { "time": 50, "half": 1, "timeleft": 1200 } },
 
     // Plugin's post-half_start team_score seed — fresh match opens at 0/0.
     { "team_score": { "time": 51, "allies_score": 0, "axis_score": 0 } },
+
+    // The engine's mass-respawn burst lands and the round is physically live.
+    { "match_phase": { "time": 1300, "phase": "live", "mode": "" } },
 
     // ── Players connect ──────────────────────────────────────────────────────
     // Real plugin: clients connect as "spectator" then player_team_change moves them.
@@ -444,15 +457,27 @@ export default [
     ]}},
 
 
+    // Halftime. Emitted from the plugin's ktp_half_end handler, into the same
+    // pre-changelevel tail as the board above — which is why match_phase is a
+    // board event in the HLTV delay buffer.
+    { "match_phase": { "time": 57100, "phase": "halftime", "mode": "h2" } },
+
+
     // ══════════════════════════════════════════════════════════════════════════
     // ══  HALF 2  (teams swap sides — 1001-1006 now Axis, 2001-2006 now Allies)
     // ══════════════════════════════════════════════════════════════════════════
+
+    // mode stays "h2" for the whole of half 2 — KTPMatchHandler only clears
+    // _ktp_mode at match end — which is why `live` has to beat mode plugin-side.
+    { "match_phase": { "time": 61900, "phase": "golive", "mode": "h2" } },
 
     { "half_start": { "time": 62000, "half": 2, "timeleft": 1200 } },
 
     // Plugin's post-half_start team_score seed — half 1 ended 2-1, score
     // carries into half 2 immediately so the HUD doesn't flicker to 0-0.
     { "team_score": { "time": 62050, "allies_score": 2, "axis_score": 1 } },
+
+    { "match_phase": { "time": 63300, "phase": "live", "mode": "h2" } },
 
     // Team changes — each player moves to the opposite side
     { "player_team_change": { "time": 62100, "user_id": "STEAM_0:0:1001", "team": "axis" } },
@@ -561,5 +586,10 @@ export default [
         { "user_id": "STEAM_0:0:1005", "name": "MaT*",     "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
         { "user_id": "STEAM_0:0:1006", "name": "BitchX",   "team": "axis",   "kills": 0, "deaths": 0, "assists": 0, "damage": 0,   "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,  "caps": 0, "best_streak": 0 },
     ]}},
+
+    // Final. The plugin emits this from ktp_match_end, before clearing match
+    // state — so it lands with the match envelope still attached, and after the
+    // match_end board it titles.
+    { "match_phase": { "time": 77500, "phase": "postmatch", "mode": "h2" } },
 
 ]

@@ -105,6 +105,11 @@ test.describe('HUD Mocker Timeline', () => {
         await expect(page.locator('.axis-score')).toHaveText('0');
         await takeScreenshot(page, '07b-tick-scoring');
 
+        // ── Checkpoint 7b2: match phase caption reads the live half ──
+        // match_phase golive→live fires at t=20/1300. By now it must name the
+        // half, in the overlay's own spelled-out vocabulary (not /hq's HALF 1).
+        await expect(page.locator('.match-phase')).toHaveText('1ST HALF');
+
         // ── Checkpoint 7c: scoring-tick panel at the PROD canvas ─────
         // The territorial scoring tick renders inside the top-bar score pill,
         // and `.flags-bar` is an absolute overlay across that same 72px band.
@@ -130,10 +135,13 @@ test.describe('HUD Mocker Timeline', () => {
             return {
                 flagsRight,
                 scoreLeft: score ? score.left : 0,
+                scoreWidth: score ? score.width : 0,
                 scoreHeight: score ? score.height : 0,
                 topBarHeight: rect('.top-bar')?.height ?? 0,
                 hasAward: !!document.querySelector('.tick-award'),
                 hasClock: !!document.querySelector('.tick-clock'),
+                hasPhase: !!document.querySelector('.match-phase'),
+                phaseRight: rect('.match-phase')?.right ?? 0,
             };
         });
 
@@ -144,7 +152,12 @@ test.describe('HUD Mocker Timeline', () => {
         // flag strip. Both live in the same absolute band, so overlap is silent.
         expect(geo.scoreLeft).toBeGreaterThan(geo.flagsRight);
         // And it must still fit the gradient band; taller spills onto transparency.
+        // This is the check that keeps the stacked caption + clock + tick slot
+        // honest — .timer-area now carries three rows inside 72px.
         expect(geo.scoreHeight).toBeLessThanOrEqual(geo.topBarHeight);
+        // The phase caption is inside the pill, so it must not overhang it either.
+        expect(geo.hasPhase).toBe(true);
+        expect(geo.phaseRight).toBeLessThanOrEqual(geo.scoreLeft + geo.scoreWidth);
 
         await takeScreenshot(page, '07c-tick-scoring-1280');
         await page.setViewportSize({ width: 1920, height: 1080 });
@@ -202,6 +215,18 @@ test.describe('HUD Mocker Timeline', () => {
         await expect(mogersHalf.locator('td').last()).toHaveText('4');
         // Team totals footer present.
         await expect(page.locator('.stats-board-axis tfoot .stats-board-totals')).toBeVisible();
+        // The caption names the break. .stats-board-backdrop starts at 72px, so
+        // the top bar stays uncovered and the badge is readable behind the board.
+        await expect(page.locator('.match-phase')).toHaveText('HALFTIME');
+
+        // ...and the clock STOPS. It free-ran through every halftime before the
+        // phase feed existed (round_freeze/round_end never fire in extension
+        // mode), leaving a running countdown over the halftime scoreboard.
+        const clockAt = async () => (await page.locator('.timer-area').textContent())?.replace('HALFTIME', '');
+        const t1 = await clockAt();
+        await page.waitForTimeout(2500);
+        expect(await clockAt()).toBe(t1);
+
         await takeScreenshot(page, '10b-halftime-board');
 
         // ── Checkpoint 11: Half 2 starts — score carries over ───────
@@ -248,6 +273,11 @@ test.describe('HUD Mocker Timeline', () => {
         // boundary handling) — regression guard against it lingering over play.
         await expect(page.locator('.stats-board')).toHaveCount(0);
 
+        // The caption follows the half across the boundary. It must not have
+        // been cleared by the half-2 ktp_match_start — only a FRESH match (half
+        // 1) clears it, or the badge blanks at every halftime.
+        await expect(page.locator('.match-phase')).toHaveText('2ND HALF');
+
         await takeScreenshot(page, '11-half2-carryover');
 
         // ── Checkpoint 12: Capout board (~73.3s) ─────────────────────
@@ -281,6 +311,8 @@ test.describe('HUD Mocker Timeline', () => {
             .filter({ has: page.getByText('mogers') });
         await expect(mogersFinal.locator('td').nth(1)).toHaveText('5');
         await expect(mogersFinal.locator('td').nth(7)).toHaveText('3');
+        // The match is over and the caption says so, above the board that proves it.
+        await expect(page.locator('.match-phase')).toHaveText('FINAL');
         await takeScreenshot(page, '13-final-board');
     });
 });

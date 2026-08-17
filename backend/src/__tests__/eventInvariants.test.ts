@@ -94,6 +94,23 @@ describe('enum sanity', () => {
         expect(v[0].invariant).toBe('enum-team');
         expect(v[0].message).toContain('british');
     });
+
+    it('passes on the whole match_phase vocabulary', () => {
+        const phases = ['idle', 'pregame', 'golive', 'live', 'halftime', 'ot_break', 'postmatch'];
+        expect(enumSanity(phases.map(phase => ({ event: 'match_phase', phase })))).toEqual([]);
+    });
+
+    it('flags an unknown match_phase — it would degrade silently everywhere else', () => {
+        // The HQ board falls through to its legacy branch and the overlay badge
+        // renders nothing, so a typo'd phase is invisible without this.
+        const v = enumSanity([
+            { event: 'match_phase', phase: 'halfitme' },
+            { event: 'match_phase', phase: 'halfitme' },
+        ]);
+        expect(v).toHaveLength(1);
+        expect(v[0].invariant).toBe('enum-phase');
+        expect(v[0].message).toContain('halfitme');
+    });
 });
 
 describe('summary-roster (empty match_end / half_end board)', () => {

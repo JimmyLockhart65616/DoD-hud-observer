@@ -263,7 +263,12 @@ function numericTick(event: any): number {
 // Board (full-screen stats) events, which get the UX late-bias at a changelevel.
 // player_stats_summary covers the halftime, match-end, and capout boards;
 // half_end is the best-effort marker the frontend can also render a board from.
+//
+// match_phase is here for the same reason and is NOT optional: the halftime
+// phase is emitted from ktp_half_end, i.e. into the same old-map tail as the
+// board it accompanies. Without the bias it can release BEFORE that board and
+// announce HALFTIME over footage that is still live.
 function isBoardEvent(event: any): boolean {
     const e = event?.event;
-    return e === 'player_stats_summary' || e === 'half_end';
+    return e === 'player_stats_summary' || e === 'half_end' || e === 'match_phase';
 }

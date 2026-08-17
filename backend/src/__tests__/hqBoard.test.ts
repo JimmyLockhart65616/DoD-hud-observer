@@ -13,6 +13,17 @@
  *     with no reader in the socket/overlay path. If an existing assertion needs
  *     editing, the change was NOT additive and should be reverted instead.
  *
+ * ONE STANDING EXCEPTION to rule 2, taken deliberately in the match-phase work:
+ * two rows below asserted the WARMUP side of `roundPhase != null ? LIVE : WARMUP`
+ * — "a match is running but no round has begun". That rule was never reachable in
+ * production. round_phase is set only by round_start_freeze/round_start/round_end,
+ * and those come only from register_logevent handlers that never fire in KTPAMXX
+ * extension mode, which productionFixture.test.ts asserts directly against the NY1
+ * capture. So the rows encoded the bug: EVERY live match reported WARMUP forever.
+ * They are now rewritten as the regression guard for the fix. Rule 2 otherwise
+ * stands — the match_phase additions are additive everywhere else, and this
+ * exception covers exactly those two rows and nothing more.
+ *
  * Note `serverStates` is module-level and persists across tests within this
  * file, so every test uses its own unique hostname.
  */
@@ -40,6 +51,7 @@ function makeTmpDir(): string {
 function emptyView(over: Partial<ReturnType<typeof getCachedServerView>> = {}) {
     return {
         hasCache: true, map: null, half: null, roundPhase: null,
+        phase: null, phaseMode: '',
         matchActive: false, alliesScore: null, axisScore: null,
         timeleft: null, flags: [], allies: [], axis: [],
         ...over,
@@ -70,9 +82,13 @@ describe('deriveStatus — precedence rules', () => {
             .toBe('BETWEEN');
     });
 
-    it('reports WARMUP when a match is running but no round has begun', () => {
+    it('reports LIVE — never WARMUP — for a phase-less stream with a match running', () => {
+        // REGRESSION GUARD (see the exception in the file header). roundPhase is
+        // permanently null on the real fleet, so the old rule reported WARMUP for
+        // every live production match. With no phase available, matchActive is
+        // the only honest discriminator.
         expect(deriveStatus(true, emptyView({ matchActive: true, roundPhase: null })))
-            .toBe('WARMUP');
+            .toBe('LIVE');
     });
 
     it('reports LIVE once a round has begun, in any round phase', () => {
@@ -87,8 +103,9 @@ describe('deriveStatus — precedence rules', () => {
         // MatchRecorder rehydrates active matches from disk and does know.
         expect(deriveStatus(true, emptyView({ matchActive: false, roundPhase: 'live' }), true))
             .toBe('LIVE');
+        // Second half of the regression guard: same fix on the recorder path.
         expect(deriveStatus(true, emptyView({ matchActive: false, roundPhase: null }), true))
-            .toBe('WARMUP');
+            .toBe('LIVE');
     });
 
     it('keeps a match LIVE while the delayed cache still says active', () => {
@@ -97,6 +114,47 @@ describe('deriveStatus — precedence rules', () => {
         // would announce the end ~60s before the broadcast shows it.
         expect(deriveStatus(true, emptyView({ matchActive: true, roundPhase: 'live' }), false))
             .toBe('LIVE');
+    });
+});
+
+describe('deriveStatus — plugin-computed phase', () => {
+    const CASES: [string, string][] = [
+        ['live', 'LIVE'],
+        ['golive', 'GOLIVE'],
+        ['halftime', 'HALFTIME'],
+        ['ot_break', 'OTBREAK'],
+        ['postmatch', 'FINAL'],
+        ['pregame', 'WARMUP'],
+        ['idle', 'BETWEEN'],
+    ];
+
+    it.each(CASES)('maps phase %s to status %s', (phase, status) => {
+        // matchActive true throughout: the phase must be the thing deciding.
+        expect(deriveStatus(true, emptyView({ phase, matchActive: true } as any))).toBe(status);
+    });
+
+    it('beats matchActive in BOTH directions', () => {
+        // `halftime` while matchActive is true — ktp_half_end clears no match
+        // identity, so matchActive IS true right through halftime. This is the
+        // case that made a plugin-side phase necessary in the first place.
+        expect(deriveStatus(true, emptyView({ phase: 'halftime', matchActive: true } as any)))
+            .toBe('HALFTIME');
+        // `idle` while a stale matchActive lingers (a dropped ktp_match_end).
+        expect(deriveStatus(true, emptyView({ phase: 'idle', matchActive: true } as any)))
+            .toBe('BETWEEN');
+        // ...and the recorder must not override it either.
+        expect(deriveStatus(true, emptyView({ phase: 'idle', matchActive: true } as any), true))
+            .toBe('BETWEEN');
+    });
+
+    it('beats a stale roundPhase', () => {
+        expect(deriveStatus(true, emptyView({ phase: 'halftime', roundPhase: 'live', matchActive: true } as any)))
+            .toBe('HALFTIME');
+    });
+
+    it('still loses to NO_SIGNAL and STALE', () => {
+        expect(deriveStatus(false, emptyView({ phase: 'live' } as any))).toBe('NO_SIGNAL');
+        expect(deriveStatus(true, emptyView({ phase: 'live', hasCache: false } as any))).toBe('STALE');
     });
 });
 
@@ -183,6 +241,57 @@ describe('GET /api/hq — projection over ingested events', () => {
         expect(b.axis.map((p: any) => p.name)).toEqual(['Nein']);
         expect(b.allies).toEqual([]);
         expect(b.timeleft).toBeNull();
+    });
+
+    it('projects an ingested match_phase onto the strip, and freezes the clock off it', async () => {
+        const host = 'KTP - Phase Proj';
+
+        await post({ event: 'ktp_match_start', match_id: 'm-phase', map: 'dod_anzio', half: 1 }, host);
+        await post({ event: 'time_sync', timeleft: 600 }, host);
+        await post({ event: 'match_phase', phase: 'live', mode: '' }, host);
+
+        let body = (await request(app).get('/api/hq')).body;
+        expect(strip(body, host).phase).toBe('live');
+        expect(strip(body, host).status).toBe('LIVE');
+        // The clock only runs during live play.
+        expect(strip(body, host).timerFrozen).toBe(false);
+
+        // Halftime: matchActive is still true here (ktp_half_end clears no match
+        // identity), so only the phase can produce the right answer.
+        await post({ event: 'match_phase', phase: 'halftime', mode: 'h2' }, host);
+
+        body = (await request(app).get('/api/hq')).body;
+        expect(strip(body, host).phase).toBe('halftime');
+        expect(strip(body, host).status).toBe('HALFTIME');
+        expect(strip(body, host).timerFrozen).toBe(true);
+    });
+
+    it('leaves the clock RUNNING on a pub server — idle is not a break', async () => {
+        // The break phases stop the clock; idle/pregame must not. A pub server has
+        // a real map clock counting down, and a frozen clock beside live pub play
+        // is the same class of lie the phase feed exists to remove.
+        const host = 'KTP - Phase Pub Clock';
+        await post({ event: 'time_sync', timeleft: 400 }, host);
+        await post({ event: 'match_phase', phase: 'idle', mode: '' }, host);
+
+        const body = (await request(app).get('/api/hq')).body;
+        expect(strip(body, host).status).toBe('BETWEEN');
+        expect(strip(body, host).timerFrozen).toBe(false);
+    });
+
+    it('holds FINAL after a match ends, even once the plugin reports idle', async () => {
+        const host = 'KTP - Phase Final';
+
+        await post({ event: 'ktp_match_start', match_id: 'm-final', map: 'dod_anzio', half: 2 }, host);
+        await post({ event: 'match_phase', phase: 'live', mode: 'h2' }, host);
+        await post({ event: 'ktp_match_end', match_id: 'm-final', allies_score: 4, axis_score: 3 }, host);
+        // The plugin's own postmatch hold is a get_systime() deadline that a
+        // changelevel may drop; the backend upgrades a bare `idle` for 90s.
+        await post({ event: 'match_phase', phase: 'idle', mode: '' }, host);
+
+        const body = (await request(app).get('/api/hq')).body;
+        expect(strip(body, host).phase).toBe('postmatch');
+        expect(strip(body, host).status).toBe('FINAL');
     });
 
     it('sorts servers by hostname so the board layout is stable across restarts', async () => {
@@ -367,14 +476,29 @@ describe('GET /api/hq — projection over ingested events', () => {
         expect(s.axis.map((p: any) => p.name)).toEqual(['Sapphire']);
     });
 
-    it('reports WARMUP between ktp_match_start and the first round', async () => {
+    it('reports LIVE after ktp_match_start on a phase-less stream (no round events ever arrive)', async () => {
+        // REGRESSION GUARD, integration level. This asserted WARMUP, which is
+        // what every production server reported for entire matches: the plugin
+        // emits no round_* events in extension mode, so roundPhase stays null
+        // forever. See the exception note in the file header.
         const host = 'KTP - Warmup';
         await post({ event: 'ktp_match_start', match_id: 'm-warm', map: 'dod_donner', half: 1 }, host);
 
         const res = await request(app).get('/api/hq');
         const s = strip(res.body, host);
-        expect(s.status).toBe('WARMUP');
+        expect(s.status).toBe('LIVE');
         expect(s.roundPhase).toBeNull();
+        expect(s.phase).toBeNull();
+    });
+
+    it('reports WARMUP only when the plugin actually says pregame', async () => {
+        const host = 'KTP - Warmup Real';
+        await post({ event: 'match_phase', phase: 'pregame', mode: '' }, host);
+
+        const res = await request(app).get('/api/hq');
+        const s = strip(res.body, host);
+        expect(s.status).toBe('WARMUP');
+        expect(s.phase).toBe('pregame');
     });
 
     it('reports NO_SIGNAL for a server that has gone quiet past the online window', async () => {
@@ -495,6 +619,7 @@ describe('getCachedServerView — unknown server', () => {
         const view = getCachedServerView('never-seen-this-host');
         expect(view).toEqual({
             hasCache: false, map: null, half: null, roundPhase: null,
+            phase: null, phaseMode: '',
             matchActive: false, alliesScore: null, axisScore: null,
             timeleft: null, flags: [], allies: [], axis: [],
         });

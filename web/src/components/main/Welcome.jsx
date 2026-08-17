@@ -15,6 +15,28 @@ class Welcome extends React.Component {
                             <li><a href="/help">Viewer Guide</a> — how to set up and use the HUD in OBS</li>
                         </ul>
                         <h5 style={{ marginTop: '32px' }}>
+                            What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-08-17</small>
+                        </h5>
+                        <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>
+                            <li>
+                                Match status — the top bar now says which part of the match you're watching, in small
+                                type above the clock: <strong>WARM-UP</strong> while the teams ready up,
+                                <strong> GOING LIVE</strong> during the countdown, then <strong>1ST HALF</strong> or
+                                <strong> 2ND HALF</strong>, <strong>HALFTIME</strong> while they swap sides,
+                                <strong> OVERTIME 1</strong>, and <strong>FINAL</strong> once it's over. Joining a
+                                stream mid-match no longer means guessing
+                            </li>
+                            <li>
+                                The clock now stops at halftime, between overtime rounds, and after the final whistle.
+                                It used to keep counting down through all three, so a halftime scoreboard sat under a
+                                clock that looked like play was still running
+                            </li>
+                            <li>
+                                Nothing is shown during ordinary public play — the status only appears when a real
+                                match is on
+                            </li>
+                        </ul>
+                        <h5 style={{ marginTop: '32px' }}>
                             What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-08-11</small>
                         </h5>
                         <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>

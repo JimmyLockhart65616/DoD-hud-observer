@@ -28,6 +28,15 @@ const CANVAS_H = 1080;
 const STALE_FEED_MS = 5000;
 
 /**
+ * Statuses that mean a KTP match is under way in some form — everything the
+ * backend's deriveStatus can return off a plugin-reported match phase, plus the
+ * legacy LIVE/WARMUP. Excludes BETWEEN (no match), STALE and NO_SIGNAL.
+ */
+const MATCH_STATUSES = new Set([
+    'LIVE', 'GOLIVE', 'HALFTIME', 'OTBREAK', 'FINAL', 'WARMUP',
+]);
+
+/**
  * Scale the fixed 1920x1080 canvas to fit the viewport, letterboxing rather
  * than clipping on non-16:9 displays.
  *
@@ -88,9 +97,11 @@ const Hq = () => {
     const inGame = servers.reduce((sum, s) => sum + s.playerCount, 0);
     // "Active" = something is actually happening on the station, which includes
     // pub play (status BETWEEN with players). Counting only LIVE/WARMUP produced
-    // the contradictory "0 ACTIVE · 8 IN GAME".
+    // the contradictory "0 ACTIVE · 8 IN GAME". A set rather than a chain of
+    // comparisons so the plugin-phase statuses can't be forgotten here — a
+    // server at HALFTIME is very much active.
     const liveCount = servers.filter(
-        s => s.status === 'LIVE' || s.status === 'WARMUP' || s.playerCount > 0,
+        s => MATCH_STATUSES.has(s.status) || s.playerCount > 0,
     ).length;
     const feedStale = receivedAt > 0 && Date.now() - receivedAt > STALE_FEED_MS;
 

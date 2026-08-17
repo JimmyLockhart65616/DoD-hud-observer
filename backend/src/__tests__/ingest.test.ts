@@ -618,6 +618,65 @@ describe('snapshot — sync invariants for late-joining clients', () => {
         expect(hs).toMatchObject({ half: 2 });
     });
 
+    it('replays match_phase, after half_start, carrying the mode', async () => {
+        const host = 'KTP - Phase Replay';
+        await post({ event: 'ktp_match_start', match_id: 'KTP-p', map: 'dod_anzio', half: 2 }, host);
+        await post({ event: 'half_start', half: 2, timeleft: 1200 }, host);
+        await post({ event: 'match_phase', phase: 'live', mode: 'h2' }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        const phaseIdx = snapshot.findIndex(e => e.event === 'match_phase');
+        const halfIdx = snapshot.findIndex(e => e.event === 'half_start');
+
+        expect(snapshot[phaseIdx]).toMatchObject({ phase: 'live', mode: 'h2' });
+        // Ordering is load-bearing: the frontend's half-1 boundary handler clears
+        // the phase slice, so a phase replayed BEFORE half_start would be wiped by
+        // its own snapshot.
+        expect(phaseIdx).toBeGreaterThan(halfIdx);
+    });
+
+    it('does not clear the cached phase on a match boundary', async () => {
+        // match_phase rides its own POST and can land either side of the
+        // lifecycle event. Clearing on ktp_match_start would blank the badge for
+        // up to a poll interval at every boundary.
+        const host = 'KTP - Phase Boundary';
+        await post({ event: 'match_phase', phase: 'golive', mode: '' }, host);
+        await post({ event: 'ktp_match_start', match_id: 'KTP-pb', map: 'dod_anzio', half: 1 }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        expect(snapshot.find(e => e.event === 'match_phase')).toMatchObject({ phase: 'golive' });
+    });
+
+    it('upgrades a bare idle to postmatch for 90s after ktp_match_end, then stops', async () => {
+        const host = 'KTP - Phase Postmatch';
+        await post({ event: 'ktp_match_start', match_id: 'KTP-pm', map: 'dod_anzio', half: 2 }, host);
+        await post({ event: 'ktp_match_end', match_id: 'KTP-pm', allies_score: 3, axis_score: 2 }, host);
+        await post({ event: 'match_phase', phase: 'idle', mode: '' }, host);
+
+        const phaseOf = () => getServerSnapshot(host)
+            .map(s => JSON.parse(s)).find(e => e.event === 'match_phase');
+
+        expect(phaseOf()).toMatchObject({ phase: 'postmatch' });
+
+        const t0 = Date.now();
+        const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(t0 + 95_000);
+        try {
+            expect(phaseOf()).toMatchObject({ phase: 'idle' });
+        } finally {
+            nowSpy.mockRestore();
+        }
+    });
+
+    it('clears the postmatch hold when the next match starts', async () => {
+        const host = 'KTP - Phase Rearm';
+        await post({ event: 'ktp_match_end', match_id: 'KTP-r1', allies_score: 1, axis_score: 0 }, host);
+        await post({ event: 'ktp_match_start', match_id: 'KTP-r2', map: 'dod_anzio', half: 1 }, host);
+        await post({ event: 'match_phase', phase: 'idle', mode: '' }, host);
+
+        const snapshot = getServerSnapshot(host).map(s => JSON.parse(s));
+        expect(snapshot.find(e => e.event === 'match_phase')).toMatchObject({ phase: 'idle' });
+    });
+
     it('round_phase is replayed when a round is live', async () => {
         const host = 'KTP - Round Live';
         await post({ event: 'time_sync', timeleft: 1180 }, host);

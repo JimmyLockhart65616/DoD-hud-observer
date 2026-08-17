@@ -165,8 +165,26 @@
   border-left-color: var(--hq-live);
 }
 
+/* Going live shares the match-LIVE green: play is seconds away, and the strip
+ * should already read as "watch this one" from across the room. */
+.hq-strip-golive {
+  border-left-color: var(--hq-live);
+}
+
 .hq-strip-warmup {
   border-left-color: var(--hq-warmup);
+}
+
+/* Between periods — the match is real and unfinished, but nothing is being
+ * played, so it shares warm-up's amber rather than the live green. */
+.hq-strip-halftime,
+.hq-strip-otbreak {
+  border-left-color: var(--hq-warmup);
+}
+
+/* Finished. Nothing further will happen here until the next match. */
+.hq-strip-final {
+  border-left-color: var(--hq-ink-dim);
 }
 
 .hq-strip-stale {
@@ -230,12 +248,19 @@
   flex: 0 0 auto;
 }
 
-.hq-strip-live .hq-status {
+.hq-strip-live .hq-status,
+.hq-strip-golive .hq-status {
   color: var(--hq-live);
 }
 
-.hq-strip-warmup .hq-status {
+.hq-strip-warmup .hq-status,
+.hq-strip-halftime .hq-status,
+.hq-strip-otbreak .hq-status {
   color: var(--hq-warmup);
+}
+
+.hq-strip-final .hq-status {
+  color: var(--hq-ink-dim);
 }
 
 .hq-strip-stale .hq-status {

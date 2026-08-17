@@ -11,6 +11,7 @@ import FlagFeed from '../core/FlagFeed/FlagFeed';
 import StatsBoard from '../core/StatsBoard/StatsBoard';
 import WavePill from '../core/Score/wave/WavePill';
 import EditableTeamName from '../core/TeamName/EditableTeamName';
+import { isClockStopped } from '../core/MatchPhase/MatchPhase';
 // PlayerObserved disabled: no HLTV signal yet to know which player the caster is watching.
 // import PlayerObserved from '../core/PlayerObserved/PlayerObserved';
 
@@ -38,6 +39,9 @@ function Example() {
     const timeleft      = useHudStore(s => s.timeleft);
     const timeleftAt    = useHudStore(s => s.timeleft_at);
     const statsBoard    = useHudStore(s => s.stats_board);
+    const half          = useHudStore(s => s.half);
+    const matchPhase    = useHudStore(s => s.match_phase);
+    const matchMode     = useHudStore(s => s.match_mode);
 
     const waveAllies        = useHudStore(s => s.wave_allies);
     const waveAlliesAt      = useHudStore(s => s.wave_allies_at);
@@ -49,7 +53,11 @@ function Example() {
     const scoringAllies     = useHudStore(s => s.scoring_allies);
     const scoringAxis       = useHudStore(s => s.scoring_axis);
 
-    const clockFrozen = roundState.round_freeze || roundState.round_end;
+    // Reinforcement waves don't run between periods either. round_freeze /
+    // round_end are dead in extension mode, so the phase is what actually stops
+    // these; Score.jsx applies the same rule to the half clock.
+    const clockFrozen = roundState.round_freeze || roundState.round_end
+        || isClockStopped(matchPhase);
 
     return (
         <div className="grid-container">
@@ -86,6 +94,10 @@ function Example() {
                     scoringAt={scoringAt}
                     scoringAllies={scoringAllies}
                     scoringAxis={scoringAxis}
+                    phase={matchPhase}
+                    phaseMode={matchMode}
+                    half={half}
+                    showPhase={hudconfig.settings.match_phase_badge}
                 />
                 <span className="team-name team-name-axis">
                     <EditableTeamName side="axis" />

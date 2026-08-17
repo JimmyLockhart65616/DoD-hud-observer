@@ -15,6 +15,7 @@ import Timer from '../core/Score/timer/Timer';
 import WavePill from '../core/Score/wave/WavePill';
 import TickClock from '../core/Score/tick/TickClock';
 import TickAward from '../core/Score/tick/TickAward';
+import { isClockStopped } from '../core/MatchPhase/MatchPhase';
 import { className as dodClassName } from '../core/dodClasses';
 import { getWeaponIcon } from '../screen/resources/weaponIcons';
 
@@ -44,6 +45,18 @@ const SCOPE_LIVE = 'live';
 const SCOPE_MATCH = 'match';
 
 const halfLabel = (h) => (h >= 101 ? `OT${h - 100}` : `H${h}`);
+
+// Terse register, matching halfLabel's — this page is a reference monitor, not
+// the on-air overlay (which spells the same phases out in full via MatchPhase).
+// Nothing during live play: .caster-half already says H1/H2/OT1, and repeating
+// "LIVE" beside it only takes room from the numbers.
+const PHASE_LABEL = {
+    pregame:   'WARM-UP',
+    golive:    'GOING LIVE',
+    halftime:  'HALFTIME',
+    ot_break:  'OT BREAK',
+    postmatch: 'FINAL',
+};
 
 // The rows to render for the selected scope.
 //   live  — the current in-progress half, straight off the live store
@@ -235,6 +248,7 @@ function Caster() {
     const alliesScore = useHudStore(s => s.allies_score);
     const axisScore = useHudStore(s => s.axis_score);
     const half = useHudStore(s => s.half);
+    const matchPhase = useHudStore(s => s.match_phase);
     const flags = useHudStore(s => s.flags);
     const timeleft = useHudStore(s => s.timeleft);
     const timeleftAt = useHudStore(s => s.timeleft_at);
@@ -249,6 +263,14 @@ function Caster() {
     const scoringAxis = useHudStore(s => s.scoring_axis);
     const killStreaks = useHudStore(s => s.kill_streaks);
     const killLog = useHudStore(s => s.kill_log);
+
+    // Every clock on this page — half, waves, scoring tick — stops together, and
+    // stops for the same reason. round_freeze/round_end never fire in extension
+    // mode, so before the phase feed all three free-ran through halftime.
+    // (Distinct from the `frozen` STATE below, which is the caster's manual
+    // freeze of the stats table.)
+    const clockFrozen = roundState.round_freeze || roundState.round_end
+        || isClockStopped(matchPhase);
 
     const [scope, setScope] = useState(SCOPE_LIVE);
     const [sortKey, setSortKey] = useState('damage');
@@ -324,7 +346,7 @@ function Caster() {
                         seconds={waveAllies}
                         secondsAt={waveAlliesAt}
                         side="allies"
-                        frozen={roundState.round_freeze || roundState.round_end}
+                        frozen={clockFrozen}
                     />
                     {/* Same stacking as /screen: each side's projected scoring
                         points under the score they will change, and the shared
@@ -338,13 +360,13 @@ function Caster() {
                             <Timer
                                 timeleft={timeleft}
                                 timeleftAt={timeleftAt}
-                                frozen={roundState.round_freeze || roundState.round_end}
+                                frozen={clockFrozen}
                             />
                         </span>
                         <TickClock
                             seconds={scoringIn}
                             secondsAt={scoringAt}
-                            frozen={roundState.round_freeze || roundState.round_end}
+                            frozen={clockFrozen}
                         />
                     </span>
                     <span className="caster-score-stack">
@@ -355,12 +377,15 @@ function Caster() {
                         seconds={waveAxis}
                         secondsAt={waveAxisAt}
                         side="axis"
-                        frozen={roundState.round_freeze || roundState.round_end}
+                        frozen={clockFrozen}
                     />
                     <span className="caster-team caster-axis">AXIS</span>
                 </div>
                 <div className="caster-meta">
                     <span className="caster-half">{half != null ? halfLabel(half) : '—'}</span>
+                    {PHASE_LABEL[matchPhase] && (
+                        <span className="caster-phase">{PHASE_LABEL[matchPhase]}</span>
+                    )}
                     <span className="caster-server">{serverName}</span>
                     <span className="caster-delay" title="This page is synced to the HLTV broadcast, matching the stream — not the live server.">
                         broadcast-synced

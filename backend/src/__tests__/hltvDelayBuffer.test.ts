@@ -268,6 +268,28 @@ describe('HltvDelayBuffer', () => {
         expect(buf.queueDepth('atl1')).toBe(2); // board draining + tick-5 main
     });
 
+    it('treats match_phase as a board event so HALFTIME cannot precede its board', () => {
+        // The halftime match_phase is emitted from ktp_half_end — the same
+        // old-map tail as the halftime board. Without the late-bias it releases
+        // first and announces HALFTIME over footage that is still live.
+        const stub = new StubSync(9999);
+        const now = Date.now();
+        stub.setResetBasis('atl1', { activeTime: 1200, sampledAt: now - 3000, delaySeconds: 2, calibrationOffsetMs: 0 });
+        stub.setBoardLag(5);
+        const fired: string[] = [];
+        const buf = makeBuffer(stub, (e) => fired.push(e.event.event));
+
+        stub.setBroadcastNow('atl1', 1000);
+        buf.enqueue({ server: 'atl1', event: evt(1200, 'kill'), enqueuedAt: now });
+        buf.enqueue({ server: 'atl1', event: evt(1200, 'match_phase'), enqueuedAt: now });
+        stub.setBroadcastNow('atl1', 0);
+        buf.enqueue({ server: 'atl1', event: evt(5), enqueuedAt: now });
+
+        (buf as any).tick();
+        expect(fired).toEqual(['kill']);
+        expect(buf.queueDepth('atl1')).toBe(2); // match_phase held in draining
+    });
+
     // The +TICK_RESET_THRESHOLD_S margin in releaseStrandedEvents must not
     // mis-strand a fresh new-map event sitting just above the freshly-sampled
     // activeTime (which would project to a past releaseAt and fire early).

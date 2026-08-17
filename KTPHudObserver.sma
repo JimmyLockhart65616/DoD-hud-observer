@@ -61,10 +61,23 @@ native Float:dodx_get_score_tick_time();
 native dodx_get_score_tick_period();
 #endif
 
+// ktp_is_match_active: KTPMatchHandler's only native (KTPMatchHandler.sma:3852).
+// Returns 1 while a match is LIVE, PENDING (ready-up) or PRE-START — which is
+// exactly what makes it useful here: paired with our own g_matchActive (set only
+// at go-live) it isolates the ready-up window, the one match phase KTPMatchHandler
+// exposes through no forward at all.
+//
+// KTPMatchHandler ships no include, so consumers hand-declare it (cf.
+// KTPPracticeMode.sma:146). Bound OPTIONALLY via the native filter below: pub and
+// practice boxes run this plugin without the match handler and must still load.
+#if !defined ktp_is_match_active
+native ktp_is_match_active();
+#endif
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.5.0"
+#define VERSION "2.6.0"
 #define AUTHOR  "cadaver"
 
 #define MAX_PLAYERS     32
@@ -89,6 +102,7 @@ native dodx_get_score_tick_period();
 #define TASK_ID_EMIT_FLAGS   9005
 #define TASK_ID_GOLIVE_REWIPE 9006
 #define TASK_ID_RESET_SNAPSHOT 9007
+#define TASK_ID_PHASE_POLL   9008
 
 // Go-live restart detection. The engine respawns the ENTIRE roster in one frame
 // when the mp_clan_timer countdown ends and frags are zeroed; mid-countdown
@@ -97,6 +111,23 @@ native dodx_get_score_tick_period();
 // through to the task fallback.
 #define GOLIVE_SPAWN_BURST   8
 #define GOLIVE_BURST_WINDOW  1.5
+
+// ─── Broadcast phase ─────────────────────────────────────────────────────────
+// Every phase EDGE that goes on air is forward-driven (ktp_match_start, the
+// go-live re-wipe, ktp_half_end, ktp_match_end), so the poll below only has to
+// catch ready-up — which KTPMatchHandler signals through nothing — and re-seed a
+// backend that restarted. That split is deliberate: repeating tasks can wedge
+// through half 1 on prod, and a wedged poll must not be able to cost us a
+// transition the casters are looking at.
+#define PHASE_POLL_INTERVAL  2.0
+// Forced re-POST even when nothing changed, so a backend that restarted mid-half
+// re-seeds its cache (and therefore /hq and every joining overlay) within one
+// interval instead of staying blank until the next real transition.
+#define PHASE_HEARTBEAT_SEC  30
+// How long "FINAL" holds after ktp_match_end. Matches hud.json's
+// statsboard_match_displaytime (90s) so the caption and the FINAL STATS board
+// leave the screen together.
+#define POSTMATCH_HOLD_SEC   90
 // Per-CP deferred captor/capout emission (TASK_ID_DEFER_BASE + cp_index, one
 // per flag). dodx dispatches dod_score_event ~0.25s AFTER dod_control_point_captured,
 // so flag_captured + the capout board are emitted from this short one-shot —
@@ -188,6 +219,27 @@ new Float:g_round_live_deadline = 0.0;
 new bool:g_awaiting_stat_rewipe = false;
 new g_golive_spawn_count = 0;
 new Float:g_golive_spawn_t0 = 0.0;
+
+// ─── Broadcast phase state ───────────────────────────────────────────────────
+// See compute_phase() for the precedence table and the reasoning behind each of
+// these. In short, none of the existing match globals can answer "what phase is
+// this" on their own: g_matchActive stays TRUE through halftime (ktp_half_end
+// clears no match identity), and KTPMatchHandler's _ktp_mode localinfo is
+// written 11 lines AFTER the forward that tells us halftime began.
+new bool:g_has_match_active_native = true;
+// A match went live on THIS level and no half boundary has ended it. Cleared in
+// plugin_cfg, which is what makes the phase machine invariant to the open
+// question of whether plugin globals survive a changelevel.
+new bool:g_phase_live_this_level = false;
+// ktp_half_end fired; covers the pre-changelevel halftime window, where
+// _ktp_mode is still "".
+new bool:g_phase_halftime_latch = false;
+// get_systime() (NOT gametime — that resets to ~0 on the post-match changelevel)
+// at ktp_match_end. Drives the POSTMATCH_HOLD_SEC "FINAL" hold.
+new g_phase_match_ended_at = 0;
+// Last phase POSTed + when, for change-detection and the forced heartbeat.
+new g_phase_last[16];
+new g_phase_last_at = 0;
 
 // ─── Reinforcement wave clock ────────────────────────────────────────────────
 // DoD respawn is a per-TEAM reinforcement wave, not a per-player countdown. The
@@ -630,6 +682,22 @@ public plugin_cfg() {
     // New map: new grid phase, and a new answer to what a control point is worth.
     score_tick_reset(false);
 
+    // Phase reconcile for the new level. THIS IS THE KEYSTONE of the phase
+    // machine: whether plugin globals survive a changelevel is genuinely
+    // unresolved (see the note at ktp_half_end), and clearing both latches here
+    // makes the answer irrelevant. If globals survived, this forces the correct
+    // false; if they didn't, they are already false. Either way the phase after a
+    // halftime changelevel comes from _ktp_mode, which is engine-side and does
+    // survive.
+    //
+    // g_phase_match_ended_at is deliberately NOT cleared: the post-match hold is
+    // measured in systime and is meant to outlive exactly this changelevel. The
+    // backend mirrors the same hold for the case where these globals did reset.
+    g_phase_live_this_level = false;
+    g_phase_halftime_latch  = false;
+    g_phase_last[0] = '^0';
+    g_phase_last_at = 0;
+
     // Clear any stragglers from the previous map, then re-arm.
     remove_task(TASK_ID_INIT_CONFIG);
     remove_task(TASK_ID_POLL_PLAYER_STATE);
@@ -637,6 +705,7 @@ public plugin_cfg() {
     remove_task(TASK_ID_TIME_SYNC);
     remove_task(TASK_ID_EMIT_FLAGS);
     remove_task(TASK_ID_RESET_SNAPSHOT);
+    remove_task(TASK_ID_PHASE_POLL);
 
     // Defer CVAR + header init to ensure amxx.cfg has loaded
     set_task(1.0, "task_init_config", TASK_ID_INIT_CONFIG);
@@ -645,6 +714,10 @@ public plugin_cfg() {
     set_task(ZONE_POLL_INTERVAL,  "task_poll_zones", TASK_ID_POLL_ZONES, _, _, "b");
     set_task(TIME_SYNC_DELAY,     "task_time_sync",  TASK_ID_TIME_SYNC,  _, _, "b");
     set_task(30.0,                "task_emit_flags", TASK_ID_EMIT_FLAGS, _, _, "b");
+    // Catches ready-up (which no forward signals) and re-seeds a restarted
+    // backend. Every on-air phase EDGE is forward-driven, so a wedged task here
+    // can only ever cost the pregame caption.
+    set_task(PHASE_POLL_INTERVAL, "task_phase_poll", TASK_ID_PHASE_POLL, _, _, "b");
 }
 
 public task_init_config() {
@@ -731,6 +804,11 @@ pre-2.7.26 (no BSP point_default_owner parse); projected points will stay hidden
 
     // Send flags snapshot now that URL is set (controlpoints_init fires before CVARs load)
     do_flags_init("map_load");
+
+    // First phase of the level, now that the URL and headers exist (post_event
+    // no-ops without them, and the poll's change-gate would then suppress the
+    // real first emit for a full heartbeat).
+    phase_tick();
 }
 
 
@@ -899,6 +977,12 @@ stock do_golive_stat_rewipe(const src[]) {
         if (team != TEAM_ALLIES && team != TEAM_AXIS) continue;
         emit_player_score(id);
     }
+
+    // "GOING LIVE" → "1ST HALF". This is the real go-live edge — the engine's own
+    // mass-respawn burst (or the fallback task) — and it is the only prod-reliable
+    // one there is: RoundState==1 never arrives, which is why the HQ board's
+    // round-phase discriminator was dead for every match ever played.
+    phase_tick();
 }
 
 // Fallback: fires only if the mass-respawn burst never materialised (roster
@@ -1409,9 +1493,129 @@ stock hud_score_award(team) {
     return g_ts_w * non_default_held(team);
 }
 
+// ─── Broadcast phase ─────────────────────────────────────────────────────────
+//
+// What part of the match is on screen: warm-up, the go-live countdown, which
+// half, halftime, an overtime break, or a finished match. KTPMatchHandler has no
+// phase enum, native or cvar to ask — it has three forwards, one coarse native,
+// and a localinfo key — so this composes them, and ORDER IS LOAD-BEARING. Each
+// numbered rule below exists because of a specific, verified ordering hazard.
+//
+// Residual, unfixable without an upstream change: an OT round that ends still
+// TIED fires NO forward at all (KTPMatchHandler.sma:1005-1049 saves state and
+// changelevels), so the few seconds of OT round-end intermission before the map
+// change still read `live`. It corrects to `ot_break` on the next map load.
+stock compute_phase(out[], olen, mode_out[], mlen) {
+    get_localinfo("_ktp_mode", mode_out, mlen);      // "" | "h2" | "ot1" | ...
+
+    // A break mode is only believable under two conditions, and BOTH were caught
+    // failing on a real server rather than reasoned into existence:
+    //
+    //  - Same map. An rcon changelevel away from a pending 2nd half leaves
+    //    _ktp_mode set until KTPMatchHandler's next restore pass clears it;
+    //    without this the badge reads HALFTIME over unrelated pub play elsewhere.
+    //
+    //  - No match has ENDED since. KTPMatchHandler clears _ktp_mode in
+    //    end_match_cleanup, but that is its promise, not something to depend on:
+    //    an abandoned, force-reset or crashed match can leave it set, and the
+    //    badge then claims HALFTIME on an idle server forever. Observed exactly
+    //    that on the local stack the moment the FINAL hold expired.
+    //    g_phase_match_ended_at is cleared only by the next ktp_match_start, so
+    //    it marks precisely "the match this mode described is over". A genuine
+    //    halftime never trips it — halftime is ktp_half_end, not ktp_match_end.
+    new saved_map[64], cur_map[64];
+    get_localinfo("_ktp_map", saved_map, charsmax(saved_map));
+    get_mapname(cur_map, charsmax(cur_map));
+    new bool:break_here = (mode_out[0] != 0)
+        && g_phase_match_ended_at == 0
+        && equali(saved_map, cur_map);
+
+    // 1. MUST be first. KTPMatchHandler fires ktp_match_end at :896 and only
+    //    clears _ktp_mode in end_match_cleanup() at :899 — so when our handler
+    //    runs, the mode still reads "h2"/"otN" and rules 4/5 would claim it.
+    if (g_phase_match_ended_at > 0
+        && get_systime() - g_phase_match_ended_at < POSTMATCH_HOLD_SEC) {
+        copy(out, olen, "postmatch");
+        return;
+    }
+
+    // 2/3. Live on THIS level, with no half boundary since. Beats the mode
+    //      because _ktp_mode stays "h2" for the WHOLE of half 2 (KTPMatchHandler
+    //      only clears it at match end), which would otherwise read HALFTIME over
+    //      live half-2 play. g_awaiting_stat_rewipe is the go-live countdown
+    //      window: armed at ktp_match_start, disarmed by the engine's own
+    //      mass-respawn burst, i.e. the moment play actually begins.
+    if (g_phase_live_this_level) {
+        copy(out, olen, g_awaiting_stat_rewipe ? "golive" : "live");
+        return;
+    }
+
+    // 4. The latch covers the PRE-changelevel halftime window: ktp_half_end fires
+    //    at KTPMatchHandler.sma:1092, eleven lines BEFORE set_localinfo(_ktp_mode,
+    //    "h2") at :1103, so localinfo alone still reads "" at the instant the
+    //    halftime board pops. The mode covers the window after the changelevel,
+    //    where plugin_cfg has cleared the latch.
+    if (g_phase_halftime_latch || (break_here && mode_out[0] == 'h')) {
+        copy(out, olen, "halftime");
+        return;
+    }
+
+    // 5. Overtime break — only ever reached after the map load, per the residual
+    //    noted above.
+    if (break_here && mode_out[0] == 'o') {
+        copy(out, olen, "ot_break");
+        return;
+    }
+
+    // 6. Ready-up or pre-start. The native is 1 for live|pending|prestart, and
+    //    every live case was claimed by rule 2/3 above, so what's left here is
+    //    exactly the window before go-live.
+    if (is_match_active()) {
+        copy(out, olen, "pregame");
+        return;
+    }
+
+    // 7. Pub play, or an empty server. The overlay renders no badge at all.
+    copy(out, olen, "idle");
+}
+
+// Recompute and POST on change, with a forced heartbeat. Change-gated, so it is
+// cheap enough to call from any hook: two localinfo reads and a native call when
+// nothing has moved.
+stock phase_tick() {
+    if (!g_cvar_url[0]) return;
+
+    new phase[16], mode[16];
+    compute_phase(phase, charsmax(phase), mode, charsmax(mode));
+
+    new now = get_systime();
+    new bool:changed = !equal(phase, g_phase_last);
+    if (!changed && now - g_phase_last_at < PHASE_HEARTBEAT_SEC) return;
+
+    copy(g_phase_last, charsmax(g_phase_last), phase);
+    g_phase_last_at = now;
+
+    // No `half` field — post_event injects one into the envelope and a duplicate
+    // key would make the object ambiguous. `mode` rides along so the overlay can
+    // name the coming OT round during a break, when `half` still holds the last.
+    new json[160];
+    formatex(json, charsmax(json),
+        "{^"event^":^"match_phase^",^"phase^":^"%s^",^"mode^":^"%s^"}", phase, mode);
+    post_event(json);
+
+    if (changed) {
+        server_print("[HUD] phase -> %s (mode=%s gt=%.2f)", phase, mode, get_gametime());
+    }
+}
+
+public task_phase_poll() {
+    phase_tick();
+}
+
 // Optional-native binding: allow loading against dodx modules that don't export
 // dodx_get_round_time (pre-2.7.23) or dodx_get_wave_time (every module shipped
-// so far). trap==0 = load-time bind failure — mark the native unavailable and
+// so far), and against servers with no KTPMatchHandler at all. trap==0 =
+// load-time bind failure — mark the native unavailable and
 // let the plugin load, falling back to the open-loop estimate. Anything else
 // stays fatal: a genuinely missing core native must keep failing loudly, and a
 // runtime trap (trap==1) can only mean a gating bug on our side.
@@ -1436,7 +1640,22 @@ public native_filter(const name[], index, trap) {
         g_has_score_period_native = false;
         return PLUGIN_HANDLED;
     }
+    // Unlike the dodx natives above, this one also swallows the RUNTIME trap
+    // (trap==1). PLUGIN_HANDLED makes the call return 0, which is precisely the
+    // "no match running" answer the native would have given — so even a gating
+    // bug on our side degrades to a dark phase badge rather than aborting the
+    // plugin in the middle of a broadcast. Mirrors KTPPracticeMode.sma:198-205.
+    if (equal(name, "ktp_is_match_active")) {
+        if (!trap) g_has_match_active_native = false;
+        return PLUGIN_HANDLED;
+    }
     return PLUGIN_CONTINUE;
+}
+
+// Never call the native while it's unbound. The filter above would swallow the
+// trap anyway; keeping the gate here means one place to reason about it.
+stock is_match_active() {
+    return g_has_match_active_native ? ktp_is_match_active() : 0;
 }
 
 // ─── KTPMatchHandler Forwards ────────────────────────────────────────────────
@@ -1444,6 +1663,14 @@ public native_filter(const name[], index, trap) {
 // half: 1=1st half, 2=2nd half, 101+=OT round
 public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) {
     g_matchActive = true;
+
+    // Phase: a match is going live on this level. Clearing the halftime latch
+    // here is what ends halftime, and clearing the post-match stamp stops a
+    // previous match's FINAL hold from bleeding into this one. The emit itself
+    // is at the bottom of this forward, after the roster dump.
+    g_phase_live_this_level = true;
+    g_phase_halftime_latch  = false;
+    g_phase_match_ended_at  = 0;
 
     // Half-clock anchor with a go-live-countdown offset baked in. This forward fires
     // at the START of the go-live sequence, ~mp_clan_timer BEFORE KTPMatchHandler's
@@ -1552,6 +1779,12 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
     // Refresh flag state and send roster dump
     do_flags_init("match_start");
     do_roster_dump();
+
+    // "GOING LIVE" — g_awaiting_stat_rewipe is armed above, so this reports the
+    // countdown, and do_golive_stat_rewipe flips it to "live" at the engine's
+    // own restart edge. Emitted after the roster so the overlay has players to
+    // show by the time the caption changes.
+    phase_tick();
 }
 
 // RoundState message: BYTE arg 1, 1 = round live, anything else = freeze.
@@ -1638,6 +1871,19 @@ public ktp_match_end(const matchId[], const map[], MatchType:matchType, team1Sco
     // limbo window must not trigger the artifact hold off dead-half state.
     g_last_native_rem = -1.0;
     g_native_hold_until = 0.0;
+
+    // "FINAL", held for POSTMATCH_HOLD_SEC. systime, not gametime: the post-match
+    // changelevel is seconds away and resets gametime to ~0, which would make a
+    // gametime deadline either expire instantly or never.
+    //
+    // Note the phase POST rides the normal envelope, which is emitted AFTER
+    // g_matchActive went false above — so unlike the ktp_match_end event, it
+    // carries no match_id. That is fine and deliberate: the backend keys the
+    // state cache on the server hostname, not the match.
+    g_phase_live_this_level = false;
+    g_phase_halftime_latch  = false;
+    g_phase_match_ended_at  = get_systime();
+    phase_tick();
 }
 
 // ─── Half End (KTPMatchHandler ktp_half_end forward) ─────────────────────────
@@ -1686,6 +1932,21 @@ public ktp_half_end(const matchId[], const map[], MatchType:matchType, half, tea
     g_half_end_gt = 0.0;
     g_last_native_rem = -1.0;
     g_native_hold_until = 0.0;
+
+    // "HALFTIME". The latch is required, not merely convenient: KTPMatchHandler
+    // sets _ktp_mode="h2" at :1103, ELEVEN LINES after firing this forward at
+    // :1092, so the localinfo still reads "" right now. The latch covers this
+    // pre-changelevel window; _ktp_mode covers the post-changelevel one after
+    // plugin_cfg clears the latch. Clearing live_this_level is what stops the
+    // caption saying "1ST HALF" over the halftime board — g_matchActive stays
+    // true through all of this and cannot be used for it.
+    //
+    // This emit lands in the same pre-changelevel tail as the halftime board, so
+    // the backend treats match_phase as a board event in the HLTV delay buffer;
+    // without that it could announce HALFTIME ahead of the footage.
+    g_phase_live_this_level = false;
+    g_phase_halftime_latch  = true;
+    phase_tick();
 }
 
 // ─── Roster Dump ─────────────────────────────────────────────────────────────
@@ -1864,6 +2125,13 @@ public client_authorized(id) {
         "{^"event^":^"player_connect^",^"user_id^":^"%s^",^"name^":^"%s^",^"team^":^"%s^"}",
         steamid, name_esc, team_str);
     post_event(json);
+
+    // Wedge-immune phase refresh. The ready-up window is the one phase with no
+    // forward behind it, so it depends on the 2s poll — and repeating tasks can
+    // wedge through half 1 on prod. Roster churn is exactly what precedes a
+    // ready-up, and these are DODX forwards, so they always run. Change-gated:
+    // this costs two localinfo reads when nothing has moved.
+    phase_tick();
 }
 
 public client_disconnect(id) {
@@ -1884,6 +2152,9 @@ public client_disconnect(id) {
     g_player_deaths[id]   = 0;
     g_player_objscore[id] = 0;
     reset_player_stats_slot(id);
+
+    // See client_authorized — wedge-immune phase refresh.
+    phase_tick();
 }
 
 // DODX forward: player spawned
@@ -1958,6 +2229,10 @@ public dod_client_changeteam(id, team, oldteam) {
         "{^"event^":^"player_team_change^",^"user_id^":^"%s^",^"team^":^"%s^"}",
         steamid, team_str);
     post_event(json);
+
+    // See client_authorized — wedge-immune phase refresh. Players picking sides
+    // is the strongest signal that a ready-up is about to happen.
+    phase_tick();
 }
 
 // DODX forward: client_damage (fires on every hit)

@@ -31,6 +31,7 @@ import {
     type CachedServerFlag,
     type CachedServerPlayer,
     type CachedServerView,
+    type MatchPhase,
 } from './ingest';
 
 /**
@@ -40,7 +41,24 @@ import {
  */
 const ONLINE_MS = 60_000;
 
-export type HqStatus = 'LIVE' | 'WARMUP' | 'BETWEEN' | 'STALE' | 'NO_SIGNAL';
+/**
+ * Phases in which the half clock is genuinely NOT advancing.
+ *
+ * The BREAK phases only, not "everything that isn't live": `idle` is pub play
+ * and `pregame` is ready-up, both of which have a real map clock counting down,
+ * and freezing those would show a dead clock on a server where the game is
+ * running. Mirrored by CLOCK_STOPPED in web/src/components/core/MatchPhase —
+ * the board and the overlay must not disagree about whether the clock moves.
+ */
+const CLOCK_STOPPED_PHASES = new Set<MatchPhase>(['halftime', 'ot_break', 'postmatch']);
+
+/**
+ * Underscore-free by design — the frontend derives a CSS class from this with
+ * `hq-strip-${status.toLowerCase()}`, so OT_BREAK would produce `hq-strip-ot_break`.
+ */
+export type HqStatus =
+    | 'LIVE' | 'GOLIVE' | 'HALFTIME' | 'OTBREAK' | 'FINAL'
+    | 'WARMUP' | 'BETWEEN' | 'STALE' | 'NO_SIGNAL';
 
 /** The slice of HltvSyncService this module needs. Narrow so tests can fake it. */
 export interface HqHltvSource {
@@ -58,6 +76,7 @@ export interface HqServer {
     map: string | null;
     half: number | null;             // 1, 2, or 101+ for OT
     roundPhase: 'freeze' | 'live' | 'end' | null;
+    phase: MatchPhase | null;        // plugin-computed broadcast phase (2.3.0+)
 
     alliesScore: number | null;
     axisScore: number | null;
@@ -109,12 +128,18 @@ export interface HqOverview {
  *              `half` — ktp_match_end deliberately leaves `half` set so
  *              getServerSnapshot can still seed a late joiner's HUD, so a
  *              `half == null` rule would fire once per box then never again.
- *   LIVE       Match running and a round has begun this half. roundPhase is the
- *              discriminator: half_start and ktp_match_start/end all null it,
- *              and only round_start_freeze/round_start/round_end set it — so
- *              non-null ⇔ a round has started.
- *   WARMUP     Match running, no round yet. That null roundPhase *is* the
- *              post-half_start warmup window.
+ *   <phase>    Whatever the plugin says, when it says anything (2.3.0+). It is
+ *              the only signal that can separate halftime from live play, and it
+ *              rides the same delay buffer as everything else, so the chip is
+ *              broadcast-consistent with the score beside it.
+ *   LIVE       Legacy fallback for a pre-2.3.0 plugin: a match is running, so
+ *              call it live. This USED to be `roundPhase != null ? LIVE : WARMUP`,
+ *              which reported WARMUP for every production match ever played:
+ *              round_phase is set only by round_start_freeze/round_start/
+ *              round_end, and those come only from register_logevent handlers
+ *              that never fire in KTPAMXX extension mode — asserted directly by
+ *              productionFixture.test.ts against the NY1 capture. matchActive is
+ *              the only honest discriminator available without a phase.
  *
  * Note LIVE with playerCount 0 is possible (everyone aged out of
  * PLAYER_STALE_MS or disconnected). That needs no sixth state — an empty roster
@@ -140,8 +165,24 @@ export function deriveStatus(
 ): HqStatus {
     if (!online) return 'NO_SIGNAL';
     if (!view.hasCache) return 'STALE';
+
+    // Plugin-computed phase wins outright when present. Note it beats
+    // matchActive in BOTH directions: `idle` reports BETWEEN even if a stale
+    // matchActive is still set (a dropped ktp_match_end), and `halftime` stays
+    // HALFTIME even though matchActive is true right through halftime.
+    switch (view.phase) {
+        case 'live':      return 'LIVE';
+        case 'golive':    return 'GOLIVE';
+        case 'halftime':  return 'HALFTIME';
+        case 'ot_break':  return 'OTBREAK';
+        case 'postmatch': return 'FINAL';
+        case 'pregame':   return 'WARMUP';
+        case 'idle':      return 'BETWEEN';
+        default: break;   // null — pre-2.3.0 plugin, or nothing seen yet
+    }
+
     if (!view.matchActive && !recorderSaysActive) return 'BETWEEN';
-    return view.roundPhase != null ? 'LIVE' : 'WARMUP';
+    return 'LIVE';
 }
 
 /** Newest match per source server, by startedAt. */
@@ -218,12 +259,19 @@ export function buildHqOverview(
                 ?? anyByServer.get(hostname)?.map ?? null,
             half: view.half,
             roundPhase: view.roundPhase,
+            phase: view.phase,
 
             alliesScore: view.alliesScore,
             axisScore: view.axisScore,
 
             timeleft: view.timeleft,
-            timerFrozen: view.roundPhase === 'freeze' || view.roundPhase === 'end',
+            // roundPhase is permanently null in extension mode, so the first two
+            // terms are dead on the real fleet (kept for pre-2.6.0 plugins and any
+            // config that does emit RoundState). The phase is the real answer —
+            // without it a wall display ticked down through every halftime and
+            // kept counting after the final whistle.
+            timerFrozen: view.roundPhase === 'freeze' || view.roundPhase === 'end'
+                || (view.phase != null && CLOCK_STOPPED_PHASES.has(view.phase)),
 
             delayActive,
             delaySeconds: delayActive ? (delayByServer.get(hostname) ?? null) : null,
