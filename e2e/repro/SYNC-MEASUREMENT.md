@@ -62,6 +62,40 @@ in the flags column for **3.5 days**, silently discarding the entire footage sid
 this: it gates on the *populated columns*, not on unit liveness. Restored 2026-07-29; relays are now
 `enable`d so they also survive a reboot.
 
+## Where the captured CSVs live
+
+**The prod monitor is torn down.** As of 2026-08-17 there is no `sync-monitor`
+systemd unit and no `/opt/sync-monitor/` on the data server, so nothing is being
+captured and **the 2026-06-28..08-02 soak cannot be regenerated**. That capture is
+the evidence behind the RESOLVED section below, so treat it as primary data, not
+as scratch.
+
+It is archived outside this repo at:
+
+```
+d:/Git/_ktp-archive/hud-sync-soak-2026-06-28_2026-08-02.tar.gz   # 21 MB, 36 files
+```
+
+Deliberately outside the working tree: `e2e/repro/soak-logs/` and
+`e2e/repro/logs/` are **gitignored**, and ignored files sit inside
+`git clean -xdf`'s blast radius — irreplaceable data must not live there. They stay
+out of git proper because history is permanent and this repo is cloned directly by
+Tony's LAN broadcast tooling.
+
+To capture again, redeploy the monitor with `deploy-sync-monitor.sh` (installs the
+systemd unit writing `/opt/sync-monitor/logs/sync-YYYY-MM-DD.csv`), then pull a
+window down:
+
+```bash
+mkdir -p e2e/repro/soak-logs
+rsync -av cadaver@74.91.112.242:/opt/sync-monitor/logs/sync-2026-0*.csv e2e/repro/soak-logs/
+```
+
+Feed a capture to `analyze-segment-csv.cjs`, and check usability with
+`sync-health.sh` before trusting it — it gates on the *populated columns*, not unit
+liveness, and the 2026-06-28 file is the known blind one (relays down, footage
+columns empty).
+
 ## Per-component runtime-proof matrix
 
 | component | measurement | healthy | drift signature |

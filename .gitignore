@@ -56,3 +56,15 @@ config/online/config.yaml
 # output (or a self-signed fallback), never committed. Generate per
 # deploy/README.md → Friendly URL.
 /data-server/certs/
+
+# Sync-monitor CSVs. `soak-logs/` is an ad-hoc local pull-down for analysis and
+# `logs/` is what sync-logger.js writes when run by hand. Raw capture, large (the
+# 2026-06-28..08-02 soak is 131 MB across 36 files) and not worth permanent git
+# history — this repo is cloned directly by Tony's LAN broadcast tooling.
+#
+# NOTE: ignored is not the same as safe. `git clean -xdf` deletes these, and the
+# prod monitor that produced them is torn down, so that soak is NOT regenerable.
+# It lives at d:/Git/_ktp-archive/hud-sync-soak-2026-06-28_2026-08-02.tar.gz.
+# See e2e/repro/SYNC-MEASUREMENT.md → "Where the captured CSVs live".
+/e2e/repro/soak-logs/
+/e2e/repro/logs/
