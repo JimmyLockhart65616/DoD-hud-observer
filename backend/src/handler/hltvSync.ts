@@ -5,12 +5,16 @@ import { EventEmitter } from 'events';
 // ─── HLTV broadcast clock state ────────────────────────────────────────────
 //
 // The GoldSrc HLTV proxy implements `delay` as a clock offset, not a packet
-// queue: viewers see `m_World->GetTime() - delay`. So once we know `(activeTime,
-// delay)` for an HLTV instance at sample wall-clock T0, we can convert any
-// future event's `tick` (game-server seconds-since-map-load, injected by the
+// queue: viewers are served the proxy's own `m_ClientWorldTime`. So once we know
+// that serve point for an HLTV instance at sample wall-clock T0, we can convert
+// any future event's `tick` (game-server seconds-since-map-load, injected by the
 // plugin) into a wall-clock fire time:
 //
-//     fireAt = T0 + (event.tick + delay - activeTime) × 1000ms
+//     fireAt = T0 + (event.tick - serveTime) × 1000ms
+//
+// `serveTime` is READ from the proxy where possible (`Spectator Time`, KTP-ReHLDS
+// PR #3) and otherwise inferred as `activeTime - delay`, which is what this file
+// did exclusively until that patch — see serveTimeOf().
 //
 // That's the wall-clock instant HLTV's broadcast clock will catch up to the
 // event's game-time tick — i.e., when broadcast viewers see the corresponding
@@ -47,7 +51,9 @@ export interface HltvClock {
     server: string;            // game-server hostname (matches X-Server-Hostname)
     cfg: HltvServerConfig;
     delaySeconds: number;      // last `Delay <N>` from rcon status
-    activeTime: number;        // last `Game Time MM:SS` converted to seconds
+    activeTime: number;        // last LIVE world clock (fractional when reported)
+    serveTime: number;         // serve point at sampledAt — measured, else activeTime − delay
+    serveTimeMeasured: boolean; // true when the proxy reported Spectator Time (observability only)
     sampledAt: number;         // Date.now() when the sample was taken
     map: string | null;        // last `Map "<name>.bsp"`
     serverName: string | null; // last `Server Name "<name>"` (for cross-check)
@@ -65,6 +71,7 @@ export interface HltvClock {
 // HltvSyncService.tailBasis / HltvDelayBuffer.drainTail.
 export interface ClockBasis {
     activeTime: number;
+    serveTime: number;
     sampledAt: number;
     delaySeconds: number;
     calibrationOffsetMs: number;
@@ -76,7 +83,7 @@ export interface ClockBasis {
  */
 export function broadcastNow(c: HltvClock, now: number = Date.now()): number {
     const elapsedSinceSample = (now - c.sampledAt) / 1000;
-    return c.activeTime + elapsedSinceSample - c.delaySeconds + (c.calibrationOffsetMs / 1000);
+    return c.serveTime + elapsedSinceSample + (c.calibrationOffsetMs / 1000);
 }
 
 // ─── GoldSrc UDP RCON client ────────────────────────────────────────────────
@@ -99,11 +106,85 @@ export function broadcastNow(c: HltvClock, now: number = Date.now()): number {
 
 const RCON_PREFIX = Buffer.from([0xff, 0xff, 0xff, 0xff]);
 
-interface RconStatus {
+export interface RconStatus {
     delaySeconds: number;
-    activeTime: number;
+    activeTime: number;          // live world clock; fractional when the proxy reports World Time
+    serveTime?: number;          // measured m_ClientWorldTime, absent on proxies without the patch
     map: string | null;
     serverName: string | null;
+}
+
+// The serve point at sample time, in event-tick units.
+//
+// PREFER the proxy's measured m_ClientWorldTime. `activeTime - delaySeconds` is
+// an INFERENCE: `delay` is the target RunClocks aims at, not a reading of where
+// the clock sits, and RunClocks may sag toward delay+10 before its first
+// corrective branch fires. Measured locally at delay+0.02..0.03 in steady state,
+// so the inference is close — but it is only sound while the clock is behaving,
+// and nothing in the inference itself can tell you when it isn't.
+//
+// Falls back to the inference on any proxy that doesn't report Spectator Time —
+// which is every proxy until KTP-ReHLDS PR #3 ships. That path is byte-identical
+// to the long-standing behaviour.
+export function serveTimeOf(status: RconStatus): number {
+    const measured = status.serveTime;
+    if (measured === undefined || !Number.isFinite(measured)) {
+        return status.activeTime - status.delaySeconds;
+    }
+    // Bound the measured value against the live clock before trusting it with
+    // broadcast timing: the serve point trails live by ~delay and can never lead
+    // it. Outside that envelope the status format has moved under us, and a
+    // silently wrong serve point desyncs the entire overlay — degrade to the
+    // inference rather than propagate garbage.
+    const behind = status.activeTime - measured;
+    if (behind < -1 || behind > status.delaySeconds + 30) {
+        return status.activeTime - status.delaySeconds;
+    }
+    return measured;
+}
+
+// Parse an HLTV `status` reply body. Split out from the UDP round-trip so it is
+// reachable from tests — the truncation and serve-point handling below decides
+// broadcast alignment, and it used to be untestable behind socket I/O.
+export function parseStatusText(text: string): RconStatus {
+    if (text.includes('Bad rcon_password')) throw new Error('bad rcon password');
+    if (text.includes('not registered')) throw new Error(`rcon command rejected: ${text.slice(0, 80)}`);
+
+    const delayMatch = text.match(/Delay (\d+)/);
+    const gameTimeMatch = text.match(/Game Time (\d+):(\d+)/);
+    // Both added by KTP-ReHLDS PR #3; absent on every proxy predating it.
+    const serveMatch = text.match(/Spectator Time (\d+(?:\.\d+)?)/);
+    const worldMatch = text.match(/World Time (\d+(?:\.\d+)?)/);
+    const mapMatch = text.match(/Map "([^"]+)"/);
+    const serverNameMatch = text.match(/Server Name "([^"]+)"/);
+
+    if (!delayMatch || !gameTimeMatch) {
+        throw new Error(`status missing Delay/GameTime — HLTV may not be connected to game server: ${text.slice(0, 200).replace(/\n/g, ' | ')}`);
+    }
+
+    // `Game Time MM:SS` is TRUNCATED, so any clock derived from it runs 0-1s
+    // low — one-sided, never high. The error also does not average out: the
+    // heartbeat interval is fixed and the world clock advances 1:1 with wall
+    // time, so every sample lands on the same sub-second phase and the loss
+    // presents as a stable per-server CONSTANT rather than as jitter. That is
+    // precisely what tempts you to paper over it with a hand-tuned offset.
+    // Two local proxies, same binary, sampled together: 0.53s and 0.01s lost.
+    const gameTimeSeconds = parseInt(gameTimeMatch[1], 10) * 60 + parseInt(gameTimeMatch[2], 10);
+    const worldTime = worldMatch ? parseFloat(worldMatch[1]) : undefined;
+    // Same clock at two precisions, so they must agree to within the truncation.
+    // Divergence means the format moved under us — keep the field we have always
+    // parsed.
+    const activeTime = worldTime !== undefined && Math.abs(worldTime - gameTimeSeconds) <= 2
+        ? worldTime
+        : gameTimeSeconds;
+
+    return {
+        delaySeconds: parseInt(delayMatch[1], 10),
+        activeTime,
+        serveTime: serveMatch ? parseFloat(serveMatch[1]) : undefined,
+        map: mapMatch?.[1].replace(/\.bsp$/, '') ?? null,
+        serverName: serverNameMatch?.[1] ?? null,
+    };
 }
 
 async function rconStatus(cfg: HltvServerConfig, timeoutMs: number): Promise<RconStatus> {
@@ -117,26 +198,12 @@ async function rconStatus(cfg: HltvServerConfig, timeoutMs: number): Promise<Rco
         const cmd = `rcon ${challengeNum} ${cfg.rcon_password} status\n\0`;
         const reply = await rconRoundTrip(sock, cfg, Buffer.concat([RCON_PREFIX, Buffer.from(cmd)]), timeoutMs);
 
-        // Strip 4-byte 0xff prefix, the 'l' marker, and one length byte; the rest is text.
-        const text = reply.slice(6).toString('utf8');
-        if (text.includes('Bad rcon_password')) throw new Error('bad rcon password');
-        if (text.includes('not registered')) throw new Error(`rcon command rejected: ${text.slice(0, 80)}`);
-
-        const delayMatch = text.match(/Delay (\d+)/);
-        const gameTimeMatch = text.match(/Game Time (\d+):(\d+)/);
-        const mapMatch = text.match(/Map "([^"]+)"/);
-        const serverNameMatch = text.match(/Server Name "([^"]+)"/);
-
-        if (!delayMatch || !gameTimeMatch) {
-            throw new Error(`status missing Delay/GameTime — HLTV may not be connected to game server: ${text.slice(0, 200).replace(/\n/g, ' | ')}`);
-        }
-
-        return {
-            delaySeconds: parseInt(delayMatch[1], 10),
-            activeTime: parseInt(gameTimeMatch[1], 10) * 60 + parseInt(gameTimeMatch[2], 10),
-            map: mapMatch?.[1].replace(/\.bsp$/, '') ?? null,
-            serverName: serverNameMatch?.[1] ?? null,
-        };
+        // Strip 4-byte 0xff prefix, the 'l' marker, and one length byte; the rest
+        // is text. That length byte is outputbuf[0] in Proxy::ExecuteRcon — the
+        // uninitialized one KTP-ReHLDS PR #3 makes deterministic. Stripping a
+        // fixed 6 is why that fix writes a space there rather than re-basing the
+        // payload, which would shift this offset.
+        return parseStatusText(reply.slice(6).toString('utf8'));
     } finally {
         sock.close();
     }
@@ -494,6 +561,7 @@ export class HltvSyncService extends EventEmitter {
         if (c && c.online && typeof event.tick === 'number') {
             this.lastEventClock.set(server, {
                 activeTime: c.activeTime,
+                serveTime: c.serveTime,
                 sampledAt: c.sampledAt,
                 delaySeconds: c.delaySeconds,
                 calibrationOffsetMs: c.calibrationOffsetMs,
@@ -521,6 +589,8 @@ export class HltvSyncService extends EventEmitter {
                     cfg,
                     delaySeconds: status.delaySeconds,
                     activeTime: status.activeTime,
+                    serveTime: serveTimeOf(status),
+                    serveTimeMeasured: status.serveTime !== undefined,
                     sampledAt,
                     map: status.map,
                     serverName: status.serverName,
@@ -542,7 +612,7 @@ export class HltvSyncService extends EventEmitter {
                     }
                 }
                 this.clocks.set(server, clock);
-                console.log(`[hltv-sync] ${server} sample (${reason}): delay=${clock.delaySeconds}s gameTime=${clock.activeTime}s map=${clock.map}${formatRecordingStateLog(recordingState, recordingStateError)}`);
+                console.log(`[hltv-sync] ${server} sample (${reason}): delay=${clock.delaySeconds}s gameTime=${clock.activeTime.toFixed(2)}s serve=${clock.serveTime.toFixed(2)}s${clock.serveTimeMeasured ? '' : '(inferred)'} map=${clock.map}${formatRecordingStateLog(recordingState, recordingStateError)}`);
                 if (recordingState?.already_recording_warning) {
                     console.warn(`[hltv-sync] ${server} hltv-api reports already_recording_warning — half-2 record command likely refused (basename=${recordingState.basename ?? 'unknown'})`);
                 }
@@ -574,6 +644,8 @@ export class HltvSyncService extends EventEmitter {
                             server, cfg,
                             delaySeconds: this.cfg.fallback_delay_seconds,
                             activeTime: 0,
+                            serveTime: -this.cfg.fallback_delay_seconds,
+                            serveTimeMeasured: false,
                             sampledAt,
                             map: null,
                             serverName: null,
@@ -622,6 +694,8 @@ export class HltvSyncService extends EventEmitter {
                 hltvHost: `${c.cfg.hltv_addr}:${c.cfg.hltv_port}`,
                 delaySeconds: c.delaySeconds,
                 activeTime: c.activeTime,
+                serveTime: c.serveTime,
+                serveTimeMeasured: c.serveTimeMeasured,
                 map: c.map,
                 serverName: c.serverName,
                 sampledAt: c.sampledAt,

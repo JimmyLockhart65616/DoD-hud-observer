@@ -190,7 +190,7 @@ describe('HltvDelayBuffer', () => {
         const now = Date.now();
         // Pre-reset basis: sampled 3s ago at gameTime 1100, 2s broadcast delay.
         // tick-1100 → releaseAt = (now-3000) + (1100-1100+2)*1000 = now-1000 → due.
-        stub.setResetBasis('atl1', { activeTime: 1100, sampledAt: now - 3000, delaySeconds: 2, calibrationOffsetMs: 0 });
+        stub.setResetBasis('atl1', { activeTime: 1100, serveTime: 1098, sampledAt: now - 3000, delaySeconds: 2, calibrationOffsetMs: 0 });
         const fired: number[] = [];
         const buf = makeBuffer(stub, (e) => fired.push(e.event.tick));
 
@@ -211,7 +211,7 @@ describe('HltvDelayBuffer', () => {
         const now = Date.now();
         // Board's true half-end tick projects to now-500 (already due) regardless
         // of when its POST arrived. Simulate a curl-stalled POST landing "now".
-        stub.setResetBasis('atl1', { activeTime: 1200, sampledAt: now - 2500, delaySeconds: 2, calibrationOffsetMs: 0 });
+        stub.setResetBasis('atl1', { activeTime: 1200, serveTime: 1198, sampledAt: now - 2500, delaySeconds: 2, calibrationOffsetMs: 0 });
         const fired: number[] = [];
         const buf = makeBuffer(stub, (e) => fired.push(e.event.tick));
 
@@ -232,7 +232,7 @@ describe('HltvDelayBuffer', () => {
             const stub = new StubSync(9999);
             // Basis sampled 65s ago. tick-1200 → releaseAt = (now-65000) + delay*1000.
             //   delay 60 → now-5000 (due);  delay 90 → now+25000 (held).
-            stub.setResetBasis('atl1', { activeTime: 1200, sampledAt: now - 65000, delaySeconds: delay, calibrationOffsetMs: 0 });
+            stub.setResetBasis('atl1', { activeTime: 1200, serveTime: 1200 - delay, sampledAt: now - 65000, delaySeconds: delay, calibrationOffsetMs: 0 });
             const fired: number[] = [];
             const buf = makeBuffer(stub, (e) => fired.push(e.event.tick));
             stub.setBroadcastNow('atl1', 1000);
@@ -251,7 +251,7 @@ describe('HltvDelayBuffer', () => {
         const now = Date.now();
         // Basis sampled 3s ago at gameTime 1200, delay 2. tick-1200 → releaseAt
         // now-1000 (due). A 5s board lag pushes board events to now+4000 (held).
-        stub.setResetBasis('atl1', { activeTime: 1200, sampledAt: now - 3000, delaySeconds: 2, calibrationOffsetMs: 0 });
+        stub.setResetBasis('atl1', { activeTime: 1200, serveTime: 1198, sampledAt: now - 3000, delaySeconds: 2, calibrationOffsetMs: 0 });
         stub.setBoardLag(5);
         const fired: string[] = [];
         const buf = makeBuffer(stub, (e) => fired.push(e.event.event));
@@ -366,7 +366,7 @@ describe('HltvDelayBuffer', () => {
     it('routes old-epoch stragglers straight to the drain, leaving the main queue clean', () => {
         const stub = new StubSync(9999);
         const now = Date.now();
-        stub.setResetBasis('atl1', { activeTime: 1200, sampledAt: now - 3000, delaySeconds: 2, calibrationOffsetMs: 0 });
+        stub.setResetBasis('atl1', { activeTime: 1200, serveTime: 1198, sampledAt: now - 3000, delaySeconds: 2, calibrationOffsetMs: 0 });
         stub.markOldEpochTick(1195);
         const fired: number[] = [];
         const buf = makeBuffer(stub, (e) => fired.push(e.event.tick));

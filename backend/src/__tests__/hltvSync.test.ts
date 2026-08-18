@@ -12,10 +12,10 @@
  * The RCON parser regex is exercised end-to-end against a captured production
  * status response (see Phase 0b output).
  */
-import { HltvSyncService, broadcastNow, HltvClock } from '../handler/hltvSync';
+import { HltvSyncService, broadcastNow, HltvClock, parseStatusText, serveTimeOf } from '../handler/hltvSync';
 
 function fakeClock(over: Partial<HltvClock> = {}): HltvClock {
-    return {
+    const base = {
         server: 'atl1',
         cfg: { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' },
         delaySeconds: 60,
@@ -29,6 +29,15 @@ function fakeClock(over: Partial<HltvClock> = {}): HltvClock {
         recordingState: null,
         recordingStateError: null,
         ...over,
+    };
+    return {
+        ...base,
+        // Derived AFTER the override on purpose: a test that moves activeTime or
+        // delaySeconds must still get a consistent serve point, which is what
+        // broadcastNow computed at call time before serveTime became a field.
+        // An explicit serveTime override still wins.
+        serveTime: over.serveTime ?? base.activeTime - base.delaySeconds,
+        serveTimeMeasured: over.serveTimeMeasured ?? false,
     };
 }
 
@@ -369,7 +378,7 @@ describe('HltvSyncService — tail basis capture (changelevel projection anchor)
         servers: { 'atl1': { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' } },
     };
 
-    const basisA = { activeTime: 100, sampledAt: 5_000_000, delaySeconds: 60, calibrationOffsetMs: 0 };
+    const basisA = { activeTime: 100, serveTime: 40, sampledAt: 5_000_000, delaySeconds: 60, calibrationOffsetMs: 0 };
 
     function makeService() {
         const svc = new HltvSyncService(cfg);
@@ -503,5 +512,99 @@ describe('HltvSyncService — calibration', () => {
         const svc = new HltvSyncService(cfg);
         svc.setCalibrationOffsetMs('atl1', 350);
         expect(svc.getClock('atl1')).toBeNull();
+    });
+});
+
+// ─── serve point: measured vs inferred ──────────────────────────────────────
+//
+// The status text below is captured verbatim from a local KTPReHLDS proxy —
+// unpatched (PATCHED_STATUS's two extra fields absent) and patched. The whole
+// point of this block is that the unpatched path must stay byte-identical to
+// what shipped before Spectator Time existed, because that is every proxy in
+// the fleet until KTP-ReHLDS PR #3 lands.
+const UNPATCHED_STATUS = [
+    '--- HLTV Status ---',
+    'Online 00:54, FPS 96.7, Version 4510 (Linux)',
+    'Local IP 172.19.0.4:27020, Network In 4.1, Out 1.5, Loss 0.00',
+    'Local Slots 32, Spectators 0 (max 0), Proxies 0',
+    'Total Slots 32, Spectators 0 (max 0), Proxies 1',
+    'Connected to Game Server 172.19.0.3:27015, Delay 60',
+    'Server Name "KTP Local Dev #1"',
+    'Game Time 07:40, Mod "dod", Map "dod_merderet.bsp", Players 1',
+].join('\n');
+
+const PATCHED_STATUS = UNPATCHED_STATUS + '\nSpectator Time 400.50, World Time 460.53';
+
+describe('parseStatusText — truncation and the serve point', () => {
+    it('falls back to truncated Game Time on a proxy without the patch', () => {
+        const s = parseStatusText(UNPATCHED_STATUS);
+        expect(s.activeTime).toBe(460);          // 07:40, whole seconds
+        expect(s.serveTime).toBeUndefined();
+        expect(s.delaySeconds).toBe(60);
+        expect(s.map).toBe('dod_merderet');
+        expect(s.serverName).toBe('KTP Local Dev #1');
+    });
+
+    it('prefers the fractional World Time when the proxy reports it', () => {
+        const s = parseStatusText(PATCHED_STATUS);
+        // 0.53s that Game Time MM:SS threw away. Not jitter: the poll interval is
+        // fixed and the clock runs 1:1 with wall time, so this lands on the same
+        // sub-second phase every sample and reads as a per-server constant.
+        expect(s.activeTime).toBeCloseTo(460.53, 2);
+        expect(s.serveTime).toBeCloseTo(400.50, 2);
+    });
+
+    it('distrusts a World Time that disagrees with Game Time (format drift)', () => {
+        const drifted = UNPATCHED_STATUS + '\nSpectator Time 400.50, World Time 999.00';
+        expect(parseStatusText(drifted).activeTime).toBe(460);
+    });
+
+    it('still throws when HLTV is not connected to a game server', () => {
+        expect(() => parseStatusText('--- HLTV Status ---\nOnline 00:54')).toThrow(/missing Delay\/GameTime/);
+    });
+});
+
+describe('serveTimeOf', () => {
+    const base = { delaySeconds: 60, activeTime: 460.53, map: null, serverName: null };
+
+    it('uses the measured serve point when present', () => {
+        expect(serveTimeOf({ ...base, serveTime: 400.5 })).toBeCloseTo(400.5, 2);
+    });
+
+    it('infers activeTime - delay when absent (every pre-PR#3 proxy)', () => {
+        expect(serveTimeOf(base)).toBeCloseTo(400.53, 2);
+    });
+
+    it('prefers the measurement even though it differs from the inference', () => {
+        // Real proxies sit ~delay+0.02..0.03 behind live, so measured != inferred.
+        // Reading the clock beats predicting it.
+        const measured = serveTimeOf({ ...base, serveTime: 400.5 });
+        const inferred = serveTimeOf(base);
+        expect(measured).not.toBeCloseTo(inferred, 3);
+    });
+
+    it('rejects a serve point that leads the live clock', () => {
+        expect(serveTimeOf({ ...base, serveTime: 500 })).toBeCloseTo(400.53, 2);
+    });
+
+    it('rejects a serve point implausibly far behind live', () => {
+        expect(serveTimeOf({ ...base, serveTime: 10 })).toBeCloseTo(400.53, 2);
+    });
+
+    it('rejects a non-finite serve point', () => {
+        expect(serveTimeOf({ ...base, serveTime: NaN })).toBeCloseTo(400.53, 2);
+    });
+});
+
+describe('broadcastNow uses the serve point, not the inference', () => {
+    it('a measured serve point drives the clock directly', () => {
+        const c = fakeClock({ activeTime: 460.53, delaySeconds: 60, serveTime: 400.5, serveTimeMeasured: true });
+        expect(broadcastNow(c, c.sampledAt)).toBeCloseTo(400.5, 2);
+        expect(broadcastNow(c, c.sampledAt + 5000)).toBeCloseTo(405.5, 2);
+    });
+
+    it('an inferred clock reproduces the pre-existing activeTime - delay result', () => {
+        const c = fakeClock({ activeTime: 220, delaySeconds: 60 });
+        expect(broadcastNow(c, c.sampledAt)).toBe(160);
     });
 });

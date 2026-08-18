@@ -851,7 +851,7 @@ describe('POST /ingest — HLTV sync defers socket emit but records immediately'
         // Inject a clock so the buffer can compute broadcastNow >= event ticks
         (sync as any).clocks.set(HOST, {
             server: HOST, cfg: { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' },
-            delaySeconds: 0, activeTime: 100, sampledAt: Date.now(),
+            delaySeconds: 0, activeTime: 100, serveTime: 100, serveTimeMeasured: false, sampledAt: Date.now(),
             map: 'dod_anzio', serverName: HOST, online: true, lastError: null, calibrationOffsetMs: 0,
         });
 
@@ -871,7 +871,7 @@ describe('POST /ingest — HLTV sync defers socket emit but records immediately'
         // any drained tail waits 30s — long past the test window.
         (sync as any).clocks.set(HOST, {
             server: HOST, cfg: { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' },
-            delaySeconds: 30, activeTime: 1000, sampledAt: Date.now(),
+            delaySeconds: 30, activeTime: 1000, serveTime: 970, serveTimeMeasured: false, sampledAt: Date.now(),
             map: 'dod_anzio', serverName: HOST, online: true, lastError: null, calibrationOffsetMs: 0,
         });
 
@@ -914,7 +914,7 @@ describe('POST /ingest — HLTV sync defers socket emit but records immediately'
         const T0 = Date.now();
         (sync as any).clocks.set(HOST, {
             server: HOST, cfg: { hltv_addr: '127.0.0.1', hltv_port: 27020, rcon_password: 'pw' },
-            delaySeconds: 30, activeTime: 1000, sampledAt: T0,
+            delaySeconds: 30, activeTime: 1000, serveTime: 970, serveTimeMeasured: false, sampledAt: T0,
             map: 'dod_anzio', serverName: HOST, online: true, lastError: null, calibrationOffsetMs: 0,
         });
 

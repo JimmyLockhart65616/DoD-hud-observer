@@ -122,8 +122,11 @@ export class HltvDelayBuffer {
     }
 
     // Wall-clock instant the broadcast clock reaches this event's tick, from the
-    // pre-reset basis: releaseAt = sampledAt + (tick − activeTime + delay)×1000 −
-    // calibrationOffsetMs (i.e. broadcastNow solved for `now`). Board events
+    // pre-reset basis: releaseAt = sampledAt + (tick − serveTime)×1000 −
+    // calibrationOffsetMs (i.e. broadcastNow solved for `now`). Reads the SAME
+    // basis.serveTime broadcastNow reads — deriving it here as
+    // (activeTime − delaySeconds) instead would silently disagree with the live
+    // path by the proxy's RunClocks offset on any patched proxy. Board events
     // (player_stats_summary / half_end) get an extra late-bias so the halftime /
     // match-end board errs late, not early. Without a basis (server never
     // sampled) fall back to the arrival-anchored fallback delay. A projected
@@ -136,7 +139,7 @@ export class HltvDelayBuffer {
         }
         const tick = numericTick(it.event);
         return basis.sampledAt
-            + (tick - basis.activeTime + basis.delaySeconds) * 1000
+            + (tick - basis.serveTime) * 1000
             - basis.calibrationOffsetMs
             + extra;
     }
