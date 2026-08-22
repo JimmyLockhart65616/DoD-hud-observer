@@ -77,7 +77,7 @@ native ktp_is_match_active();
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.6.0"
+#define VERSION "2.6.1"
 #define AUTHOR  "cadaver"
 
 #define MAX_PLAYERS     32
@@ -3171,13 +3171,44 @@ stock do_flags_init(const reason[] = "tick") {
     formatex(json, charsmax(json),
         "{^"event^":^"flags_init^",^"reason^":^"%s^",^"flags^":[", reason);
 
+    // Only an authoritative re-init re-reads ownership from dodx. The 30s
+    // heartbeat re-broadcasts what we already track, and must NOT overwrite it.
+    //
+    // CP_owner is a pdata read that is only reliable immediately after dodx's
+    // BSP seed; it drifts afterwards. Measured on production recordings
+    // 2026-08-22, comparing every `tick` snapshot against the last authoritative
+    // one with ZERO captures in between (so they are required to be identical):
+    //
+    //     dod_donner        2/4  disagree      dod_anzio      0/5  disagree
+    //     dod_saints2_b3e  21/42 disagree      dod_armory_b6  0/10 disagree
+    //
+    // i.e. ~50% wrong on exactly the two maps that carry a g_cp_dodx_of_dll
+    // permutation, ~0% on maps that don't. It is NOT a clean index-space shift --
+    // re-reading through the inverse permutation is wrong just as often, so this
+    // is an unreliable read, not a mislabelled one. Do not "fix" it by permuting.
+    //
+    // This matters on air: the overlay only refuses a tick that downgrades a
+    // captured flag to neutral, so an allies<->axis flip IS adopted and the flag
+    // bar goes wrong until the next capture on that flag.
+    //
+    // Cap events (dod_control_point_captured -> g_flag_owner) are the reliable
+    // source and already run in DLL index space, which is why the authoritative
+    // snapshots stay correct.
+    new bool:authoritative = !equal(reason, "tick");
+
     // `i` is the DLL cp_index (the space every emitted flag_id and all of our
     // g_flag_* state lives in); `dx` is the dodx array slot to read it from.
     for (new i = 0; i < g_flag_count && i < MAX_FLAGS; i++) {
         new dx = g_cp_dodx_of_dll[i];
         g_flag_default_owner[i] = dodx_objective_get_data(dx, CP_default_owner);
-        new owner = dodx_objective_get_data(dx, CP_owner);
-        g_flag_owner[i] = owner;
+
+        new owner;
+        if (authoritative) {
+            owner = dodx_objective_get_data(dx, CP_owner);
+            g_flag_owner[i] = owner;
+        } else {
+            owner = g_flag_owner[i];
+        }
 
         g_flag_capping_team[i]          = 0;
         g_flag_contested[i]             = false;
