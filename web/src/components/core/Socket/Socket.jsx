@@ -819,7 +819,15 @@ export const SocketStoreComponent = () => {
                 return {
                     ...pl,
                     weapon_active: s.weapon ? s.weapon : null,
-                    nades: s.nades,
+                    // `nades` is three-valued on the wire, not two. 0 is a real
+                    // reading (empty pool) and must render; a NEGATIVE value is
+                    // dodx saying it could not resolve the ammo index, and is
+                    // normalised to null — the same "unknown" the card shows
+                    // before the first snapshot lands. dodx only gained that
+                    // distinction in 2.7.32 (every failure path used to return 0,
+                    // indistinguishable from empty), so on an older module this
+                    // arm simply never fires.
+                    nades: typeof s.nades === 'number' && s.nades >= 0 ? s.nades : null,
                 };
             });
             setAlliesPlayers(apply);

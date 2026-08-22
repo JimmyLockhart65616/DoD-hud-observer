@@ -91,10 +91,18 @@ const PlayerCard = React.memo(({ player }) => {
                     <span className="card-weapon">
                         <WeaponIcon weapon={player.weapon_active ?? player.weapon_primary} />
                     </span>
-                    <span className={`card-nades${player.nades > 0 ? '' : ' nades-empty'}`}
-                        title={`${player.nades ?? 0} grenade(s)`}>
-                        <IconGrenade />{player.nades ?? 0}
-                    </span>
+                    {/* Unknown (null) is NOT zero. The card used to render
+                        `?? 0`, so a player whose grenade count had not arrived
+                        yet — every player on a freshly-reloaded overlay, since
+                        player_state is socket-only and carries no join snapshot
+                        — was shown on air as carrying no grenades. Hide the pip
+                        instead and let a real 0 keep its dimmed pip. */}
+                    {player.nades != null && (
+                        <span className={`card-nades${player.nades > 0 ? '' : ' nades-empty'}`}
+                            title={`${player.nades} grenade(s)`}>
+                            <IconGrenade />{player.nades}
+                        </span>
+                    )}
                 </div>
             </div>
         </div>

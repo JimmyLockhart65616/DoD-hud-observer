@@ -139,8 +139,11 @@ export default [
     // plugin emits this 4×/sec; the mocker authors a few representative snapshots.
     { "player_state": { "time": 4800, "players": [
         { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 2, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:1002", "weapon": "thompson", "nades": 2, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:1003", "weapon": "garand",   "nades": 2, "health": 100, "prone_state": "standing" },
+        // -1 = dodx 2.7.32 could not resolve the per-map ammo index. Rendered as
+        // NO pip, distinct from a real 0 (dimmed pip). Placed on a full-roster
+        // snapshot so all three pip states are on screen in one frame.
+        { "user_id": "STEAM_0:0:1002", "weapon": "thompson", "nades": -1, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1003", "weapon": "garand",   "nades": 0, "health": 100, "prone_state": "standing" },
         { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 1, "health": 100, "prone_state": "standing" },
         { "user_id": "STEAM_0:0:1005", "weapon": "thompson", "nades": 2, "health": 100, "prone_state": "standing" },
         { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": 2, "health": 100, "prone_state": "standing" },
@@ -205,7 +208,11 @@ export default [
     }, "scoring": { "in": 2.75, "every": 30.5, "allies": 4, "axis": 0 }, "players": [
         { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing" },
         { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 0, "health": 88,  "prone_state": "deployed" },
-        { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": 0, "health": 51,  "prone_state": "standing" },
+        // -1 is dodx 2.7.32 saying it could not resolve the per-map ammo index.
+        // Deliberately alongside the real 0s above and below: this player's pip
+        // must DISAPPEAR while theirs stay visible but dimmed. Older modules
+        // returned 0 for both cases, which is the conflation KTPAMXX#15 is about.
+        { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": -1, "health": 51, "prone_state": "standing" },
         { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 0, "health": 100, "prone_state": "standing" },
         { "user_id": "STEAM_0:0:2005", "weapon": "kar",      "nades": 2, "health": 90,  "prone_state": "standing" },
     ]}},

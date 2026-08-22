@@ -68,8 +68,9 @@ describe('player_state → nades', () => {
         const { store, emit } = setup();
         spawn(emit);
 
-        // Not 0 — "we have not been told yet" is a different state from "empty",
-        // even though the card currently renders both as a dimmed 0.
+        // Not 0 — "we have not been told yet" is a different state from "empty".
+        // The card renders this one as NO pip at all; only a real 0 gets the
+        // dimmed pip. It used to render `?? 0` and conflate the two.
         expect(find(store, RIFLE).nades).toBeNull();
     });
 
@@ -146,5 +147,49 @@ describe('player_state → nades', () => {
         emit('player_state', { event: 'player_state', players: 'nope' }); // wrong type
 
         expect(find(store, RIFLE).nades).toBe(2);
+    });
+
+    // ── dodx 2.7.32: a negative reading means "could not resolve", not "empty" ──
+    //
+    // Before 2.7.32 every failure path in dodx_get_grenade_ammo returned 0, so a
+    // wrong per-map ammo index produced plausible, stable, entirely fabricated
+    // counts (KTPAMXX#15). 2.7.32 returns -1 instead, and the plugin now passes
+    // that through unclamped so the overlay can tell the two apart.
+
+    test('a negative reading normalises to unknown (null), not to 0', () => {
+        const { store, emit } = setup();
+        spawn(emit);
+        playerState(emit, [{ user_id: RIFLE, weapon: 'garand', nades: -1, health: 100, prone_state: 'standing' }]);
+
+        expect(find(store, RIFLE).nades).toBeNull();
+    });
+
+    test('an unknown reading clears a previously known count rather than going stale', () => {
+        const { store, emit } = setup();
+        spawn(emit);
+        playerState(emit, [{ user_id: RIFLE, weapon: 'garand', nades: 3, health: 100, prone_state: 'standing' }]);
+        expect(find(store, RIFLE).nades).toBe(3);
+
+        // dodx has stopped being able to answer. Keeping 3 on air would assert a
+        // number nothing can currently substantiate.
+        playerState(emit, [{ user_id: RIFLE, weapon: 'garand', nades: -1, health: 100, prone_state: 'standing' }]);
+        expect(find(store, RIFLE).nades).toBeNull();
+    });
+
+    test('a non-numeric or absent count is unknown, and 0 still survives the guard', () => {
+        const { store, emit } = setup();
+        const other = 'STEAM_0:0:3003';
+        spawn(emit, RIFLE, 'allies');
+        spawn(emit, other, 'allies');
+
+        playerState(emit, [
+            { user_id: RIFLE, weapon: 'garand', health: 100, prone_state: 'standing' },              // absent
+            { user_id: other, weapon: 'bar', nades: 0, health: 100, prone_state: 'standing' },       // real empty
+        ]);
+        expect(find(store, RIFLE).nades).toBeNull();
+        expect(find(store, other).nades).toBe(0);
+
+        playerState(emit, [{ user_id: RIFLE, weapon: 'garand', nades: 'two', health: 100, prone_state: 'standing' }]);
+        expect(find(store, RIFLE).nades).toBeNull();
     });
 });

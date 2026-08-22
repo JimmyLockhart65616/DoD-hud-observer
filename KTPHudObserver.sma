@@ -2663,8 +2663,14 @@ public task_poll_player_state() {
         // Allies hand + mills grenades share one pool (DODW_HANDGRENADE); Axis = stick.
         // pdata-offset read — validate on the prod dod_i386.so before fleet rollout.
         new nade_type = (g_player_team[id] == TEAM_AXIS) ? DODW_STICKGRENADE : DODW_HANDGRENADE;
+        // Pass a negative through UNCLAMPED. dodx 2.7.32 returns -1 when it
+        // cannot resolve the per-map ammo index, where every earlier build
+        // returned 0 — indistinguishable from an empty pool, which is exactly
+        // the defect reported as KTPAMXX#15. Clamping here would throw that
+        // distinction away again; the overlay normalises <0 to "unknown" and
+        // hides the pip rather than claiming the player has no grenades.
+        // Inert until the fleet takes 2.7.32: older modules never return <0.
         new nades = dodx_get_grenade_ammo(id, nade_type);
-        if (nades < 0) nades = 0;
 
         new prone_str[16];
         get_prone_str(prone_state, prone_str, charsmax(prone_str));
