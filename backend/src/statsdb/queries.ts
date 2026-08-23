@@ -30,6 +30,32 @@
  *    the two raw forms silently matches nothing.
  */
 
+/**
+ * Server-side statement timeout, in milliseconds.
+ *
+ * Injected as a MySQL 8 optimizer hint so **MySQL itself** aborts a SELECT that
+ * runs too long, with error 3024. This is the layer that actually protects the
+ * shared data server: it holds even if this process wedges, leaks a connection,
+ * or someone later forgets a client-side timeout. Client timeouts only stop US
+ * waiting — they do not stop the database working.
+ *
+ * MAX_EXECUTION_TIME applies to read-only SELECTs only, which is all we run.
+ */
+export const MAX_EXECUTION_TIME_MS = 2000;
+
+/**
+ * Prefixes a SELECT with the MAX_EXECUTION_TIME hint.
+ *
+ * The hint must sit immediately after `SELECT`, so this is a positional rewrite
+ * rather than a concatenation — and it is applied centrally in `statsDb.query`
+ * so a new query added later cannot forget it.
+ */
+export function withExecutionCap(sql: string, ms: number = MAX_EXECUTION_TIME_MS): string {
+    const trimmed = sql.trim();
+    if (/\/\*\+\s*MAX_EXECUTION_TIME/i.test(trimmed)) return trimmed;
+    return trimmed.replace(/^SELECT/i, `SELECT /*+ MAX_EXECUTION_TIME(${ms}) */`);
+}
+
 /** `STEAM_0:1:748805` (HUD form) -> `1:748805` (hlstats form). */
 export function toHlstatsUniqueId(steamId: string): string {
     return String(steamId).replace(/^STEAM_[0-9]+:/i, '');

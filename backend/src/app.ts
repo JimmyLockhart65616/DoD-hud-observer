@@ -3,6 +3,7 @@ import path from 'path';
 import cors from 'cors';
 import config from './config';
 import * as statsDb from './statsdb/statsDb';
+import { StatsGuard } from './statsdb/guard';
 import { MatchRecorder } from './handler/matchRecorder';
 import { MetricsCollector } from './handler/metrics';
 import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './handler/ingest';
@@ -128,17 +129,69 @@ app.get('/api/matches/:matchId/events', (req, res) => {
 // address or private coordinate is returned. Position samples deliberately have
 // no route: the operator's standing direction is that individual coordinates and
 // movement histories stay private.
-function statsEnabledOr503(res: any): boolean {
-    if (statsDb.isEnabled()) return true;
-    res.status(503).json({ error: 'stats database not configured on this instance' });
-    return false;
-}
+const statsGuard = new StatsGuard();
 
-// A failed query must not take the process down — this backend's first duty is
-// the live broadcast overlay, and a stats read is never worth that.
-async function statsRoute(res: any, work: () => Promise<unknown>): Promise<void> {
+/**
+ * Cache lifetimes. A FINISHED match is immutable, so its box score can be held
+ * for a long time; the recent-match list and a career total move, but slowly,
+ * and neither is on the broadcast path where staleness would matter.
+ */
+const TTL_MATCH_LIST = 30_000;
+const TTL_MATCH      = 300_000;      // historical browsing; the live overlay never reads this
+const TTL_PLAYER     = 120_000;
+const TTL_FLAGS      = 3_600_000;    // static per map
+
+/**
+ * Wraps a stats read in the full protection stack: enabled check, per-IP rate
+ * limit, TTL cache, then the circuit breaker + concurrency cap.
+ *
+ * Every rejection path answers 503 with Retry-After rather than an error the
+ * client might hammer. `guard.run` returning null means SHED — the request was
+ * refused without touching MySQL, which is the entire point.
+ *
+ * `work` resolving to `undefined` means NOT FOUND (404) — distinct from a query
+ * failure (502) and from shedding (503), so a caller can tell "no such player"
+ * from "ask again later".
+ */
+async function serveStats(
+    req: any, res: any, cacheKey: string, ttlMs: number, work: () => Promise<unknown>,
+): Promise<void> {
+    if (!statsDb.isEnabled()) {
+        res.status(503).json({ error: 'stats database not configured on this instance' });
+        return;
+    }
+
+    const ip = String(req.ip ?? req.socket?.remoteAddress ?? 'unknown');
+    if (!statsGuard.allowRate(ip)) {
+        res.set('Retry-After', '60').status(429).json({ error: 'rate limited' });
+        return;
+    }
+
+    const cached = statsGuard.getCached(cacheKey);
+    if (cached !== undefined) {
+        res.set('X-Cache', 'HIT');
+        res.json(cached);
+        return;
+    }
+
     try {
-        res.json(await work());
+        const out = await statsGuard.run(work);
+        if (out === null) {
+            // Shed: breaker open, or too many already in flight. Say so plainly
+            // — this is the "data server can't keep up, so stand down" path.
+            res.set('Retry-After', '30').status(503).json({
+                error: 'stats temporarily unavailable (load shedding)',
+                breaker: statsGuard.getState(),
+            });
+            return;
+        }
+        if (out === undefined) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        statsGuard.setCached(cacheKey, out, ttlMs);
+        res.set('X-Cache', 'MISS');
+        res.json(out);
     } catch (err) {
         console.error('[statsdb] query failed:', (err as Error).message);
         res.status(502).json({ error: 'stats query failed' });
@@ -146,35 +199,36 @@ async function statsRoute(res: any, work: () => Promise<unknown>): Promise<void>
 }
 
 app.get('/api/stats/matches', (req, res) => {
-    if (!statsEnabledOr503(res)) return;
     const days  = Math.min(365, Math.max(1, parseInt(String(req.query.days  ?? '30'), 10) || 30));
     const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? '50'), 10) || 50));
-    statsRoute(res, async () => ({ matches: await statsDb.recentMatches(days, limit) }));
+    serveStats(req, res, `matches:${days}:${limit}`, TTL_MATCH_LIST,
+        async () => ({ matches: await statsDb.recentMatches(days, limit) }));
 });
 
 // `half = 0` rows are the stored match TOTAL, not a third half. Passed through
 // as-is; a caller that sums every row double-counts the whole board.
 app.get('/api/stats/matches/:matchId', (req, res) => {
-    if (!statsEnabledOr503(res)) return;
-    statsRoute(res, async () => ({ rows: await statsDb.matchPlayerStats(req.params.matchId) }));
+    const id = req.params.matchId;
+    serveStats(req, res, `match:${id}`, TTL_MATCH,
+        async () => ({ rows: await statsDb.matchPlayerStats(id) }));
 });
 
 app.get('/api/stats/players/:steamId', (req, res) => {
-    if (!statsEnabledOr503(res)) return;
-    statsRoute(res, async () => {
-        const career = await statsDb.playerCareer(req.params.steamId);
-        if (!career) {
-            res.status(404).json({ error: 'no recorded matches for that player' });
-            return undefined as unknown as object;
-        }
-        return career;
-    });
+    const id = req.params.steamId;
+    serveStats(req, res, `player:${id}`, TTL_PLAYER,
+        async () => (await statsDb.playerCareer(id)) ?? undefined);
 });
 
 // Static per-flag world coordinates for a map (2D — dodx exposes no CP_origin_z).
 app.get('/api/stats/maps/:mapName/flags', (req, res) => {
-    if (!statsEnabledOr503(res)) return;
-    statsRoute(res, async () => ({ flags: await statsDb.flagPositions(req.params.mapName) }));
+    const m = req.params.mapName;
+    serveStats(req, res, `flags:${m}`, TTL_FLAGS,
+        async () => ({ flags: await statsDb.flagPositions(m) }));
+});
+
+// Guard diagnostics — breaker state, shed counts, cache size. Read-only.
+app.get('/api/stats/_guard', (_req, res) => {
+    res.json({ enabled: statsDb.isEnabled(), ...statsGuard.snapshot() });
 });
 
 // HLTV sync: status, manual resample, calibration, drift push from hltv-api.py.

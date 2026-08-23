@@ -16,7 +16,7 @@
  */
 import config from '../config';
 import {
-    assertReadOnly,
+    assertReadOnly, withExecutionCap, MAX_EXECUTION_TIME_MS,
     RECENT_MATCHES, MATCH_PLAYER_STATS, PLAYER_CAREER,
     FLAG_POSITIONS, POSITION_SAMPLES,
     toHlstatsUniqueId, toHudSteamId,
@@ -34,7 +34,10 @@ import {
  * depending on its types at compile time would be the odd part.
  */
 interface Pool {
-    query(sql: string, params?: unknown[]): Promise<[unknown, unknown]>;
+    query(
+        options: string | { sql: string; values?: unknown[]; timeout?: number },
+        params?: unknown[],
+    ): Promise<[unknown, unknown]>;
     end(): Promise<void>;
 }
 
@@ -65,6 +68,15 @@ function getPool(): Pool | null {
             database: c.database,
             connectionLimit: c.connection_limit,
             connectTimeout: c.timeout_ms,
+            // Never let requests QUEUE for a connection. A queue on a shared,
+            // busy database converts a slow patch into an unbounded backlog and
+            // a memory leak; with queueLimit 1 and waitForConnections false the
+            // pool errors immediately and the guard sheds the request instead.
+            waitForConnections: false,
+            queueLimit: 1,
+            // Keep the footprint on the shared server small and short-lived.
+            idleTimeout: 30_000,
+            maxIdle: 1,
             // Keep DECIMAL/BIGINT as strings rather than silently losing
             // precision; callers coerce what they actually need.
             decimalNumbers: false,
@@ -82,11 +94,26 @@ function getPool(): Pool | null {
     }
 }
 
+/**
+ * The single choke point every stats read goes through.
+ *
+ * Applies, in order: the read-only assertion, the MySQL-side MAX_EXECUTION_TIME
+ * hint, and a client-side timeout. Centralised deliberately — a query added
+ * later inherits all three rather than having to remember them.
+ */
 async function query<T>(sql: string, params: unknown[]): Promise<T[]> {
     assertReadOnly(sql);
     const p = getPool();
     if (!p) return [];
-    const [rows] = await p.query(sql, params);
+    const capped = withExecutionCap(sql);
+    // Client timeout sits ABOVE the server-side cap so MySQL gets the chance to
+    // kill its own statement first — that way the database reclaims the work
+    // rather than us abandoning a query that keeps running.
+    const [rows] = await p.query({
+        sql: capped,
+        values: params,
+        timeout: MAX_EXECUTION_TIME_MS + 1000,
+    });
     return rows as T[];
 }
 
