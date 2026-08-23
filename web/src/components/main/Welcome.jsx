@@ -25,6 +25,20 @@ class Welcome extends React.Component {
                                 board, without anyone having to move it to a particular server first
                             </li>
                             <li>
+                                The <a href="/watch">server list</a> is sorted properly. It used to appear in
+                                whatever order the servers happened to first report in, which reshuffled every time
+                                the backend restarted; it now reads Atlanta, Chicago, Dallas, Denver, New York, each
+                                in number order, every time
+                            </li>
+                            <li>
+                                Every server on that list now shows its <strong>HLTV address</strong>. Click it and
+                                Steam opens Day of Defeat and joins that server's broadcast proxy as a spectator — no
+                                looking up which port belongs to which server. The proxy carries the same 60-second
+                                delay the overlay is synced to, so watching there stays level with a stream instead of
+                                running a minute ahead of it. If a browser refuses to hand off the link, the address
+                                is right there to paste after <code>connect</code> in the console
+                            </li>
+                            <li>
                                 Flag ownership is no longer overwritten by a bad reading. Every 30 seconds the overlay
                                 re-checked who held each flag, and on <code>dod_donner</code> and{' '}
                                 <code>dod_saints2</code> that check was unreliable — about half the time it flipped a

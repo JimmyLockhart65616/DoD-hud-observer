@@ -76,3 +76,51 @@ hltv_sync:
     "KTP - New York 1": { hltv_addr: 127.0.0.1, hltv_port: 27035, rcon_password: REPLACE_WITH_HLTV_RCON }
     "KTP - Chicago 1":  { hltv_addr: 127.0.0.1, hltv_port: 27040, rcon_password: REPLACE_WITH_HLTV_RCON }
     # Add remaining servers as canary expands. Port = game port + 5005.
+
+# Public HLTV proxy addresses, surfaced as "spectate" links on the /watch picker.
+#
+# Deliberately separate from hltv_sync above. That block is the RCON endpoint
+# THIS BACKEND polls for the broadcast clock: 127.0.0.1 (backend and proxies
+# share the data server), carrying rcon passwords, listing only the servers we
+# clock-sync. This block is the address a DoD CLIENT dials, needs no secret, and
+# has to cover every server that appears on the picker whether we sync it or not.
+#
+# Every one of the fleet's HLTV instances runs on the data server, so `host` is
+# the data server's own public address for all of them. The port blocks are
+# allocated per region, five wide, in the order the regions were brought up
+# (Chicago has only four servers). This is the authoritative record of that
+# allocation — the live map is `hltv-<port>.cfg` in /home/hltvserver/hlds/configs,
+# where each file's `connect` line names the game server it mirrors.
+#
+# Set HUD_HLTV_CONNECT_HOST (or blank the host) to hide the links fleet-wide.
+hltv_connect:
+  host: "74.91.112.242"
+  ports:
+    "KTP - Atlanta 1":     27020
+    "KTP - Atlanta 2":     27021
+    "KTP - Atlanta 3":     27022
+    "KTP - Atlanta 4":     27023
+    "KTP - Atlanta 5":     27024
+
+    "KTP - Dallas 1":      27025
+    "KTP - Dallas 2":      27026
+    "KTP - Dallas 3":      27027
+    "KTP - Dallas 4":      27028
+    "KTP - Dallas 5":      27029
+
+    "KTP - Denver 1":      27030
+    "KTP - Denver 2":      27031
+    "KTP - Denver 3":      27032
+    "KTP - Denver 4":      27033
+    "KTP - Denver 5":      27034
+
+    "KTP - New York 1":    27035
+    "KTP - New York 2":    27036
+    "KTP - New York 3":    27037
+    "KTP - New York 4":    27038
+    "KTP - New York 5":    27039
+
+    "KTP - Chicago 1":     27040
+    "KTP - Chicago 2":     27041
+    "KTP - Chicago 3":     27042
+    "KTP - Chicago 4":     27043

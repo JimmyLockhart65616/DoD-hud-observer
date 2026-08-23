@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import type { HltvServerConfig, HltvSyncConfig } from './handler/hltvSync';
+import type { HltvConnectConfig } from './handler/serverList';
 
 export interface Config {
     ingest: {
@@ -24,6 +25,7 @@ export interface Config {
         steam_api_key: string;
     };
     hltv_sync: HltvSyncConfig;
+    hltv_connect: HltvConnectConfig;
 }
 
 // Resolved relative to the repo root from backend/src or backend/lib. The
@@ -61,6 +63,7 @@ function loadConfig(): Config {
             steam_api_key: file.auth?.steam_api_key ?? '',
         },
         hltv_sync: loadHltvSync(file.hltv_sync),
+        hltv_connect: loadHltvConnect(file.hltv_connect),
     };
 }
 
@@ -86,6 +89,29 @@ function loadHltvSync(file: any): HltvSyncConfig {
         api_auth_key:           process.env.HUD_HLTV_API_AUTH_KEY               ?? file?.api_auth_key   ?? '',
         api_timeout_ms:         int(process.env.HUD_HLTV_API_TIMEOUT_MS,           file?.api_timeout_ms ?? 3000),
         servers,
+    };
+}
+
+/**
+ * Public HLTV proxy addresses for the /watch picker's connect links.
+ *
+ * Absent or host-less config is not an error — it just means no links are
+ * offered, which is the right answer on a dev laptop with no public proxies.
+ * Ports that don't parse as a number are dropped for the same reason: half a
+ * connect string is worse than none, since it would send a viewer to a port
+ * nothing is listening on.
+ */
+function loadHltvConnect(file: any): HltvConnectConfig {
+    const ports: Record<string, number> = {};
+    if (file?.ports && typeof file.ports === 'object') {
+        for (const [name, raw] of Object.entries(file.ports as Record<string, any>)) {
+            const port = int(undefined, Number(raw));
+            if (Number.isInteger(port) && port > 0) ports[name] = port;
+        }
+    }
+    return {
+        host: process.env.HUD_HLTV_CONNECT_HOST ?? file?.host ?? '',
+        ports,
     };
 }
 

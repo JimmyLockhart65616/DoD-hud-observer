@@ -25,6 +25,7 @@
 
 import type { MatchMetadata, MatchRecorder } from './matchRecorder';
 import type { MetricsCollector } from './metrics';
+import { compareServerHostnames } from './serverList';
 import {
     getCachedServerView,
     listCachedServers,
@@ -289,7 +290,7 @@ export function buildHqOverview(
     // Deterministic order. getServers() iterates a Map in insertion order —
     // whichever server POSTed first after boot — so without this the board
     // reshuffles on every backend restart and nobody can learn its layout.
-    servers.sort((a, b) => a.hostname.localeCompare(b.hostname));
+    servers.sort((a, b) => compareServerHostnames(a.hostname, b.hostname));
 
     return { generatedAt: new Date(now).toISOString(), servers };
 }

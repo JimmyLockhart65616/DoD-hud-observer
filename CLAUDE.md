@@ -68,6 +68,43 @@ server-side so every field on a strip comes from one instant. Two notes:
   no cache value at all — the RCON status map (from `hltv_sync`, independent of
   match state) fills that gap for HLTV-paired servers.
 
+### Server & Match Picker (`/watch`)
+
+The entry page: every server that has ever POSTed an event, plus live and stored
+matches. Rows are the `/api/servers` projection in
+[backend/src/handler/serverList.ts](backend/src/handler/serverList.ts) —
+composed server-side so ordering and HLTV pairing are testable, not re-derived
+per client.
+
+- **Fleet order comes from the backend**, via `compareServerHostnames`, which is
+  numeric-aware (`localeCompare(..., {numeric:true})` plus a raw tiebreak for a
+  total order). `getServers()` iterates a Map in first-POST-after-boot order, so
+  without this the list reshuffles on every backend restart. `/hq` shares the
+  same comparator. The fleet is single-digit today — which is exactly why plain
+  `localeCompare` would look fine right up until a region reaches ten.
+- **Each row carries an HLTV connect address**, rendered as a
+  `steam://connect/<host>:<port>` link: Steam queries the address, works out it's
+  a GoldSrc DoD server, and launches + connects. The visible link text is the
+  literal address so it can also be pasted after `connect` in the console when a
+  browser won't hand off the protocol.
+- **`hltv_connect` is NOT `hltv_sync`.** They look alike and are not:
+  `hltv_sync.servers` is the **RCON** endpoint this backend polls for the
+  broadcast clock — `127.0.0.1` (backend and proxies share the data server),
+  carrying rcon passwords, listing only the servers we clock-sync (5 of 24).
+  `hltv_connect` is the **public** address a DoD client dials, holds no secret,
+  and must cover every server on the picker whether we sync its clock or not.
+  Reusing either for the other's job gives a dead link or a leaked password.
+- All 24 proxies run on the data server, one per game server, allocated in
+  per-region blocks of five: Atlanta 27020, Dallas 27025, Denver 27030, New York
+  27035, Chicago 27040 (Chicago has four). `config/online/config.yaml.example`
+  is the committed record of that map; the live source of truth is each
+  `hltv-<port>.cfg` in `/home/hltvserver/hlds/configs`, whose `connect` line
+  names the game server it mirrors.
+- An empty `hltv_connect.host` (the committed local default, or
+  `HUD_HLTV_CONNECT_HOST=`) renders no links at all rather than half a connect
+  string; a server absent from `ports` shows `—`, which is correct for the
+  hand-run LAN boxes that report to ingest but have no proxy.
+
 ### Ports
 - `3000` — React dev server (OBS browser source `/screen`, HQ board `/hq`)
 - `3001` — Node.js backend REST API
@@ -1016,12 +1053,14 @@ KTPInfrastructure as a sibling directory (same as the KTPAMXX hook).
 - `backend/src/handler/matchRecorder.ts` — per-match events.jsonl + metadata.json
 - `backend/src/handler/metrics.ts` — /metrics endpoint (EPS, per-source, latency)
 - `backend/src/handler/hqBoard.ts` — `/api/hq` projection for the HQ board (see above)
+- `backend/src/handler/serverList.ts` — `/api/servers` projection: fleet ordering + HLTV connect pairing for `/watch` (see above)
 - `backend/src/config.ts` — YAML config loader with env-var overrides
 - `backend/src/socket/socket.ts` — Socket.IO rooms (matchId-keyed)
 - `backend/src/app.ts` — **all** REST routes, defined inline (there is no
   `routes/apiRouter.ts`; the only `Router()` in the repo is `createIngestRouter`)
 - `web/src/components/core/Socket/Socket.jsx` — all game state logic (Zustand store + event handlers)
 - `web/src/components/hq/` — HQ operations board (`/hq`); polls REST, never imports Socket.jsx
+- `web/src/components/matchPicker/MatchPicker.jsx` — `/watch` server & match picker (HLTV connect links)
 - `web/src/components/screen/api/api.js` — weapon name → display info mapping
 - `web/src/components/screen/Example.jsx` — main HUD layout
 - `web/src/components/core/StatsBoard/StatsTable.jsx` — the per-team stat table, shared by the on-air board and the caster page

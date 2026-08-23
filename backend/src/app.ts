@@ -6,6 +6,7 @@ import { MatchRecorder } from './handler/matchRecorder';
 import { MetricsCollector } from './handler/metrics';
 import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './handler/ingest';
 import { buildHqOverview } from './handler/hqBoard';
+import { buildServerList } from './handler/serverList';
 import { createSocketServer } from './socket/socket';
 import { HltvSyncService } from './handler/hltvSync';
 import { HltvDelayBuffer, wireStrandedRescue } from './handler/hltvDelayBuffer';
@@ -71,13 +72,12 @@ app.get('/metrics', (_req, res) => {
     res.json(snapshot);
 });
 
-// Server list — game servers that have sent events
+// Server list — game servers that have sent events, fleet-ordered, each paired
+// with the public HLTV proxy a viewer can connect to (see serverList.ts).
 app.get('/api/servers', (_req, res) => {
-    const servers = metrics.getServers().map(({ last_seen: _last, ...rest }) => ({
-        ...rest,
-        players: getServerPlayerCount(rest.hostname),
-    }));
-    res.json({ servers });
+    res.json({
+        servers: buildServerList(metrics, config.hltv_connect, getServerPlayerCount),
+    });
 });
 
 app.get('/api/matches/live', (_req, res) => {
