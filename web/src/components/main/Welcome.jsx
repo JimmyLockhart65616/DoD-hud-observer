@@ -12,6 +12,7 @@ class Welcome extends React.Component {
                         </p>
                         <ul style={{ marginTop: '16px', lineHeight: '2' }}>
                             <li><a href="/watch">Watch / Replay</a> — pick a live or completed match</li>
+                            <li><a href="/hq">Operations Board</a> — every KTP server on one screen, live</li>
                             <li><a href="/help">Viewer Guide</a> — how to set up and use the HUD in OBS</li>
                         </ul>
                         <h5 style={{ marginTop: '32px' }}>
@@ -37,6 +38,14 @@ class Welcome extends React.Component {
                                 delay the overlay is synced to, so watching there stays level with a stream instead of
                                 running a minute ahead of it. If a browser refuses to hand off the link, the address
                                 is right there to paste after <code>connect</code> in the console
+                            </li>
+                            <li>
+                                The <a href="/hq">Operations Board</a> is now linked from this page, and it holds the
+                                whole fleet. It shows every KTP server on one screen — status, map, score, clock,
+                                flag ownership — one line each, with a server that has a match running opening up to
+                                show both rosters and their K/D. Click any line to open or close it yourself. Add{' '}
+                                <code>?hideIdle=1</code> to the address to show only the servers with something
+                                happening on them
                             </li>
                             <li>
                                 Flag ownership is no longer overwritten by a bad reading. Every 30 seconds the overlay
