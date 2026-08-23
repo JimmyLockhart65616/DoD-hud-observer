@@ -104,6 +104,27 @@ RUN mkdir -p /var/run/mysqld && chown mysql:mysql /var/run/mysqld
 COPY data-server/supervisord.conf /etc/supervisor/conf.d/data-server.conf
 
 # Startup script (MySQL init + supervisord)
+# Local hlstatsx schema + synthetic fixture, applied idempotently by start.sh on
+# every boot. A MINIMAL LOCAL SUBSET, never the production schema.
+#
+# This lives in the image rather than a bind mount on purpose: KTPInfrastructure's
+# docker-compose.local.yml builds this same Dockerfile with DoD-hud-observer as
+# its context, so anyone who brings up EITHER stack gets a seeded database with
+# no extra step, no credentials and no network access.
+COPY data-server/sql/ /app/data-server/sql/
+
+# Point the read-only stats layer at this container's own MySQL.
+#
+# Set here rather than in either compose file so both stacks inherit it: this
+# repo's docker-compose.yml and KTPInfrastructure's docker-compose.local.yml
+# (which mounts its OWN config/local/config.yaml over /app/config.yaml and would
+# otherwise need a coordinated cross-repo edit just to switch a local feature on).
+# Either compose can still override any of these with `environment:`.
+#
+# Production does NOT inherit this — it sets stats_db in its own
+# config/online/config.yaml with a real SELECT-only user.
+ENV HUD_STATSDB_ENABLED=true     HUD_STATSDB_HOST=127.0.0.1     HUD_STATSDB_PORT=3306     HUD_STATSDB_USER=hlstatsx     HUD_STATSDB_PASSWORD=ktptest     HUD_STATSDB_DATABASE=hlstatsx
+
 COPY data-server/start.sh /start.sh
 RUN chmod +x /start.sh
 

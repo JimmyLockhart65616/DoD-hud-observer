@@ -33,19 +33,10 @@ services:
       # dev-shared config/local/config.yaml (whose frontend.origin stays :3000 for
       # the host `npm run backend` workflow).
       HUD_FRONTEND_ORIGIN: https://localhost
-      # Point the read-only stats layer at this container's own MySQL. The
-      # committed config/local/config.yaml keeps stats_db.enabled=false for the
-      # host `npm run backend` workflow (no MySQL on a laptop), so it is enabled
-      # here by env instead of editing that shared file. Credentials match the
-      # ones data-server/start.sh creates on first boot.
-      #
-      # The database is EMPTY until you seed it — see scripts/seed-statsdb.sh.
-      HUD_STATSDB_ENABLED: "true"
-      HUD_STATSDB_HOST: 127.0.0.1
-      HUD_STATSDB_PORT: "3306"
-      HUD_STATSDB_USER: hlstatsx
-      HUD_STATSDB_PASSWORD: ktptest
-      HUD_STATSDB_DATABASE: hlstatsx
+      # The read-only hlstatsx layer (stats_db) is configured by ENV defaults in
+      # data-server/Dockerfile, so this stack and KTPInfrastructure's local stack
+      # both inherit it without either compose file needing to know. Override
+      # HUD_STATSDB_* here only to point at a different database.
     ports:
       - "443:443"
       - "80:80"

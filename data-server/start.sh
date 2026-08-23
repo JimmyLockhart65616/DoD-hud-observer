@@ -5,34 +5,73 @@
 set -e
 
 # ============================================
-# MySQL initialization (first run only)
+# MySQL initialization + hlstatsx seeding
 # ============================================
+# Two separate concerns, deliberately not sharing a gate:
+#
+#   1. `mysqld --initialize-insecure` is genuinely first-run-only — it needs an
+#      empty data directory.
+#   2. Creating the hlstatsx database, its user, the schema and the fixture is
+#      IDEMPOTENT and runs on EVERY boot.
+#
+# They used to share the first-run gate, which was a real bug: the `mysql-data`
+# volume outlives `docker compose down`, so on any subsequent `up` the whole
+# block was skipped and the hlstatsx database was never created at all. The
+# stats endpoints then answered 503 forever on a stack that looked healthy, and
+# the only clue was an "Unknown database" error nobody was reading.
 if [ ! -d "/var/lib/mysql/mysql" ]; then
-    echo "[data-server] First run — initializing MySQL..."
+    echo "[data-server] First run — initializing MySQL data directory..."
     mysqld --initialize-insecure --user=mysql 2>&1
+fi
 
-    # Start MySQL temporarily to create HLStatsX database
-    mysqld --user=mysql &
-    MYSQL_PID=$!
+# Bring MySQL up briefly so we can create/seed, then shut it down and let
+# supervisord own it for the rest of the container's life.
+mysqld --user=mysql &
+MYSQL_PID=$!
+for i in $(seq 1 60); do
+    if mysqladmin ping --silent 2>/dev/null; then break; fi
+    sleep 1
+done
 
-    # Wait for MySQL to be ready
-    for i in $(seq 1 30); do
-        if mysqladmin ping --silent 2>/dev/null; then
-            break
-        fi
-        sleep 1
-    done
-
+if mysqladmin ping --silent 2>/dev/null; then
+    # The backend connects as this user. SELECT-only on purpose: this database is
+    # written exclusively by the HLStatsX Perl daemon in production, and the HUD
+    # backend has no business writing to it in any environment. Granting more
+    # locally would let a mistake pass here and fail in prod.
     mysql -u root <<-EOF
         CREATE DATABASE IF NOT EXISTS hlstatsx;
         CREATE USER IF NOT EXISTS 'hlstatsx'@'localhost' IDENTIFIED BY 'ktptest';
-        GRANT ALL PRIVILEGES ON hlstatsx.* TO 'hlstatsx'@'localhost';
+        CREATE USER IF NOT EXISTS 'hlstatsx'@'127.0.0.1' IDENTIFIED BY 'ktptest';
+        GRANT SELECT ON hlstatsx.* TO 'hlstatsx'@'localhost';
+        GRANT SELECT ON hlstatsx.* TO 'hlstatsx'@'127.0.0.1';
         FLUSH PRIVILEGES;
 EOF
-    echo "[data-server] MySQL initialized. Database: hlstatsx"
+
+    # Schema then fixture, in filename order. Both are idempotent
+    # (CREATE TABLE IF NOT EXISTS / INSERT IGNORE), so this is safe every boot
+    # and picks up a newly added file without needing the volume wiped.
+    #
+    # This is a MINIMAL LOCAL SUBSET, not the production schema — see
+    # data-server/sql/01-schema.sql. Production is owned by KTPHLStatsX's own
+    # numbered migrations and must never be pointed at these files.
+    if [ -d /app/data-server/sql ]; then
+        for f in /app/data-server/sql/*.sql; do
+            [ -f "$f" ] || continue
+            echo "[data-server] applying $(basename "$f")"
+            if ! mysql -u root hlstatsx < "$f"; then
+                # Non-fatal: a broken fixture must not stop the broadcast
+                # overlay from starting. The stats routes degrade to 503.
+                echo "[data-server] WARNING: $(basename "$f") failed — /api/stats/* will be incomplete"
+            fi
+        done
+        echo "[data-server] hlstatsx ready: $(mysql -N -u root hlstatsx -e 'SELECT COUNT(*) FROM ktp_match_stats' 2>/dev/null || echo '?') match-stat rows"
+    fi
 
     mysqladmin shutdown
     wait $MYSQL_PID 2>/dev/null || true
+else
+    echo "[data-server] WARNING: MySQL did not come up — skipping hlstatsx seeding"
+    kill $MYSQL_PID 2>/dev/null || true
 fi
 
 # ============================================
