@@ -24,6 +24,28 @@ export interface Config {
         steam_api_key: string;
     };
     hltv_sync: HltvSyncConfig;
+    stats_db: StatsDbConfig;
+}
+
+/**
+ * Read-only connection to the KTPHLStatsX `hlstatsx` MySQL database.
+ *
+ * Disabled by default: the database binds 127.0.0.1 on the data server, so it
+ * simply is not there on a dev laptop. Production runs the backend on that same
+ * host, which is why this is a local connection and not a tunnel.
+ *
+ * The user must hold SELECT and nothing else — this database is the league's
+ * system of record and is written only by the HLStatsX Perl daemon.
+ */
+export interface StatsDbConfig {
+    enabled: boolean;
+    host: string;
+    port: number;
+    user: string;
+    password: string;
+    database: string;
+    connection_limit: number;
+    timeout_ms: number;
 }
 
 // Resolved relative to the repo root from backend/src or backend/lib. The
@@ -61,6 +83,20 @@ function loadConfig(): Config {
             steam_api_key: file.auth?.steam_api_key ?? '',
         },
         hltv_sync: loadHltvSync(file.hltv_sync),
+        stats_db: loadStatsDb(file.stats_db),
+    };
+}
+
+function loadStatsDb(file: any): StatsDbConfig {
+    return {
+        enabled:          bool(process.env.HUD_STATSDB_ENABLED,   file?.enabled  ?? false),
+        host:             process.env.HUD_STATSDB_HOST         ?? file?.host     ?? '127.0.0.1',
+        port:             int(process.env.HUD_STATSDB_PORT,        file?.port     ?? 3306),
+        user:             process.env.HUD_STATSDB_USER         ?? file?.user     ?? '',
+        password:         process.env.HUD_STATSDB_PASSWORD     ?? file?.password ?? '',
+        database:         process.env.HUD_STATSDB_DATABASE     ?? file?.database ?? 'hlstatsx',
+        connection_limit: int(process.env.HUD_STATSDB_POOL,        file?.connection_limit ?? 4),
+        timeout_ms:       int(process.env.HUD_STATSDB_TIMEOUT_MS,  file?.timeout_ms ?? 5000),
     };
 }
 

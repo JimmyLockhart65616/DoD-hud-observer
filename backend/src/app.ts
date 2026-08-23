@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import cors from 'cors';
 import config from './config';
+import * as statsDb from './statsdb/statsDb';
 import { MatchRecorder } from './handler/matchRecorder';
 import { MetricsCollector } from './handler/metrics';
 import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './handler/ingest';
@@ -111,6 +112,69 @@ app.get('/api/matches/:matchId/events', (req, res) => {
         return;
     }
     res.json({ events });
+});
+
+// ---------------------------------------------------------------------------
+// Historical stats, read-only, from the KTPHLStatsX `hlstatsx` MySQL database.
+//
+// Additive and entirely separate from the live overlay path: nothing here
+// touches the socket feed, the HLTV delay buffer, the per-server state cache or
+// MatchRecorder. It answers 503 when `stats_db.enabled` is false, which is the
+// default and the case on every dev laptop — the database binds 127.0.0.1 on
+// the data server, where production also runs this backend.
+//
+// These routes are ungated like the rest of /api/*. They expose per-player match
+// statistics that are already public on the league site, and no credential,
+// address or private coordinate is returned. Position samples deliberately have
+// no route: the operator's standing direction is that individual coordinates and
+// movement histories stay private.
+function statsEnabledOr503(res: any): boolean {
+    if (statsDb.isEnabled()) return true;
+    res.status(503).json({ error: 'stats database not configured on this instance' });
+    return false;
+}
+
+// A failed query must not take the process down — this backend's first duty is
+// the live broadcast overlay, and a stats read is never worth that.
+async function statsRoute(res: any, work: () => Promise<unknown>): Promise<void> {
+    try {
+        res.json(await work());
+    } catch (err) {
+        console.error('[statsdb] query failed:', (err as Error).message);
+        res.status(502).json({ error: 'stats query failed' });
+    }
+}
+
+app.get('/api/stats/matches', (req, res) => {
+    if (!statsEnabledOr503(res)) return;
+    const days  = Math.min(365, Math.max(1, parseInt(String(req.query.days  ?? '30'), 10) || 30));
+    const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? '50'), 10) || 50));
+    statsRoute(res, async () => ({ matches: await statsDb.recentMatches(days, limit) }));
+});
+
+// `half = 0` rows are the stored match TOTAL, not a third half. Passed through
+// as-is; a caller that sums every row double-counts the whole board.
+app.get('/api/stats/matches/:matchId', (req, res) => {
+    if (!statsEnabledOr503(res)) return;
+    statsRoute(res, async () => ({ rows: await statsDb.matchPlayerStats(req.params.matchId) }));
+});
+
+app.get('/api/stats/players/:steamId', (req, res) => {
+    if (!statsEnabledOr503(res)) return;
+    statsRoute(res, async () => {
+        const career = await statsDb.playerCareer(req.params.steamId);
+        if (!career) {
+            res.status(404).json({ error: 'no recorded matches for that player' });
+            return undefined as unknown as object;
+        }
+        return career;
+    });
+});
+
+// Static per-flag world coordinates for a map (2D — dodx exposes no CP_origin_z).
+app.get('/api/stats/maps/:mapName/flags', (req, res) => {
+    if (!statsEnabledOr503(res)) return;
+    statsRoute(res, async () => ({ flags: await statsDb.flagPositions(req.params.mapName) }));
 });
 
 // HLTV sync: status, manual resample, calibration, drift push from hltv-api.py.

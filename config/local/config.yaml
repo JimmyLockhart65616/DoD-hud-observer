@@ -77,3 +77,25 @@ hltv_sync:
   api_auth_key: ""
   api_timeout_ms: 3000
   servers: {}
+
+# Read-only connection to the KTPHLStatsX `hlstatsx` MySQL database (the league's
+# stats system of record, written only by the HLStatsX Perl daemon).
+#
+# OFF here on purpose: that database binds 127.0.0.1 on the data server, so it
+# does not exist on a dev laptop and every /api/stats/* route answers 503.
+# Production runs this backend on the same host, so it enables this with a
+# SELECT-only user via config/online/config.yaml. Grant SELECT and nothing more —
+# nothing in this repo may write to that database.
+#
+#   HUD_STATSDB_ENABLED    HUD_STATSDB_HOST     HUD_STATSDB_PORT
+#   HUD_STATSDB_USER       HUD_STATSDB_PASSWORD HUD_STATSDB_DATABASE
+#   HUD_STATSDB_POOL       HUD_STATSDB_TIMEOUT_MS
+stats_db:
+  enabled: false
+  host: 127.0.0.1
+  port: 3306
+  user: ""
+  password: ""
+  database: hlstatsx
+  connection_limit: 4
+  timeout_ms: 5000
