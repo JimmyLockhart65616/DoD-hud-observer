@@ -89,11 +89,14 @@ per client.
   browser won't hand off the protocol.
 - **`hltv_connect` is NOT `hltv_sync`.** They look alike and are not:
   `hltv_sync.servers` is the **RCON** endpoint this backend polls for the
-  broadcast clock — `127.0.0.1` (backend and proxies share the data server),
-  carrying rcon passwords, listing only the servers we clock-sync (5 of 24).
+  broadcast clock — `127.0.0.1` (backend and proxies share the data server) and
+  carrying rcon passwords, so it is operator-owned and gitignored.
   `hltv_connect` is the **public** address a DoD client dials, holds no secret,
   and must cover every server on the picker whether we sync its clock or not.
   Reusing either for the other's job gives a dead link or a leaked password.
+  (Both cover all 24 servers as of 2026-08-23; `hltv_sync` was 5 before that,
+  the rest running on the fixed `fallback_delay_seconds` instead of a measured
+  clock. All 24 proxies share one adminpassword.)
 - All 24 proxies run on the data server, one per game server, allocated in
   per-region blocks of five: Atlanta 27020, Dallas 27025, Denver 27030, New York
   27035, Chicago 27040 (Chicago has four). `config/online/config.yaml.example`

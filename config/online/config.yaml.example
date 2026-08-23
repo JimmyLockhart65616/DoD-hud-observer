@@ -43,7 +43,12 @@ auth:
 # value the plugin sends in X-Server-Hostname) with the local HLTV proxy's
 # rcon endpoint. Port convention: HLTV port = game port + 5005.
 #
-# rcon_password matches the HLTV adminpassword in /home/hltvserver/hlds/hltv.cfg.
+# Ports are allocated in per-region blocks of five on the data server (Atlanta
+# 27020, Dallas 27025, Denver 27030, New York 27035, Chicago 27040 — Chicago has
+# four), NOT game port + 5005, which only coincidentally holds for Atlanta.
+#
+# rcon_password matches the HLTV adminpassword in each hltv-<port>.cfg; all 24
+# instances share one value.
 # Do NOT commit the real value — substitute before placing this file on the
 # data server, or set HUD_HLTV_RCON_PASSWORD via systemd Environment= and pull
 # it through env-substitution at boot.
@@ -70,12 +75,30 @@ hltv_sync:
   api_auth_key: REPLACE_WITH_HLTV_API_AUTH_KEY
   api_timeout_ms: 3000
   servers:
-    "KTP - Atlanta 1":  { hltv_addr: 127.0.0.1, hltv_port: 27020, rcon_password: REPLACE_WITH_HLTV_RCON }
-    "KTP - Dallas 1":   { hltv_addr: 127.0.0.1, hltv_port: 27025, rcon_password: REPLACE_WITH_HLTV_RCON }
-    "KTP - Denver 5":   { hltv_addr: 127.0.0.1, hltv_port: 27034, rcon_password: REPLACE_WITH_HLTV_RCON }
-    "KTP - New York 1": { hltv_addr: 127.0.0.1, hltv_port: 27035, rcon_password: REPLACE_WITH_HLTV_RCON }
-    "KTP - Chicago 1":  { hltv_addr: 127.0.0.1, hltv_port: 27040, rcon_password: REPLACE_WITH_HLTV_RCON }
-    # Add remaining servers as canary expands. Port = game port + 5005.
+    "KTP - Atlanta 1":   { hltv_addr: 127.0.0.1, hltv_port: 27020, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Atlanta 2":   { hltv_addr: 127.0.0.1, hltv_port: 27021, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Atlanta 3":   { hltv_addr: 127.0.0.1, hltv_port: 27022, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Atlanta 4":   { hltv_addr: 127.0.0.1, hltv_port: 27023, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Atlanta 5":   { hltv_addr: 127.0.0.1, hltv_port: 27024, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Dallas 1":    { hltv_addr: 127.0.0.1, hltv_port: 27025, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Dallas 2":    { hltv_addr: 127.0.0.1, hltv_port: 27026, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Dallas 3":    { hltv_addr: 127.0.0.1, hltv_port: 27027, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Dallas 4":    { hltv_addr: 127.0.0.1, hltv_port: 27028, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Dallas 5":    { hltv_addr: 127.0.0.1, hltv_port: 27029, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Denver 1":    { hltv_addr: 127.0.0.1, hltv_port: 27030, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Denver 2":    { hltv_addr: 127.0.0.1, hltv_port: 27031, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Denver 3":    { hltv_addr: 127.0.0.1, hltv_port: 27032, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Denver 4":    { hltv_addr: 127.0.0.1, hltv_port: 27033, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Denver 5":    { hltv_addr: 127.0.0.1, hltv_port: 27034, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - New York 1":  { hltv_addr: 127.0.0.1, hltv_port: 27035, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - New York 2":  { hltv_addr: 127.0.0.1, hltv_port: 27036, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - New York 3":  { hltv_addr: 127.0.0.1, hltv_port: 27037, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - New York 4":  { hltv_addr: 127.0.0.1, hltv_port: 27038, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - New York 5":  { hltv_addr: 127.0.0.1, hltv_port: 27039, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Chicago 1":   { hltv_addr: 127.0.0.1, hltv_port: 27040, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Chicago 2":   { hltv_addr: 127.0.0.1, hltv_port: 27041, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Chicago 3":   { hltv_addr: 127.0.0.1, hltv_port: 27042, rcon_password: REPLACE_WITH_HLTV_RCON }
+    "KTP - Chicago 4":   { hltv_addr: 127.0.0.1, hltv_port: 27043, rcon_password: REPLACE_WITH_HLTV_RCON }
 
 # Public HLTV proxy addresses, surfaced as "spectate" links on the /watch picker.
 #
