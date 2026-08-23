@@ -535,6 +535,30 @@ is an observation, the amount is a model.
   identity) — step-off / enemy-contest are `flag_cap_stopped`
   / `flag_cap_contested`, unattributed.
 
+- **Candidacy is decided by TWO gates, and the count-drop is neither.** The drop
+  only ever proves *somebody* left the zone. A killer is queued only if, at the
+  moment of the kill, (1) the victim's team is capturing that point per a **live**
+  `CA_is_capturing`/`CA_capturing_team` read — never `g_flag_capping_team[]`,
+  which the 0.5s zone poll writes and which used to drop every kill in the first
+  half-second of a capture — and (2) the victim died within `CAP_BREAK_RADIUS` of
+  it. Without the radius gate a kill anywhere on the map entered the FIFO and
+  could steal a break caused by a real on-point death seconds later; such a
+  credit is always wrong, since an off-point death cannot itself decrement the
+  zone count. The closest qualifying point wins, because 15 pool maps have
+  overlapping radii. Both defects were found independently by Drew in
+  `stats_logging.sma` (KTPAMXX #24/#25), which runs the same design against the
+  league stats DB — keep the two in step or the overlay and the DB will disagree
+  about the same play.
+
+- **`CAP_BREAK_RADIUS` is 768 and is measured, not chosen.** The capture zone is
+  a brush, so its real extent comes out of BSP lump 14 —
+  `scripts/cap-radius-check.py <radius> <map.bsp>...` reports the furthest
+  horizontal corner of each `dod_capture_area` from its CP. Seven pool maps
+  exceed the 512 that `stats_logging` uses (peak `dod_saints2_b3e` 669), and a
+  radius under the zone's own reach loses genuine breaks silently. Re-run the
+  script when a map joins the pool. `dod_jagd` measures 5646 — one enormous
+  trigger volume, unservable by any fixed radius, and out of pool.
+
 #### Flag ownership resets (map start / round restart)
 
 `flags_init` is a **full-state snapshot**, re-emitted throughout the map — not once

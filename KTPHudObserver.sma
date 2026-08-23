@@ -569,6 +569,52 @@ new Float:g_flag_emit_armed_at[MAX_FLAGS];  // gametime the emission was armed, 
 #define BREAK_QUEUE_MAX     6   // concurrent pending killers per flag (a nade
                                 // wipe can drop a full 6v6 side in one window)
 #define BREAK_WINDOW_POLLS  5   // confirm window in polls (~2.5s @ ZONE_POLL_INTERVAL)
+
+// Horizontal units the victim must be within, of the point their team is
+// capturing, before their killer is queued as a break candidate. The area API
+// exposes only AGGREGATE team counts, never who is in the zone, so proximity is
+// the only per-player discriminator available in extension mode.
+//
+// Without it the count-drop confirms that SOMEBODY left the zone, never that
+// this victim was in it — and the FIFO hands the credit to whoever was queued
+// first, so a kill anywhere on the map could steal a break caused by a real
+// on-point death seconds later. Such a credit is always wrong, since an
+// off-point death cannot itself decrement the zone count.
+//
+// 768 is MEASURED, not chosen. stats_logging.sma 1.15.5 (KTPAMXX PR #24) uses
+// 512 for the same purpose, validated on dod_anzio only, and its author flagged
+// the value provisional pending more maps. Anzio turns out to be one of the
+// roomiest cases, so 512 does not generalise.
+//
+// The capture zone is a brush entity, so its true extent is readable straight
+// out of the BSP — `scripts/cap-radius-check.py` walks lump 14 (MODELS) for each
+// `dod_capture_area`'s model and measures the furthest horizontal corner from
+// its control point's origin. Across all 27 pool BSPs (2026-08-22):
+//
+//     dod_anzio         368     <- the only map 512 was validated against
+//     dod_avalanche     517  }
+//     dod_railyard_s9d  579  }
+//     dod_armory_b6     586  }  SEVEN pool maps exceed 512, including
+//     dod_halle         586  }  three of the eight most-played
+//     dod_thunder2      591  }
+//     dod_merderet      627  }
+//     dod_saints2_b3e   669     <- pool maximum
+//
+// A radius under the zone's own reach rejects genuine on-point deaths and loses
+// those breaks silently, which is the failure mode this gate exists to avoid
+// swapping one bug for another. 768 clears the pool maximum by ~15%.
+//
+// dod_jagd measures 5646 — its documents objective is one enormous trigger
+// volume, and no sane fixed radius serves it. It is NOT in ktp_maps.ini, so it
+// is out of scope; a map like it that entered the pool would need the per-CP
+// extent read at runtime, which extension mode cannot do (no pev, and the CA_
+// enum exposes no bounds).
+//
+// Six maps have two CPs closer together than 2*768, so their radii overlap;
+// that is why the scan below takes the CLOSEST qualifying point rather than the
+// first. Tightest is dod_lennon2/lennon5_b1 at 685.
+#define CAP_BREAK_RADIUS    768.0
+#define CAP_BREAK_RADIUS_SQ (CAP_BREAK_RADIUS * CAP_BREAK_RADIUS)
 new g_break_q_killer[MAX_FLAGS][BREAK_QUEUE_MAX];  // FIFO of killer slots
 new g_break_q_ttl[MAX_FLAGS][BREAK_QUEUE_MAX];     // polls left before expiry
 new g_break_q_count[MAX_FLAGS];                    // queued candidates
@@ -2444,19 +2490,82 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
         emit_player_score(assist_ids[i]);
     }
 
-    // Cap-break candidate. If the victim's team was actively capping a flag, an
-    // enemy kill MAY have removed a capper from the point. Queue the killer;
-    // task_poll_zones credits queued killers as the capping team's in-zone count
-    // drops below the baseline — i.e. the victim was on the point, not merely on
-    // the capping team. The engine applies the death decrement 0.2–2.5s late
-    // (prod-measured), hence the queue + window instead of a one-shot snapshot.
-    // dod_control_point_captured clears the queue if the cap then succeeds
-    // (a completed cap is not a break).
+    // Cap-break candidate. If the victim died ON a point their team is actively
+    // capturing, an enemy kill MAY have removed a capper from it. Queue the
+    // killer; task_poll_zones credits queued killers as the capping team's
+    // in-zone count drops below the baseline. The engine applies the death
+    // decrement 0.2–2.5s late (prod-measured), hence the queue + window instead
+    // of a one-shot snapshot. dod_control_point_captured clears the queue if the
+    // cap then succeeds (a completed cap is not a break).
+    //
+    // TWO gates decide candidacy, and the count-drop is NOT one of them:
+    //   1. the victim's team is capturing this point RIGHT NOW (live area read)
+    //   2. the victim died within CAP_BREAK_RADIUS of it
+    // The drop only ever proves that SOMEBODY left the zone. This comment used
+    // to claim the drop established "the victim was on the point, not merely on
+    // the capping team" — it never did, and the gap was a live misattribution
+    // bug until the radius gate below was added.
     if (killer != victim && !TK && is_user_connected(killer)) {
         new vt = g_player_team[victim];
         if (vt == TEAM_ALLIES || vt == TEAM_AXIS) {
-            for (new f = 0; f < g_flag_count && f < MAX_FLAGS; f++) {
-                if (g_flag_capping_team[f] != vt) continue;
+            // Where the victim died. Read BEFORE the flag scan: dodx sources it
+            // from pEdict->v.origin (never the pdata origin fields, which are
+            // misaligned), and client_death fires from the Damage hook before
+            // CDODPlayer::Killed(), so this is still the death position.
+            //
+            // Fail CLOSED if it cannot be read — without a position there is no
+            // way to tell an on-point death from one across the map, and a
+            // credit given to the wrong player is worse than a break not
+            // counted. In practice the native only fails for a victim who is no
+            // longer ingame, which this path does not otherwise reach.
+            new Float:vorigin[3];
+            new bool:have_origin = (dodx_get_user_origin(victim, vorigin) != 0);
+
+            // Pick the CLOSEST point the victim's team is actively capturing,
+            // not merely the first — two simultaneous caps are ordinary, and
+            // first-match would attribute to whichever has the lower cp_index.
+            new best_f = -1;
+            new Float:best_d2 = 0.0;
+
+            for (new f = 0; have_origin && f < g_flag_count && f < MAX_FLAGS; f++) {
+                new dxs = g_cp_dodx_of_dll[f];
+
+                // LIVE area read, not g_flag_capping_team[] — that is only
+                // written by the zone poll, so it lags a capture by up to
+                // ZONE_POLL_INTERVAL (0.5s) and a kill inside that window used
+                // to queue nothing at all. Same defect Drew fixed in
+                // stats_logging at 0.2s; ours was 2.5x wider.
+                if (!dodx_area_get_data(dxs, CA_is_capturing)) continue;
+                if (dodx_area_get_data(dxs, CA_capturing_team) != vt) continue;
+
+                new Float:cx = float(dodx_objective_get_data(dxs, CP_origin_x));
+                new Float:cy = float(dodx_objective_get_data(dxs, CP_origin_y));
+
+                // An exact (0,0) means dodx never populated this CP's origin
+                // rather than a point genuinely at the world centre (the values
+                // are integer-valued floats, so the compare is exact). Fail OPEN
+                // there: silently zeroing cap_breaks fleet-wide would be far
+                // more visible than the over-crediting it replaces.
+                //
+                // Scored AT the radius, not 0.0, so it ranks strictly behind
+                // every point with a real origin inside the radius — otherwise
+                // one unpopulated CP would win "closest" against a point the
+                // victim actually died on.
+                new Float:d2;
+                if (cx == 0.0 && cy == 0.0) {
+                    d2 = CAP_BREAK_RADIUS_SQ;
+                } else {
+                    new Float:ox = vorigin[0] - cx;
+                    new Float:oy = vorigin[1] - cy;
+                    d2 = ox * ox + oy * oy;
+                    if (d2 > CAP_BREAK_RADIUS_SQ) continue;
+                }
+
+                if (best_f < 0 || d2 < best_d2) { best_f = f; best_d2 = d2; }
+            }
+
+            if (best_f >= 0) {
+                new f = best_f;
                 if (g_break_q_count[f] > 0 && g_break_team[f] != vt) {
                     // Capping team flipped while the previous team's queue was
                     // still draining. The flip means the old cap already
@@ -2471,8 +2580,8 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
                     // cache corrects that); the cache misses a sub-poll
                     // voluntary walk-off (the fresh read corrects that). The
                     // lower of the two never over-credits.
-                    // `f` is a DLL cp_index (g_flag_capping_team is DLL-indexed),
-                    // so the dodx area read must go through the remap.
+                    // `f` is a DLL cp_index, so the dodx area read must go
+                    // through the remap.
                     new fresh = dodx_area_get_data(g_cp_dodx_of_dll[f], (vt == TEAM_ALLIES) ? CA_num_allies : CA_num_axis);
                     new cached = (vt == TEAM_ALLIES) ? g_flag_prev_allies_count[f] : g_flag_prev_axis_count[f];
                     g_break_team[f]     = vt;
@@ -2484,7 +2593,6 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
                     g_break_q_ttl[f][qi]    = BREAK_WINDOW_POLLS;
                     g_break_q_count[f]++;
                 }
-                break;  // attribute at most one flag per kill (first active cap by victim's team)
             }
         }
     }
