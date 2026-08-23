@@ -15,6 +15,31 @@ class Welcome extends React.Component {
                             <li><a href="/help">Viewer Guide</a> — how to set up and use the HUD in OBS</li>
                         </ul>
                         <h5 style={{ marginTop: '32px' }}>
+                            What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-08-23</small>
+                        </h5>
+                        <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>
+                            <li>
+                                The HUD is now live on <strong>every official KTP server</strong> — all 24, across
+                                Atlanta, Dallas, Denver, New York and Chicago. Until today it ran on five. Any match
+                                played on a KTP server can now be put on stream and will produce a post-match stats
+                                board, without anyone having to move it to a particular server first
+                            </li>
+                            <li>
+                                Flag ownership is no longer overwritten by a bad reading. Every 30 seconds the overlay
+                                re-checked who held each flag, and on <code>dod_donner</code> and{' '}
+                                <code>dod_saints2</code> that check was unreliable — about half the time it flipped a
+                                flag to the wrong team, and the flag bar then stayed wrong until somebody captured that
+                                flag again. The overlay now trusts the captures it has actually watched happen
+                            </li>
+                            <li>
+                                Reloading the overlay mid-match no longer shows the whole server carrying no grenades.
+                                Grenade counts only arrive live, so they are missing from the catch-up the overlay gets
+                                when it reconnects — that gap was being drawn as an explicit zero. An unknown count now
+                                shows no grenade pip at all, while a player genuinely out of grenades still shows the
+                                dimmed one
+                            </li>
+                        </ul>
+                        <h5 style={{ marginTop: '32px' }}>
                             What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-08-17</small>
                         </h5>
                         <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>
