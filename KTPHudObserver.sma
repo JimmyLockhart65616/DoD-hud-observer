@@ -91,7 +91,7 @@ native ktp_is_match_active();
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.7.0"
+#define VERSION "2.8.0"
 #define AUTHOR  "cadaver"
 
 #define MAX_PLAYERS     32
@@ -2885,23 +2885,45 @@ public task_poll_player_state() {
         // thing still to be appended after this point — keep the arithmetic here
         // honest when adding another trailing block, rather than guessing:
         //
-        //     one more player entry (pbuf)                       192
+        //     one more player entry (pbuf)                       224
         //     trailing waves block   (wbuf, worst case 82)         96
         //     trailing scoring block (sbuf, worst case 69)         96
         //     post_event envelope prefix (full match_id + map)    165
         //     slack                                                27
         //                                                        ----
-        //                                                         576
+        //                                                         608
+        //
+        // pbuf grew 192 -> 224 for the minimap position pair. Worst case is a
+        // GoldSrc world corner: `,"x":-16384,"y":-16384` is 22 bytes, taken as
+        // 32 so the entry keeps a round boundary and some headroom.
         //
         // 6v6 runs ~1380 bytes, 39% of the resulting 3520 threshold; a 32-slot
         // pub truncates at ~29 whole player rows instead of ~30. Truncation is
         // always on a whole entry, so the JSON stays valid either way.
-        if (strlen(ps_json) > BUFFER_SIZE - 576) break;
+        if (strlen(ps_json) > BUFFER_SIZE - 608) break;
 
-        static pbuf[192];
+        // Minimap position. dodx_get_user_origin reads pEdict->v.origin, which
+        // is extension-mode safe and is the SAME source the cap-break scan uses
+        // -- never the pdata origin fields, which are misaligned.
+        //
+        // Emitted as INTEGERS: sub-unit precision is meaningless at minimap
+        // scale (a whole DoD map is a few thousand units across a panel a few
+        // hundred pixels wide) and the float form would cost bytes in a buffer
+        // that is already budgeted to the byte.
+        //
+        // A failed read sends the pair as 0,0 -- the frontend treats an exact
+        // origin as "unknown" and hides that marker rather than parking every
+        // unreadable player on top of each other at the world centre. The native
+        // only fails for a player who is not ingame, which this loop skips.
+        new Float:porigin[3];
+        new bool:have_pos = (dodx_get_user_origin(id, porigin) != 0);
+
+        static pbuf[224];
         formatex(pbuf, charsmax(pbuf),
-            "%s{^"user_id^":^"%s^",^"weapon^":^"%s^",^"nades^":%d,^"health^":%d,^"prone_state^":^"%s^"}",
-            first ? "" : ",", steamid, weapon, nades, get_user_health(id), prone_str);
+            "%s{^"user_id^":^"%s^",^"weapon^":^"%s^",^"nades^":%d,^"health^":%d,^"prone_state^":^"%s^",^"x^":%d,^"y^":%d}",
+            first ? "" : ",", steamid, weapon, nades, get_user_health(id), prone_str,
+            have_pos ? floatround(porigin[0]) : 0,
+            have_pos ? floatround(porigin[1]) : 0);
         add(ps_json, charsmax(ps_json), pbuf);
         first = false;
     }
@@ -3370,7 +3392,17 @@ stock do_flags_init(const reason[] = "tick") {
     if (g_flag_count <= 0) return;
 
     static json[BUFFER_SIZE];
-    static tmp[128];
+    // 128 was enough before the minimap position pair; it is NOT now. Worst case
+    // is 135 bytes:
+    //
+    //     ,{"flag_id":NN,"flag_name":"<64>","owner":"neutral","x":-16384,"y":-16384}
+    //      1 + 11 + 2 + 14 + 64 + 11 + 7 + 7 + 6 + 5 + 6 + 1  =  135
+    //
+    // formatex truncates rather than corrupting memory, so the symptom would
+    // have been a silently malformed flags_init on maps with long CP names --
+    // the frontend drops the whole snapshot and the flag bar goes stale, with no
+    // error anywhere. 192 leaves room for a longer name token.
+    static tmp[192];
     formatex(json, charsmax(json),
         "{^"event^":^"flags_init^",^"reason^":^"%s^",^"flags^":[", reason);
 
@@ -3439,9 +3471,22 @@ stock do_flags_init(const reason[] = "tick") {
         if (flag_name[0] == '^0') formatex(flag_name, charsmax(flag_name), "flag_%d", i);
         copy(g_flag_name_cache[i], charsmax(g_flag_name_cache[]), flag_name);
 
+        // World position, for the minimap. dodx reads these off pEdict->v.origin
+        // (moduleconfig.cpp), NOT the misaligned pdata origin fields -- the fix
+        // our own feedback_dodx_pdata_origin note called for. 2D only: dodx
+        // exposes no CP_origin_z, which is fine for a top-down view.
+        //
+        // An exact (0,0) means dodx never populated this CP rather than a point
+        // genuinely at the world centre -- the same test the cap-break radius
+        // fallback makes, and safe for the same reason: these are integer-valued
+        // floats, so the comparison is exact. The frontend hides such a flag
+        // rather than stacking every unpopulated point on the origin.
+        new cp_x = dodx_objective_get_data(dx, CP_origin_x);
+        new cp_y = dodx_objective_get_data(dx, CP_origin_y);
+
         formatex(tmp, charsmax(tmp),
-            "%s{^"flag_id^":%d,^"flag_name^":^"%s^",^"owner^":^"%s^"}",
-            i > 0 ? "," : "", i, flag_name, owner_str);
+            "%s{^"flag_id^":%d,^"flag_name^":^"%s^",^"owner^":^"%s^",^"x^":%d,^"y^":%d}",
+            i > 0 ? "," : "", i, flag_name, owner_str, cp_x, cp_y);
         add(json, charsmax(json), tmp);
     }
     add(json, charsmax(json), "]}");

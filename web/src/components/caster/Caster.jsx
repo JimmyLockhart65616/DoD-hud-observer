@@ -20,6 +20,8 @@ import { className as dodClassName } from '../core/dodClasses';
 import { getWeaponIcon } from '../screen/resources/weaponIcons';
 import CareerPanel from './CareerPanel';
 import MomentsPanel from './MomentsPanel';
+import Minimap from './Minimap';
+import useMinimapToggle from './useMinimapToggle';
 
 // Screen.css owns the .stats-board-* table styling and .flag-* strip that this
 // page reuses. There's no code splitting, so it's already in the bundle — the
@@ -114,6 +116,7 @@ const ScopeBar = ({ scope, setScope, half, recordedHalves, carryMissing }) => (
         >
             MATCH
         </button>
+
 
         {carryMissing && (
             <span
@@ -245,6 +248,7 @@ function Caster() {
     const urlParams = new URLSearchParams(window.location.search);
     const serverName = urlParams.get('server');
 
+    const { enabled: minimapOn, toggle: toggleMinimap, pinned: minimapPinned } = useMinimapToggle();
     const alliesPlayers = useHudStore(s => s.allies_players);
     const axisPlayers = useHudStore(s => s.axis_players);
     const alliesScore = useHudStore(s => s.allies_score);
@@ -417,6 +421,15 @@ function Caster() {
                     recordedHalves={recordedHalves}
                     carryMissing={carryMissing}
                 />
+                {!minimapPinned && (
+                    <button
+                        className={`caster-chip${minimapOn ? ' caster-chip-on' : ''}`}
+                        onClick={toggleMinimap}
+                        title="Show or hide the schematic minimap (remembered on this machine)"
+                    >
+                        MAP
+                    </button>
+                )}
                 <button
                     className={`caster-chip caster-freeze${frozen ? ' caster-chip-frozen' : ''}`}
                     onClick={toggleFreeze}
@@ -451,6 +464,8 @@ function Caster() {
                         <Loadouts players={axisPlayers} team="axis" />
                     </div>
                 </section>
+
+                {minimapOn && <Minimap />}
 
                 <MomentsPanel />
 

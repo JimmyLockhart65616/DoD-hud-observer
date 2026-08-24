@@ -959,6 +959,49 @@ since changed their in-game name still matches. Contract pinned by
 
 ---
 
+## Minimap (`/caster`, schematic)
+
+`web/src/components/caster/Minimap.jsx` — flags and live players plotted on a
+panel, **no background image**.
+
+- **The overview approach was rejected on evidence, not preference.** GoldSrc
+  ships `overviews/<map>.bmp` + `.txt` (a mapper-authored world→image
+  transform), but only for STOCK maps. Of the 15 maps played on the league in
+  the last 120 days, **exactly two have one** — `dod_anzio` and `dod_donner`.
+  The pool runs custom and versioned builds (`dod_saints2_b3e`,
+  `dod_railyard_s9d`, `dod_anjou_a5`, …) which ship nothing, so an
+  overview-backed minimap would be dark on 13 of 15 maps. (Also note
+  `dod_flugplatz.BMP` is uppercase — a case-sensitivity trap on Linux.)
+- **The frame comes from the flags.** Control points bound the played area on
+  every map, need no per-map asset, and cannot go stale when the pool changes.
+  What is lost is terrain: this shows position relative to the objectives, not
+  walls or elevation.
+- **Y IS FLIPPED.** GoldSrc Y increases north, SVG Y increases downward —
+  plotting raw mirrors the map top-to-bottom, which looks plausible right up
+  until a caster calls a push the wrong way. Pinned by `Minimap.test.js`, along
+  with uniform (non-stretching) scale.
+- **An exact `(0,0)` means "unpopulated", not "world centre"** — for flags
+  (dodx never filled the CP) and for players (the plugin could not read the
+  origin). Both are hidden rather than stacked on one spot. Same test the
+  cap-break radius fallback makes, and exact for the same reason: the values
+  are integer-valued.
+- **`/caster` only, not `/screen`.** New and expected to be rough; the on-air
+  overlay is not where to find that out. Promote when a caster asks.
+- **Toggle**: `?minimap=0|1` → `localStorage[hud.minimap_enabled]` → default ON,
+  mirroring `teamNames.js`. A URL-pinned value renders with **no button**, since
+  a control that silently loses to the URL on reload is worse than none.
+
+**Plugin 2.8.0** adds `x`/`y` to each `player_state` row and to `flags_init`.
+The `player_state` buffer reserve moved **576 → 608** (`pbuf` 192 → 224) and
+`flags_init`'s `tmp` went **128 → 192** — the flag row worst-cases at 135 bytes
+with the pair, and `formatex` truncates silently, so the symptom would have been
+a malformed snapshot and a stale flag bar with no error anywhere.
+
+The mocker now carries real `dod_anzio` coordinates (read from production
+`ktp_flag_positions`), so the transform is exercisable without a game server.
+
+---
+
 ## Prone Shame Timer
 - `prone_change` with `state: "prone"` or `state: "deployed"` includes a `timestamp` (unix ms from server)
 - Frontend calculates elapsed prone time from that timestamp
