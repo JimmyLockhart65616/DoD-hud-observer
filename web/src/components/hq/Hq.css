@@ -537,3 +537,173 @@
   letter-spacing: 2px;
   color: var(--hq-ink-faint);
 }
+
+/* ─── Compact rows ────────────────────────────────────────────────────────── */
+
+/* Above COMPACT_THRESHOLD stations the grid gives way to a flex column: rows
+ * are no longer all the same height, since a station with a match running keeps
+ * its full-detail strip while the rest collapse to one line. Row heights come
+ * from hqLayout.js — the compact height depends on how many rows are open,
+ * which no CSS length can express. */
+.hq-strips-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Safety valve for an implausible number of concurrent matches. Scrolling on a
+ * wall display is a poor outcome; silently clipping every row, which is what
+ * this whole change exists to fix, is a worse one. */
+.hq-strips-overflow {
+  overflow-y: auto;
+}
+
+.hq-strips-compact .hq-strip {
+  flex: 0 0 auto;
+}
+
+.hq-strip-compact {
+  grid-template-columns: 46px 210px 142px 196px 68px 120px 96px 1fr;
+  gap: 10px;
+  padding: 0 14px;
+  align-items: center;
+  cursor: pointer;
+}
+
+/* An open strip inside compact mode keeps the full six-column layout; it just
+ * sits in a flex column now instead of a 1fr grid row, at the exact
+ * EXPANDED_H_PX the column arithmetic budgeted for it. */
+.hq-strips-compact .hq-strip-open {
+  overflow: hidden;
+}
+
+/* Roster rows tighten from 23px to 19px inside a compact-mode open strip. Two
+ * open strips at their natural 182px leave 22 compact rows only 23px each,
+ * below the readability floor; at 19px rows the same pair fits with room. Still
+ * a FIXED height, so a short roster cannot shift the strips below it. Keep in
+ * step with EXPANDED_H_PX in hqLayout.js. */
+.hq-strips-compact .hq-strip-open .hq-roster-row {
+  height: 19px;
+  line-height: 19px;
+}
+
+.hq-strips-compact .hq-strip-open .hq-roster-name {
+  font-size: 15px;
+}
+
+.hq-strips-compact .hq-strip-open .hq-roster-kd {
+  font-size: 14px;
+}
+
+/* The flag block is a 3-wide grid in a full strip, so a 5-flag map wraps onto a
+ * second row — 40px of content in a ~30px compact row, which the strip's own
+ * overflow:hidden then ate. One line, always, in compact. */
+.hq-strip-compact .hq-flags {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-left: 12px;
+  border-left: 1px solid var(--hq-rule);
+}
+
+.hq-strip-compact .hq-flag {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.hq-strip-compact .hq-flag-name {
+  font-size: 11px;
+}
+
+.hq-strip-compact .hq-flag-pip {
+  width: 9px;
+  height: 9px;
+}
+
+/* line-height 1.1 rather than the inherited 1.5: at these row heights the extra
+ * half-line is the difference between fitting and being cropped. */
+.hq-strip-compact > * {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  line-height: 1.1;
+}
+
+.hq-c-designator {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--hq-ink-faint);
+  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hq-c-name {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.hq-c-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  letter-spacing: 2px;
+  color: var(--hq-ink-dim);
+}
+
+.hq-c-map {
+  font-size: 16px;
+  color: var(--hq-ink-dim);
+  letter-spacing: 1px;
+}
+
+.hq-c-players {
+  font-size: 14px;
+  color: var(--hq-ink-faint);
+  letter-spacing: 1px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.hq-c-scores {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  line-height: 1;
+}
+
+/* .hq-score is 44px for the full strip's scoreboard. Inherited into a ~31px
+ * compact row it made the score cell 66px tall on its own — the entire reason
+ * every compact row still reported as clipped after the first fix. */
+.hq-strip-compact .hq-score {
+  font-size: 21px;
+  line-height: 1;
+}
+
+.hq-strip-compact .hq-score-dash {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.hq-c-clock {
+  font-size: 19px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--hq-ink-dim);
+}
+
+/* The flag strip is the one child allowed to shrink to nothing — on a narrow
+ * venue display it is the least load-bearing column in the row. */
+.hq-c-flags {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.hq-chip-muted {
+  color: var(--hq-ink-faint);
+  border-color: var(--hq-rule);
+}

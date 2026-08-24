@@ -15,9 +15,12 @@
 // The only permitted reach into core/ is Timer (countdown display logic) and
 // humanize (flag name formatting) — both pure-props, React-only modules.
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useHqOverview } from './useHqOverview';
 import HqStrip from './HqStrip';
+import {
+    compactRowHeight, fitsCanvas, isIdleStation, EXPANDED_H_PX, MAX_AUTO_OPEN,
+} from './hqLayout';
 import './Hq.css';
 
 /** The board is authored at exactly this size and scaled to fit the display. */
@@ -35,6 +38,17 @@ const STALE_FEED_MS = 5000;
 const MATCH_STATUSES = new Set([
     'LIVE', 'GOLIVE', 'HALFTIME', 'OTBREAK', 'FINAL', 'WARMUP',
 ]);
+
+/**
+ * Above this many stations the board switches to compact rows.
+ *
+ * Six full strips is what the canvas comfortably holds; the fleet went to 24 on
+ * 2026-08-23 and every strip was clipped to 31px of the 104px it needed. Seven
+ * is the first count that genuinely doesn't fit, so that is where the switch
+ * belongs — `?compact=1` / `?compact=0` forces it either way for a venue that
+ * disagrees.
+ */
+const COMPACT_THRESHOLD = 6;
 
 /**
  * Scale the fixed 1920x1080 canvas to fit the viewport, letterboxing rather
@@ -94,6 +108,57 @@ const Hq = () => {
     const rawScale = parseFloat(params.get('scale'));
     const scale = useCanvasScale(Number.isFinite(rawScale) && rawScale > 0 ? rawScale : null);
 
+    // Per-station open/closed overrides from clicking a row. Keyed by hostname
+    // rather than index so a station that changes position in the sort (or
+    // disappears and returns) keeps whatever the operator chose for it.
+    // A station with no entry here follows the automatic rule below. The
+    // override has to be written against the row's CURRENT effective state, not
+    // against the absent entry, or the first click on an auto-opened LIVE row
+    // would "open" it again and appear to do nothing.
+    const [opened, setOpened] = useState({});
+    const toggle = (hostname, currentlyOpen) =>
+        setOpened(prev => ({ ...prev, [hostname]: !currentlyOpen }));
+
+    const hideIdle = params.get('hideIdle') === '1';
+    const compactParam = params.get('compact');
+
+    // Designators are assigned over the FULL list, so hiding idle stations
+    // renumbers nothing — 19 stays 19 whether or not 03 is on screen.
+    const designators = useMemo(() => {
+        const m = {};
+        servers.forEach((s, i) => { m[s.hostname] = i + 1; });
+        return m;
+    }, [servers]);
+
+    const visible = hideIdle ? servers.filter(s => !isIdleStation(s)) : servers;
+    const hiddenCount = servers.length - visible.length;
+
+    // Keyed off the FULL fleet, not the filtered view: `?hideIdle=1` on a
+    // 24-station fleet that happens to have one match running must not drop the
+    // board back into the old one-strip-fills-the-screen grid.
+    const compactMode = compactParam === '1' ? true
+        : compactParam === '0' ? false
+        : servers.length > COMPACT_THRESHOLD;
+
+    // See MAX_AUTO_OPEN: past the cap nothing opens by itself.
+    const autoOpenCount = visible.filter(s => MATCH_STATUSES.has(s.status)).length;
+    const autoOpens = autoOpenCount > 0 && autoOpenCount <= MAX_AUTO_OPEN;
+
+    // In compact mode a station opens if a match is running on it, or if
+    // somebody clicked it open. Outside compact mode everything is open, which
+    // is exactly the pre-2026-08-23 board.
+    const isOpen = s => {
+        const override = opened[s.hostname];
+        if (override != null) return override;
+        return !compactMode || (autoOpens && MATCH_STATUSES.has(s.status));
+    };
+
+    const openCount = visible.filter(isOpen).length;
+    const rowHeight = compactRowHeight(visible.length, openCount);
+    // Only reachable with an implausible number of concurrent matches; scrolling
+    // beats the silent clipping that made this change necessary.
+    const overflows = !fitsCanvas(visible.length, openCount);
+
     const inGame = servers.reduce((sum, s) => sum + s.playerCount, 0);
     // "Active" = something is actually happening on the station, which includes
     // pub play (status BETWEEN with players). Counting only LIVE/WARMUP produced
@@ -131,6 +196,11 @@ const Hq = () => {
                                 FEED
                             </span>
                         )}
+                        {hiddenCount > 0 && (
+                            <span className="hq-chip hq-chip-muted" title="?hideIdle=1 — idle stations are not shown">
+                                {hiddenCount} IDLE HIDDEN
+                            </span>
+                        )}
                         <span className="hq-topbar-stat">
                             {servers.length} STATION{servers.length === 1 ? '' : 'S'}
                         </span>
@@ -142,27 +212,38 @@ const Hq = () => {
                     </span>
                 </header>
 
-                {servers.length === 0 ? (
+                {visible.length === 0 ? (
                     <div className="hq-awaiting">
                         <div className="hq-awaiting-title">
-                            {loaded ? 'AWAITING SIGNAL' : 'CONNECTING'}
+                            {servers.length > 0 ? 'ALL STATIONS IDLE'
+                                : loaded ? 'AWAITING SIGNAL' : 'CONNECTING'}
                         </div>
                         <div className="hq-awaiting-sub">
-                            {loaded
-                                ? 'No server has reported to this backend yet.'
-                                : 'Contacting the event backend…'}
+                            {servers.length > 0
+                                ? `${servers.length} station${servers.length === 1 ? '' : 's'} reporting, none with a match or a player on it.`
+                                : loaded
+                                    ? 'No server has reported to this backend yet.'
+                                    : 'Contacting the event backend…'}
                         </div>
                     </div>
                 ) : (
-                    <div className="hq-strips">
-                        {servers.map((s, i) => (
-                            <HqStrip
-                                key={s.hostname}
-                                index={i + 1}
-                                server={s}
-                                anchor={anchors[s.hostname]}
-                            />
-                        ))}
+                    <div className={`hq-strips${compactMode ? ' hq-strips-compact' : ''}${overflows ? ' hq-strips-overflow' : ''}`}>
+                        {visible.map(s => {
+                            const open = isOpen(s);
+                            return (
+                                <HqStrip
+                                    key={s.hostname}
+                                    index={designators[s.hostname]}
+                                    server={s}
+                                    anchor={anchors[s.hostname]}
+                                    expanded={open}
+                                    // Both heights are explicit in compact mode so the column
+                                    // adds up exactly; outside it the old 1fr grid still sizes.
+                                    height={!compactMode ? undefined : open ? EXPANDED_H_PX : rowHeight}
+                                    onToggle={compactMode ? () => toggle(s.hostname, open) : undefined}
+                                />
+                            );
+                        })}
                     </div>
                 )}
             </div>

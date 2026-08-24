@@ -143,7 +143,18 @@ CFG_DEST="$SERVER_DIR/addons/ktpamx/configs/hud_observer.cfg"
 PLUGINS_INI="$SERVER_DIR/addons/ktpamx/configs/plugins.ini"
 DODSERVER_CFG="$SERVER_DIR/dodserver.cfg"
 
-PLUGINS_INI_LINE="KTPHudObserver.amxx debug"
+# No `debug` flag. AMXX's ConfigureDebug clears AMX_FLAG_JITC *globally* the
+# moment any plugin is loaded with it, so one debug entry disables the JIT across
+# the entire plugin surface on that server — not just ours. This script targets
+# production game servers; the dev/prod split keeps `debug` in
+# config/local/plugins.ini instead (see CLAUDE.md).
+#
+# It used to be "KTPHudObserver.amxx debug", which is how ATL1/DEN5/NY1 ended up
+# carrying it from their original --bootstrap runs. Cleaned off those three on
+# 2026-08-23, the same day the HUD was enabled fleet-wide — had this default
+# still been in place, that rollout would have taken the JIT down on 19 more
+# public servers.
+PLUGINS_INI_LINE="KTPHudObserver.amxx"
 DODSERVER_EXEC_LINE="exec addons/ktpamx/configs/hud_observer.cfg"
 
 echo "==> Target: $HOST :: $INSTANCE_DIR"
@@ -191,25 +202,58 @@ fi
 # plugins.ini's last line had no trailing \n, so `echo 'X' >> file` produced
 # `KTPGrenadeDamage.amxxKTPHudObserver.amxx` as a single line — silently
 # breaking BOTH plugins.
+#
+# plugins.ini can't use the exact-match test the exec line does. A server
+# bootstrapped before 2026-08-23 carries `KTPHudObserver.amxx debug`, which is
+# not string-equal to the flagless line we write now — an -Fx test would call it
+# missing and append a SECOND entry, loading the plugin twice. So that file is
+# matched on the plugin name regardless of flags, and an existing debug entry is
+# rewritten in place rather than duplicated.
+#
+# The rewrite goes through a temp file + `install` that restores the original
+# owner. `sed -i` renames a ROOT-owned temp into place, and LGSM then aborts
+# every restart with "Ownership issues found" — before stopping anything, so the
+# restart silently does nothing at all.
 if [[ "$DO_BOOTSTRAP" == 1 ]]; then
     run_remote "sudo bash -c '
         set -e
-        for entry in \
-            \"$PLUGINS_INI|$PLUGINS_INI_LINE\" \
-            \"$DODSERVER_CFG|$DODSERVER_EXEC_LINE\"
-        do
-            file=\${entry%%|*}
-            line=\${entry##*|}
-            if ! grep -qFx \"\$line\" \"\$file\"; then
-                if [ -s \"\$file\" ] && [ \"\$(tail -c1 \"\$file\")\" != \"\" ]; then
-                    echo \"\" >> \"\$file\"
-                fi
-                echo \"\$line\" >> \"\$file\"
-                echo \"  added: \$line  →  \$file\"
+
+        # -- plugins.ini: match on plugin name, strip any debug flag --
+        ini=\"$PLUGINS_INI\"
+        if grep -qE \"^[[:space:]]*KTPHudObserver\\.amxx([[:space:]]|\$)\" \"\$ini\"; then
+            if grep -qE \"^[[:space:]]*KTPHudObserver\\.amxx[[:space:]]+debug[[:space:]]*\\r?\$\" \"\$ini\"; then
+                own=\$(stat -c \"%U:%G\" \"\$ini\")
+                tmp=\$(mktemp)
+                # [[:blank:]] (space/tab) for the trailing run, NOT [[:space:]] —
+                # that class includes \\r and would eat the CR before the capture
+                # group could preserve it, silently converting the line to LF in
+                # a CRLF file. Several hosts ship plugins.ini as CRLF.
+                sed \"s/^\\([[:space:]]*KTPHudObserver\\.amxx\\)[[:space:]]\\+debug[[:blank:]]*\\(\\r\\?\\)\$/\\1\\2/\" \"\$ini\" > \"\$tmp\"
+                install -o \"\${own%%:*}\" -g \"\${own##*:}\" -m 0644 \"\$tmp\" \"\$ini\"
+                rm -f \"\$tmp\"
+                echo \"  stripped debug flag  →  \$ini\"
             else
-                echo \"  present: \$line  →  \$file\"
+                echo \"  present: KTPHudObserver.amxx  →  \$ini\"
             fi
-        done
+        else
+            if [ -s \"\$ini\" ] && [ \"\$(tail -c1 \"\$ini\")\" != \"\" ]; then
+                echo \"\" >> \"\$ini\"
+            fi
+            echo \"$PLUGINS_INI_LINE\" >> \"\$ini\"
+            echo \"  added: $PLUGINS_INI_LINE  →  \$ini\"
+        fi
+
+        # -- dodserver.cfg: exact-match is correct here, the line has no variants --
+        cfg=\"$DODSERVER_CFG\"
+        if ! grep -qFx \"$DODSERVER_EXEC_LINE\" \"\$cfg\"; then
+            if [ -s \"\$cfg\" ] && [ \"\$(tail -c1 \"\$cfg\")\" != \"\" ]; then
+                echo \"\" >> \"\$cfg\"
+            fi
+            echo \"$DODSERVER_EXEC_LINE\" >> \"\$cfg\"
+            echo \"  added: $DODSERVER_EXEC_LINE  →  \$cfg\"
+        else
+            echo \"  present: $DODSERVER_EXEC_LINE  →  \$cfg\"
+        fi
     '"
 fi
 

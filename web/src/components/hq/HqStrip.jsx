@@ -51,7 +51,7 @@ const EMPTY_MESSAGE = {
     NO_SIGNAL: 'OFFLINE — NO EVENTS RECEIVED',
 };
 
-const HqStrip = ({ index, server, anchor }) => {
+const HqStrip = ({ index, server, anchor, expanded = true, height, onToggle }) => {
     const s = server;
     const hasPlayers = s.playerCount > 0;
     const matchType = s.matchType != null ? MATCH_TYPES[s.matchType] : null;
@@ -71,15 +71,84 @@ const HqStrip = ({ index, server, anchor }) => {
     //
     // A genuinely finished match needs no gate here: ktp_match_end nulls
     // team_score and timeleft in the reducer, so an idle post-match server
-    // renders "–" and "--:--" on its own.
+    // renders its dashes on its own.
     const dataFresh = s.status !== 'NO_SIGNAL' && s.status !== 'STALE';
 
     // Idle strips recede so live games read first from across a room — but a pub
     // server with players on it is not idle.
     const dimmed = !dataFresh || (s.status === 'BETWEEN' && !hasPlayers);
 
+    const classes = [
+        'hq-strip',
+        `hq-strip-${s.status.toLowerCase()}`,
+        dimmed ? 'hq-strip-dim' : '',
+        expanded ? 'hq-strip-open' : 'hq-strip-compact',
+    ].filter(Boolean).join(' ');
+
+    // Clicking a row opens or closes its rosters. Keyboard parity costs three
+    // lines and the board is sometimes driven from a laptop rather than the
+    // venue display.
+    const interactive = onToggle
+        ? {
+            onClick: onToggle,
+            onKeyDown: e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onToggle();
+                }
+            },
+            role: 'button',
+            tabIndex: 0,
+            'aria-expanded': expanded,
+            title: expanded ? 'Hide rosters' : 'Show rosters',
+        }
+        : {};
+
+    const score = (
+        <>
+            <span className="hq-score hq-score-allies">
+                {dataFresh && s.alliesScore != null ? s.alliesScore : '–'}
+            </span>
+            <span className="hq-score-dash">—</span>
+            <span className="hq-score hq-score-axis">
+                {dataFresh && s.axisScore != null ? s.axisScore : '–'}
+            </span>
+        </>
+    );
+
+    const clock = dataFresh && anchor
+        ? <Timer timeleft={anchor.timeleft} timeleftAt={anchor.at} frozen={s.timerFrozen} />
+        : <span>--:--</span>;
+
+    // ── Compact: one line per station, no rosters ────────────────────────────
+    //
+    // Everything an overview needs and nothing that needs vertical room. The
+    // rosters are the only part that cannot survive the shrink (6 fixed 23px
+    // rows), and also the part nobody can read at this size from across a room —
+    // so they are what the expand is for.
+    if (!expanded) {
+        return (
+            <section className={classes} style={height ? { height } : undefined} {...interactive}>
+                <div className="hq-c-designator">{pad2(index)}</div>
+                <div className="hq-c-name">{shortName(s.hostname)}</div>
+                <div className="hq-c-status">
+                    <span className="hq-dot" />
+                    <span className="hq-status-text">{statusLabel(s)}</span>
+                </div>
+                <div className="hq-c-map">{s.map || '—'}</div>
+                <div className="hq-c-players">{hasPlayers ? `${s.playerCount} PLR` : '—'}</div>
+                <div className="hq-c-scores">{score}</div>
+                <div className={`hq-c-clock${s.timerFrozen ? ' hq-clock-frozen' : ''}`}>{clock}</div>
+                <div className="hq-c-flags">
+                    <HqFlagStrip flags={dataFresh ? s.flags : []} />
+                </div>
+            </section>
+        );
+    }
+
+    // ── Expanded: the full strip ────────────────────────────────────────────
     return (
-        <section className={`hq-strip hq-strip-${s.status.toLowerCase()}${dimmed ? ' hq-strip-dim' : ''}`}>
+        <section className={classes} style={height ? { height } : undefined} {...interactive}>
             <div className="hq-rail">
                 <div className="hq-designator">{pad2(index)}</div>
                 <div className="hq-servername">{shortName(s.hostname)}</div>
@@ -105,20 +174,8 @@ const HqStrip = ({ index, server, anchor }) => {
             </div>
 
             <div className="hq-scoreblock">
-                <div className="hq-scores">
-                    <span className="hq-score hq-score-allies">
-                        {dataFresh && s.alliesScore != null ? s.alliesScore : '–'}
-                    </span>
-                    <span className="hq-score-dash">—</span>
-                    <span className="hq-score hq-score-axis">
-                        {dataFresh && s.axisScore != null ? s.axisScore : '–'}
-                    </span>
-                </div>
-                <div className={`hq-clock${s.timerFrozen ? ' hq-clock-frozen' : ''}`}>
-                    {dataFresh && anchor
-                        ? <Timer timeleft={anchor.timeleft} timeleftAt={anchor.at} frozen={s.timerFrozen} />
-                        : <span>--:--</span>}
-                </div>
+                <div className="hq-scores">{score}</div>
+                <div className={`hq-clock${s.timerFrozen ? ' hq-clock-frozen' : ''}`}>{clock}</div>
             </div>
 
             <HqFlagStrip flags={dataFresh ? s.flags : []} />

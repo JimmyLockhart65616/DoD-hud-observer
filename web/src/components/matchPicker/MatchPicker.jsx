@@ -6,6 +6,17 @@ import { Container, Row, Col, Table, Badge } from 'react-bootstrap';
 // hud.ktpdod.com. Dev workflows set REACT_APP_API_URL explicitly.
 const API_URL = process.env.REACT_APP_API_URL || '';
 
+// `hltv` comes from the backend's hltv_connect config (see serverList.ts) and is
+// null for any server with no proxy — hand-run LAN boxes, or a fleet member added
+// to the picker before it was added to the config.
+const hltvAddress = (hltv) => `${hltv.host}:${hltv.port}`;
+
+// Steam's own protocol handler: it queries the address, works out that it's a
+// GoldSrc DoD server, launches the game and connects. Preferred over
+// steam://rungameid/30 because it needs no app id baked in here, and it does the
+// right thing whether or not the game is already running.
+const hltvConnectUrl = (hltv) => `steam://connect/${hltvAddress(hltv)}`;
+
 function MatchPicker() {
     const [servers, setServers] = useState([]);
     const [liveMatches, setLiveMatches] = useState([]);
@@ -98,6 +109,7 @@ function MatchPicker() {
                                     <th>Server Status</th>
                                     <th>Current Match</th>
                                     <th>Players</th>
+                                    <th>HLTV</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
@@ -131,6 +143,19 @@ function MatchPicker() {
                                                 )}
                                             </td>
                                             <td>
+                                                {s.hltv ? (
+                                                    <a
+                                                        href={hltvConnectUrl(s.hltv)}
+                                                        style={{ fontFamily: 'var(--bs-font-monospace, monospace)' }}
+                                                        title={`Opens Day of Defeat through Steam and joins this server's HLTV broadcast. Console equivalent: connect ${hltvAddress(s.hltv)}`}
+                                                    >
+                                                        {hltvAddress(s.hltv)}
+                                                    </a>
+                                                ) : (
+                                                    <span className="text-muted" title="No HLTV proxy is configured for this server">&mdash;</span>
+                                                )}
+                                            </td>
+                                            <td>
                                                 <a href={`/screen?server=${encodeURIComponent(s.hostname)}`}>
                                                     {match ? 'Watch Live' : 'Watch'}
                                                 </a>
@@ -148,6 +173,15 @@ function MatchPicker() {
                             </tbody>
                         </Table>
                     )}
+
+                    <p className="text-muted" style={{ fontSize: '0.9em', marginTop: 4 }}>
+                        An <strong>HLTV</strong> address opens Day of Defeat through Steam and joins that
+                        server's broadcast proxy as a spectator. The proxy runs on the same 60-second delay
+                        the overlay is synced to, so what you see there matches what a stream is showing
+                        rather than running ahead of it. If your browser won't hand off{' '}
+                        <code>steam://</code> links, paste <code>connect &lt;address&gt;</code> into the
+                        Day of Defeat console instead.
+                    </p>
 
                     <h4 style={{ marginTop: 32 }}>Completed Matches</h4>
                     {completed.length === 0 ? (

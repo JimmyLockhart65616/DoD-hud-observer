@@ -12,7 +12,55 @@ class Welcome extends React.Component {
                         </p>
                         <ul style={{ marginTop: '16px', lineHeight: '2' }}>
                             <li><a href="/watch">Watch / Replay</a> — pick a live or completed match</li>
+                            <li><a href="/hq">Operations Board</a> — every KTP server on one screen, live</li>
                             <li><a href="/help">Viewer Guide</a> — how to set up and use the HUD in OBS</li>
+                        </ul>
+                        <h5 style={{ marginTop: '32px' }}>
+                            What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-08-23</small>
+                        </h5>
+                        <ul style={{ marginTop: '8px', lineHeight: '1.8' }}>
+                            <li>
+                                The HUD is now live on <strong>every official KTP server</strong> — all 24, across
+                                Atlanta, Dallas, Denver, New York and Chicago. Until today it ran on five. Any match
+                                played on a KTP server can now be put on stream and will produce a post-match stats
+                                board, without anyone having to move it to a particular server first
+                            </li>
+                            <li>
+                                The <a href="/watch">server list</a> is sorted properly. It used to appear in
+                                whatever order the servers happened to first report in, which reshuffled every time
+                                the backend restarted; it now reads Atlanta, Chicago, Dallas, Denver, New York, each
+                                in number order, every time
+                            </li>
+                            <li>
+                                Every server on that list now shows its <strong>HLTV address</strong>. Click it and
+                                Steam opens Day of Defeat and joins that server's broadcast proxy as a spectator — no
+                                looking up which port belongs to which server. The proxy carries the same 60-second
+                                delay the overlay is synced to, so watching there stays level with a stream instead of
+                                running a minute ahead of it. If a browser refuses to hand off the link, the address
+                                is right there to paste after <code>connect</code> in the console
+                            </li>
+                            <li>
+                                The <a href="/hq">Operations Board</a> is now linked from this page, and it holds the
+                                whole fleet. It shows every KTP server on one screen — status, map, score, clock,
+                                flag ownership — one line each, with a server that has a match running opening up to
+                                show both rosters and their K/D. Click any line to open or close it yourself. Add{' '}
+                                <code>?hideIdle=1</code> to the address to show only the servers with something
+                                happening on them
+                            </li>
+                            <li>
+                                Flag ownership is no longer overwritten by a bad reading. Every 30 seconds the overlay
+                                re-checked who held each flag, and on <code>dod_donner</code> and{' '}
+                                <code>dod_saints2</code> that check was unreliable — about half the time it flipped a
+                                flag to the wrong team, and the flag bar then stayed wrong until somebody captured that
+                                flag again. The overlay now trusts the captures it has actually watched happen
+                            </li>
+                            <li>
+                                Reloading the overlay mid-match no longer shows the whole server carrying no grenades.
+                                Grenade counts only arrive live, so they are missing from the catch-up the overlay gets
+                                when it reconnects — that gap was being drawn as an explicit zero. An unknown count now
+                                shows no grenade pip at all, while a player genuinely out of grenades still shows the
+                                dimmed one
+                            </li>
                         </ul>
                         <h5 style={{ marginTop: '32px' }}>
                             What's New <small className="text-muted" style={{ fontSize: '0.7em', fontWeight: 'normal' }}>2026-08-17</small>

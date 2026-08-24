@@ -219,9 +219,14 @@ next restart (nightly 3 AM or manual), so there's no mid-match swap.
 ```
 
 Use this to canary a new build on **one** server before a fleet drop, or to
-**enable** the HUD somewhere (`--bootstrap` writes the `KTPHudObserver.amxx debug`
+**enable** the HUD somewhere (`--bootstrap` writes the `KTPHudObserver.amxx`
 line into that server's `plugins.ini` + the `hud_observer.cfg` exec line, then
 restarts). Run with `--help` for all flags.
+
+The line carries **no `debug` flag**: AMXX clears `AMX_FLAG_JITC` globally as
+soon as any plugin loads with it, so one debug entry kills the JIT for every
+plugin on that server. `--bootstrap` also strips the flag from a server that was
+bootstrapped before 2026-08-23, when this script still wrote it.
 
 ### Enable / disable a server
 
