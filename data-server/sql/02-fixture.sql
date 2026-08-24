@@ -60,7 +60,16 @@ INSERT IGNORE INTO ktp_matches (match_id, server_id, map_name, half, match_type,
   ('LOCAL-0001-DEV1', 1, 'dod_anzio',       2, 0, NOW() - INTERVAL 3 DAY + INTERVAL 23 MINUTE, NOW() - INTERVAL 3 DAY + INTERVAL 43 MINUTE),
   ('LOCAL-0002-DEV1', 1, 'dod_donner',      1, 1, NOW() - INTERVAL 2 DAY,                      NOW() - INTERVAL 2 DAY + INTERVAL 20 MINUTE),
   ('LOCAL-0002-DEV1', 1, 'dod_donner',      2, 1, NOW() - INTERVAL 2 DAY + INTERVAL 22 MINUTE, NOW() - INTERVAL 2 DAY + INTERVAL 42 MINUTE),
-  ('LOCAL-0003-DEV2', 2, 'dod_saints2_b3e', 1, 0, NOW() - INTERVAL 10 MINUTE,                  NULL);
+  ('LOCAL-0003-DEV2', 2, 'dod_saints2_b3e', 1, 0, NOW() - INTERVAL 10 MINUTE,                  NULL),
+  -- match_type 2 = 12MAN. Its player stats must NEVER reach the API (league
+  -- policy, Krod 2026-08-24). Deliberately given the BIGGEST numbers in the
+  -- fixture so a regression that leaks them is loud rather than subtle -- if
+  -- 9001's career suddenly shows 99 kills, this is why.
+  ('LOCAL-0004-DEV1', 1, 'dod_kalt',        1, 2, NOW() - INTERVAL 5 DAY,                      NOW() - INTERVAL 5 DAY + INTERVAL 20 MINUTE),
+  -- match_type NULL is what EVERY production row looks like today: the
+  -- HLStatsX daemon never populates the column. Unknown is not safe, so this
+  -- must be excluded too.
+  ('LOCAL-0005-DEV1', 1, 'dod_flash',       1, NULL, NOW() - INTERVAL 4 DAY,                   NOW() - INTERVAL 4 DAY + INTERVAL 20 MINUTE);
 
 -- ------------------------------------------------------------ match stats
 -- LOCAL-0001: two halves plus the half=0 TOTAL, which is their exact sum.
@@ -94,6 +103,15 @@ INSERT IGNORE INTO ktp_match_stats (match_id, player_id, half, kills, deaths, he
   ('LOCAL-0003-DEV2',9011,1, 7, 4,2,0,0, 820,15),
   ('LOCAL-0003-DEV2',9012,1, 5, 6,1,0,0, 610,10),
   ('LOCAL-0003-DEV2',9001,1, 6, 5,1,0,0, 700,10);
+
+-- LOCAL-0004 (12MAN) and LOCAL-0005 (match_type NULL): both EXCLUDED from every
+-- endpoint. Player 9001 appears in both, so a leak shows up as inflated career
+-- totals for a player who also has legitimate official stats -- the realistic
+-- shape of the bug, rather than a player who would otherwise have none.
+INSERT IGNORE INTO ktp_match_stats (match_id, player_id, half, kills, deaths, headshots, team_kills, suicides, damage, score) VALUES
+  ('LOCAL-0004-DEV1',9001,1,99,1,50,0,0,9900,200), ('LOCAL-0004-DEV1',9001,0,99,1,50,0,0,9900,200),
+  ('LOCAL-0004-DEV1',9002,1,88,2,40,0,0,8800,180), ('LOCAL-0004-DEV1',9002,0,88,2,40,0,0,8800,180),
+  ('LOCAL-0005-DEV1',9001,1,77,3,30,0,0,7700,160), ('LOCAL-0005-DEV1',9001,0,77,3,30,0,0,7700,160);
 
 -- -------------------------------------------------------- flag positions
 -- dod_anzio's real geometry (map facts, not player data). NOTE flag_index 1 is

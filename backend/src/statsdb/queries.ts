@@ -41,6 +41,33 @@
  *
  * MAX_EXECUTION_TIME applies to read-only SELECTs only, which is all we run.
  */
+/**
+ * Match types whose PLAYER STATS may be surfaced.
+ *
+ * League policy, set by the stats owner (Krod, 2026-08-24): 12-man stats are not
+ * to be published. `ktp_matches.match_type` carries the KTPMatchHandler enum —
+ * 0=official, 1=scrim, 2=12man, 3=draft, 4=KTP OT, 5=draft OT — mirrored
+ * identically in KTPHudObserver.sma and KTPMatchHandler.sma.
+ *
+ * ALLOWLIST, NOT A BLOCKLIST. Excluding only `2` would surface every type added
+ * later by default, and the failure mode of that mistake is publishing exactly
+ * what we were asked not to. Official play only; widen deliberately.
+ *
+ * NULL IS EXCLUDED, and today that means EVERYTHING is excluded: the column is
+ * NULL on all 3,766 rows in production (1,981 matches) because the HLStatsX
+ * daemon never populates it — see KTPHLStatsX, where the column is declared with
+ * this exact enum in its comment AND indexed as `idx_retention(match_type,
+ * start_time)`, so it is plainly meant to be written. Until that is fixed there
+ * is no way to tell a 12-man from a league match, and an empty career panel is
+ * the correct answer. SQL helps here: `match_type NOT IN (2)` would ALSO drop
+ * every NULL row, silently and for the wrong reason — an allowlist makes the
+ * exclusion intentional and legible.
+ */
+export const OFFICIAL_MATCH_TYPES = [0, 4];
+
+/** `IN (?,?)` placeholders for OFFICIAL_MATCH_TYPES, for embedding in a query. */
+export const OFFICIAL_MATCH_TYPE_PLACEHOLDERS = OFFICIAL_MATCH_TYPES.map(() => '?').join(',');
+
 export const MAX_EXECUTION_TIME_MS = 2000;
 
 /**
@@ -127,6 +154,7 @@ export const RECENT_MATCHES = `
            MAX(m.end_time)   AS end_time
       FROM ktp_matches m
      WHERE m.start_time >= DATE_SUB(NOW(), INTERVAL ? DAY)
+       AND m.match_type IN (${OFFICIAL_MATCH_TYPE_PLACEHOLDERS})
      GROUP BY m.match_id
      ORDER BY start_time DESC
      LIMIT ?
@@ -153,6 +181,9 @@ export const MATCH_PLAYER_STATS = `
       JOIN hlstats_Players p        ON p.playerId = s.player_id
       LEFT JOIN hlstats_PlayerUniqueIds u ON u.playerId = s.player_id
      WHERE s.match_id = ?
+       AND EXISTS (SELECT 1 FROM ktp_matches m
+                    WHERE m.match_id = s.match_id
+                      AND m.match_type IN (${OFFICIAL_MATCH_TYPE_PLACEHOLDERS}))
      ORDER BY s.half, s.kills DESC
 `;
 
@@ -175,6 +206,9 @@ export const PLAYER_CAREER = `
       JOIN hlstats_PlayerUniqueIds u ON u.playerId = s.player_id
       JOIN hlstats_Players p         ON p.playerId = s.player_id
      WHERE u.uniqueId = ? AND s.half = 0
+       AND EXISTS (SELECT 1 FROM ktp_matches m
+                    WHERE m.match_id = s.match_id
+                      AND m.match_type IN (${OFFICIAL_MATCH_TYPE_PLACEHOLDERS}))
      GROUP BY u.uniqueId
 `;
 
@@ -238,6 +272,9 @@ export function playerCareerBatchSql(count: number): string {
       JOIN hlstats_PlayerUniqueIds u ON u.playerId = s.player_id
       JOIN hlstats_Players p         ON p.playerId = s.player_id
      WHERE u.uniqueId IN (${placeholders}) AND s.half = 0
+       AND EXISTS (SELECT 1 FROM ktp_matches m
+                    WHERE m.match_id = s.match_id
+                      AND m.match_type IN (${OFFICIAL_MATCH_TYPE_PLACEHOLDERS}))
      GROUP BY u.uniqueId
 `;
 }

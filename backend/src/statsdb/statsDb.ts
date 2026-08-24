@@ -20,6 +20,7 @@ import {
     RECENT_MATCHES, MATCH_PLAYER_STATS, PLAYER_CAREER,
     FLAG_POSITIONS, POSITION_SAMPLES,
     playerCareerBatchSql, MAX_CAREER_BATCH,
+    OFFICIAL_MATCH_TYPES,
     toHlstatsUniqueId, toHudSteamId,
     type MatchRow, type PlayerMatchStatRow,
 } from './queries';
@@ -139,7 +140,7 @@ export function toNumbers<T extends object>(row: T, keys: string[]): T {
 export const CAREER_NUMERIC = ['matches', 'kills', 'deaths', 'headshots', 'damage', 'team_kills', 'suicides'];
 
 export async function recentMatches(days = 30, limit = 50): Promise<MatchRow[]> {
-    const rows = await query<MatchRow>(RECENT_MATCHES, [days, limit]);
+    const rows = await query<MatchRow>(RECENT_MATCHES, [days, ...OFFICIAL_MATCH_TYPES, limit]);
     return rows.map(r => toNumbers(r, ['halves', 'server_id', 'match_type']));
 }
 
@@ -149,12 +150,12 @@ export async function recentMatches(days = 30, limit = 50): Promise<MatchRow[]> 
  * hlstats stores the short form.
  */
 export async function matchPlayerStats(matchId: string): Promise<PlayerMatchStatRow[]> {
-    const rows = await query<PlayerMatchStatRow>(MATCH_PLAYER_STATS, [matchId]);
+    const rows = await query<PlayerMatchStatRow>(MATCH_PLAYER_STATS, [matchId, ...OFFICIAL_MATCH_TYPES]);
     return rows.map(r => ({ ...r, steam_id: r.steam_id ? toHudSteamId(r.steam_id) : '' }));
 }
 
 export async function playerCareer(steamId: string): Promise<Record<string, unknown> | null> {
-    const rows = await query<Record<string, unknown>>(PLAYER_CAREER, [toHlstatsUniqueId(steamId)]);
+    const rows = await query<Record<string, unknown>>(PLAYER_CAREER, [toHlstatsUniqueId(steamId), ...OFFICIAL_MATCH_TYPES]);
     if (!rows.length) return null;
     const row = toNumbers(rows[0], CAREER_NUMERIC);
     return { ...row, steam_id: toHudSteamId(String(row.steam_id ?? steamId)) };
@@ -182,7 +183,7 @@ export async function playerCareers(steamIds: string[]): Promise<Record<string, 
         throw new Error(`statsdb: ${unique.length} ids exceeds the ${MAX_CAREER_BATCH} career batch cap`);
     }
 
-    const rows = await query<Record<string, unknown>>(playerCareerBatchSql(unique.length), unique);
+    const rows = await query<Record<string, unknown>>(playerCareerBatchSql(unique.length), [...unique, ...OFFICIAL_MATCH_TYPES]);
     const out: Record<string, Record<string, unknown>> = {};
     for (const raw of rows) {
         const row = toNumbers(raw, CAREER_NUMERIC);

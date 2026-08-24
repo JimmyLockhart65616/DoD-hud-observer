@@ -7,8 +7,11 @@ import {
     assertReadOnly, toHlstatsUniqueId, toHudSteamId,
     RECENT_MATCHES, MATCH_PLAYER_STATS, PLAYER_CAREER, FLAG_POSITIONS, POSITION_SAMPLES,
     playerCareerBatchSql, MAX_CAREER_BATCH,
+    OFFICIAL_MATCH_TYPES,
 } from '../statsdb/queries';
 import * as statsDb from '../statsdb/statsDb';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const ALL_QUERIES: Array<[string, string]> = [
     ['RECENT_MATCHES', RECENT_MATCHES],
@@ -171,4 +174,78 @@ describe('disabled by default', () => {
         const tooMany = Array.from({ length: MAX_CAREER_BATCH + 1 }, (_, i) => `STEAM_0:0:${i}`);
         await expect(statsDb.playerCareers(tooMany)).rejects.toThrow(/batch cap/);
     });
+});
+
+/**
+ * League publishing policy, set by the stats owner (Krod, 2026-08-24):
+ *   1. 12-man stats are not to be surfaced
+ *   2. per-player location / heatmap data is not to be surfaced
+ *
+ * Both are the kind of rule that is obeyed on the day it is written and
+ * quietly broken six months later by an unrelated change, so both are pinned
+ * here rather than left to a comment.
+ */
+describe('publishing policy: match types', () => {
+    // An allowlist, not a blocklist. Excluding only 12-man would surface every
+    // type added later BY DEFAULT, and the cost of that mistake is publishing
+    // exactly what we were asked not to.
+    it('allows only official play', () => {
+        expect(OFFICIAL_MATCH_TYPES).toEqual([0, 4]);
+        expect(OFFICIAL_MATCH_TYPES).not.toContain(2);   // 12MAN
+        expect(OFFICIAL_MATCH_TYPES).not.toContain(1);   // SCRIM
+        expect(OFFICIAL_MATCH_TYPES).not.toContain(3);   // DRAFT
+        expect(OFFICIAL_MATCH_TYPES).not.toContain(5);   // DRAFT_OT
+    });
+
+    // Every query that can reach player stats has to carry the filter. A new
+    // one added without it is the regression this catches.
+    it('constrains match_type on every stats query', () => {
+        for (const [name, sql] of [
+            ['RECENT_MATCHES', RECENT_MATCHES],
+            ['MATCH_PLAYER_STATS', MATCH_PLAYER_STATS],
+            ['PLAYER_CAREER', PLAYER_CAREER],
+            ['PLAYER_CAREER_BATCH', playerCareerBatchSql(2)],
+        ] as Array<[string, string]>) {
+            expect(`${name}: ${sql}`).toMatch(/match_type IN \(/);
+        }
+    });
+
+    // `match_type NOT IN (2)` would drop every NULL row too -- the right result
+    // for the wrong reason, and it would start leaking the moment the column is
+    // populated. The allowlist form makes the exclusion deliberate.
+    it('never expresses the filter as a blocklist', () => {
+        for (const sql of [RECENT_MATCHES, MATCH_PLAYER_STATS, PLAYER_CAREER, playerCareerBatchSql(2)]) {
+            expect(sql).not.toMatch(/match_type\s+NOT\s+IN/i);
+            expect(sql).not.toMatch(/match_type\s*(!=|<>)/i);
+        }
+    });
+
+    // Production has match_type NULL on every row, so `IN (...)` excludes
+    // everything -- which is the correct, conservative answer until the daemon
+    // populates it. This test exists so nobody "fixes" the empty result by
+    // adding OR match_type IS NULL.
+    it('does not readmit NULL match types', () => {
+        for (const sql of [RECENT_MATCHES, MATCH_PLAYER_STATS, PLAYER_CAREER, playerCareerBatchSql(2)]) {
+            expect(sql).not.toMatch(/match_type\s+IS\s+NULL/i);
+        }
+    });
+});
+
+describe('publishing policy: no location data', () => {
+    // The accessor exists for possible future SERVER-SIDE use. What must not
+    // exist is a route that hands coordinates to a browser.
+    it('exposes no REST route for position samples', () => {
+        const app = fs.readFileSync(path.join(__dirname, '..', 'app.ts'), 'utf8');
+        expect(app).not.toMatch(/positionSamples/);
+        expect(app).not.toMatch(/\/api\/stats\/[^'"`]*position/i);
+        expect(app).not.toMatch(/\/api\/stats\/[^'"`]*heatmap/i);
+    });
+
+    // Flag positions are MAP GEOMETRY, not player movement -- static per map and
+    // identical for everyone. They stay allowed; this records the distinction so
+    // the rule above is not read as "no coordinates at all".
+    it('still allows static per-map flag coordinates', () => {
+        expect(FLAG_POSITIONS).toMatch(/ktp_flag_positions/);
+        expect(FLAG_POSITIONS).not.toMatch(/player/i);
+    });
 });

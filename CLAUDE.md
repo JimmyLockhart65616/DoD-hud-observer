@@ -783,9 +783,33 @@ on-air dependency to a stats deploy cadence.
   `/api/stats/matches/:matchId`, `/api/stats/players/:steamId`,
   `/api/stats/players?ids=` (batch), `/api/stats/maps/:mapName/flags`, and
   `/api/stats/_guard` for breaker diagnostics.
-- **Position samples deliberately have NO route.** Individual coordinates and
-  movement histories stay private; `positionSamples()` exists for future
-  server-side use only.
+### Publishing policy (league rules, not preferences)
+
+Set by the stats owner (Krod, 2026-08-24). Both are the kind of rule obeyed on
+the day it is written and quietly broken later by an unrelated change, so both
+are pinned by tests in `statsDb.test.ts`, not just documented here.
+
+- **12-man stats must not be surfaced.** Enforced as an **allowlist**,
+  `OFFICIAL_MATCH_TYPES = [0, 4]` (official + official OT), applied to every
+  query that can reach player stats. A blocklist would surface any type added
+  later by default, and the cost of that mistake is publishing exactly what we
+  were asked not to.
+  - **NULL is excluded, and in production that currently means EVERYTHING is.**
+    `ktp_matches.match_type` is NULL on all 3,766 prod rows (1,981 matches) —
+    the HLStatsX daemon never populates it, despite the column carrying the enum
+    in its comment and an `idx_retention(match_type, start_time)` index. So the
+    read layer returns nothing against prod today. That is the correct answer,
+    not a bug to route around. Filed as **KTPHLStatsX #37**.
+  - **Never rewrite the filter as `NOT IN (2)`, `!= 2`, or add
+    `OR match_type IS NULL`.** The first two also drop every NULL row — the
+    right result for the wrong reason — and start leaking the moment the column
+    is populated. The third restores the leak outright. All three are guarded.
+
+- **Per-player location and heatmap data must not be surfaced.** Position
+  samples deliberately have **NO REST route**; `positionSamples()` exists for
+  possible future server-side use only, and a test asserts `app.ts` never
+  references it. Static per-map **flag** coordinates stay allowed — that is map
+  geometry, identical for everyone, not player movement.
 
 ### Load protection (`statsdb/guard.ts`)
 
