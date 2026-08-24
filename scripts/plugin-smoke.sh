@@ -23,7 +23,26 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INFRA_ROOT="${KTP_INFRA_ROOT:-$(cd "$REPO_ROOT/../KTPInfrastructure" 2>/dev/null && pwd || true)}"
+# Locate the sibling KTPInfrastructure checkout.
+#
+# Inside a git worktree, REPO_ROOT is the WORKTREE root, so plain
+# "$REPO_ROOT/../KTPInfrastructure" resolves to .claude/worktrees/KTPInfrastructure,
+# which does not exist -- INFRA_ROOT comes out EMPTY and the script reports
+# "artifacts missing at /artifacts/latest/..." with a leading slash, pointing at a
+# path nobody has. --git-common-dir points at the MAIN checkout's .git in both
+# layouts, so the real repo root is its parent and the sibling is found from there.
+#
+# KTP_INFRA_ROOT overrides both, for a non-sibling layout.
+MAIN_ROOT="$(cd "$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd || true)"
+INFRA_ROOT="${KTP_INFRA_ROOT:-}"
+if [ -z "$INFRA_ROOT" ]; then
+    for candidate in "$REPO_ROOT/../KTPInfrastructure" "$MAIN_ROOT/../KTPInfrastructure"; do
+        if [ -d "$candidate" ]; then
+            INFRA_ROOT="$(cd "$candidate" && pwd)"
+            break
+        fi
+    done
+fi
 ARTIFACTS="$INFRA_ROOT/artifacts/latest/ktpamx/scripting"
 SMA="$REPO_ROOT/KTPHudObserver.sma"
 

@@ -540,24 +540,49 @@ is an observation, the amount is a model.
   moment of the kill, (1) the victim's team is capturing that point per a **live**
   `CA_is_capturing`/`CA_capturing_team` read — never `g_flag_capping_team[]`,
   which the 0.5s zone poll writes and which used to drop every kill in the first
-  half-second of a capture — and (2) the victim died within `CAP_BREAK_RADIUS` of
-  it. Without the radius gate a kill anywhere on the map entered the FIFO and
-  could steal a break caused by a real on-point death seconds later; such a
-  credit is always wrong, since an off-point death cannot itself decrement the
-  zone count. The closest qualifying point wins, because 15 pool maps have
-  overlapping radii. Both defects were found independently by Drew in
-  `stats_logging.sma` (KTPAMXX #24/#25), which runs the same design against the
-  league stats DB — keep the two in step or the overlay and the DB will disagree
-  about the same play.
+  half-second of a capture — and (2) the victim died **inside that point's
+  capture zone**. Without the second gate a kill anywhere on the map entered the
+  FIFO and could steal a break caused by a real on-point death seconds later;
+  such a credit is always wrong, since an off-point death cannot itself decrement
+  the zone count. The closest qualifying point wins, because zones overlap. Both
+  defects were found independently by Drew in `stats_logging.sma` (KTPAMXX
+  #24/#25), which runs the same design against the league stats DB — keep the two
+  in step or the overlay and the DB will disagree about the same play.
 
-- **`CAP_BREAK_RADIUS` is 768 and is measured, not chosen.** The capture zone is
-  a brush, so its real extent comes out of BSP lump 14 —
-  `scripts/cap-radius-check.py <radius> <map.bsp>...` reports the furthest
-  horizontal corner of each `dod_capture_area` from its CP. Seven pool maps
-  exceed the 512 that `stats_logging` uses (peak `dod_saints2_b3e` 669), and a
-  radius under the zone's own reach loses genuine breaks silently. Re-run the
-  script when a map joins the pool. `dod_jagd` measures 5646 — one enormous
-  trigger volume, unservable by any fixed radius, and out of pool.
+- **Containment, NOT a radius — and the radius could never have been tuned into
+  correctness.** The flag prop and its `dod_capture_area` trigger are separate
+  entities and are **not co-located**: across the pool some control points sit
+  entirely *outside* their own zone, and `dod_jagd`'s prop is thousands of units
+  from its trigger. So any single radius is simultaneously too small on one map
+  and far too large on another, and no value fixes both. The pool is also in
+  flux, so a constant tuned to today's maps stops being valid the moment a swap
+  lands — silently. Reached independently upstream in **KTPAMXX PR #49**, which
+  makes the same argument against the same approach in `stats_logging`.
+
+- **Box-vs-box, not point-in-box.** GoldSrc decides trigger membership by bbox
+  overlap, so testing whether the victim's *origin* is inside the zone rejects
+  players the engine itself counted as in it — under-counting in a new way while
+  looking stricter. The player box also tracks stance, so a prone player is the
+  flatter volume the engine actually uses, which is exactly the case decided at a
+  zone edge.
+
+- **Needs `dodx_area_get_bounds` / `dodx_get_user_bounds`** (added by our KTPAMXX
+  PR, `pEdict->v.absmin/absmax` straight from the HL SDK, extension-mode safe).
+  Bound optionally via `plugin_natives`/`set_native_filter` as ONE flag —
+  a half-bound pair would mix a contained zone test with a point-origin victim.
+  **The obvious alternative, fakemeta's `pev(ent, pev_absmin)`, is barred**:
+  `fakemeta.inc` carries `#pragma reqlib fakemeta`, and the fleet's `modules.ini`
+  lists only `reapi`/`dodx`/`amxxcurl` with no fakemeta module shipped at all, so
+  a plugin including it does not LOAD — a whole-plugin outage, not a lost stat.
+
+- **`CAP_BREAK_RADIUS` (768) survives as a FALLBACK ONLY**, for a dodx without
+  the bounds natives, so a module rollback degrades to the previous behaviour
+  rather than reporting zero cap breaks. **Do not tune it** — the approach is
+  wrong, not the number. It was measured (`scripts/cap-radius-check.py` walks BSP
+  lump 14 for each `dod_capture_area`'s furthest horizontal corner from its CP;
+  seven pool maps exceed the 512 `stats_logging` used, peak `dod_saints2_b3e`
+  669), and measuring it correctly is precisely what showed the approach could
+  not work: `dod_jagd` came out at 5646.
 
 #### Flag ownership resets (map start / round restart)
 

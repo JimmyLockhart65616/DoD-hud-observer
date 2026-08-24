@@ -61,6 +61,20 @@ native Float:dodx_get_score_tick_time();
 native dodx_get_score_tick_period();
 #endif
 
+// dodx_area_get_bounds / dodx_get_user_bounds: world-space absmin/absmax of a
+// capture zone and of a player. These replace the CAP_BREAK_RADIUS distance test
+// with a real containment test (see the radius comment for why distance from the
+// flag prop can never be made correct by tuning). Declared guarded and bound
+// optionally exactly like the natives above, so the plugin keeps running the
+// radius fallback on today's fleet and flips to containment the moment a module
+// carrying them lands, with no second plugin deploy.
+#if !defined dodx_area_get_bounds
+native dodx_area_get_bounds(index, Float:mins[3], Float:maxs[3]);
+#endif
+#if !defined dodx_get_user_bounds
+native dodx_get_user_bounds(id, Float:mins[3], Float:maxs[3]);
+#endif
+
 // ktp_is_match_active: KTPMatchHandler's only native (KTPMatchHandler.sma:3852).
 // Returns 1 while a match is LIVE, PENDING (ready-up) or PRE-START — which is
 // exactly what makes it useful here: paired with our own g_matchActive (set only
@@ -77,7 +91,7 @@ native ktp_is_match_active();
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.6.1"
+#define VERSION "2.7.0"
 #define AUTHOR  "cadaver"
 
 #define MAX_PLAYERS     32
@@ -184,6 +198,11 @@ new Float:g_half_end_gt = 0.0;
 // still loads, this goes false, and hud_timeleft() runs the anchor fallback.
 // Never call the native while false — the runtime trap would abort the plugin.
 new bool:g_has_round_time_native = true;
+
+// Both zone-containment natives, tracked as ONE flag: they are only useful
+// together, and a half-bound pair would silently mix a contained zone test with
+// a point-origin victim -- the exact under-counting containment exists to remove.
+new bool:g_has_zone_bounds_native = true;
 
 // Last accepted native reading + when, for the end-of-half artifact guard in
 // hud_timeleft_f(): as a half expires by timelimit the engine's OWN round-cycle
@@ -570,10 +589,25 @@ new Float:g_flag_emit_armed_at[MAX_FLAGS];  // gametime the emission was armed, 
                                 // wipe can drop a full 6v6 side in one window)
 #define BREAK_WINDOW_POLLS  5   // confirm window in polls (~2.5s @ ZONE_POLL_INTERVAL)
 
+// FALLBACK ONLY, for a dodx without dodx_area_get_bounds/dodx_get_user_bounds.
+// The real test is CONTAINMENT -- was the victim inside the capture zone -- and
+// this distance-from-the-flag-prop approximation is kept solely so a module
+// rollback degrades to the previous behaviour instead of reporting no cap breaks
+// at all. Do not tune it; the approach is wrong, not the number.
+//
+// WHY IT CANNOT BE TUNED. The flag prop and its dod_capture_area trigger are
+// separate entities and are not co-located: across the pool some control points
+// sit entirely OUTSIDE their own zone, and dod_jagd's prop is thousands of units
+// from its trigger. So any single radius is simultaneously too small on one map
+// and far too large on another, and no value fixes both. The pool is also in
+// flux, so a constant tuned to today's maps stops being valid the moment a swap
+// lands -- silently. (Independently reached upstream in KTPAMXX PR #49, which
+// makes the same argument against the same approach in stats_logging.)
+//
 // Horizontal units the victim must be within, of the point their team is
 // capturing, before their killer is queued as a break candidate. The area API
-// exposes only AGGREGATE team counts, never who is in the zone, so proximity is
-// the only per-player discriminator available in extension mode.
+// exposes only AGGREGATE team counts, never who is in the zone, so on a module
+// with no bounds natives proximity is the only per-player discriminator left.
 //
 // Without it the count-drop confirms that SOMEBODY left the zone, never that
 // this victim was in it — and the FIFO hands the credit to whoever was queued
@@ -605,10 +639,11 @@ new Float:g_flag_emit_armed_at[MAX_FLAGS];  // gametime the emission was armed, 
 // swapping one bug for another. 768 clears the pool maximum by ~15%.
 //
 // dod_jagd measures 5646 — its documents objective is one enormous trigger
-// volume, and no sane fixed radius serves it. It is NOT in ktp_maps.ini, so it
-// is out of scope; a map like it that entered the pool would need the per-CP
-// extent read at runtime, which extension mode cannot do (no pev, and the CA_
-// enum exposes no bounds).
+// volume, and no sane fixed radius serves it. That was the tell that the radius
+// approach was wrong rather than merely mistuned. This comment used to say the
+// per-CP extent could not be read at runtime in extension mode "(no pev, and the
+// CA_ enum exposes no bounds)" — that gap is now closed by dodx_area_get_bounds,
+// which reads pEdict->v.absmin/absmax straight from the HL SDK.
 //
 // Six maps have two CPs closer together than 2*768, so their radii overlap;
 // that is why the scan below takes the CLOSEST qualifying point rather than the
@@ -1682,6 +1717,10 @@ public native_filter(const name[], index, trap) {
         g_has_score_tick_native = false;
         return PLUGIN_HANDLED;
     }
+    if (!trap && (equal(name, "dodx_area_get_bounds") || equal(name, "dodx_get_user_bounds"))) {
+        g_has_zone_bounds_native = false;
+        return PLUGIN_HANDLED;
+    }
     if (!trap && equal(name, "dodx_get_score_tick_period")) {
         g_has_score_period_native = false;
         return PLUGIN_HANDLED;
@@ -2500,7 +2539,8 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
     //
     // TWO gates decide candidacy, and the count-drop is NOT one of them:
     //   1. the victim's team is capturing this point RIGHT NOW (live area read)
-    //   2. the victim died within CAP_BREAK_RADIUS of it
+    //   2. the victim died INSIDE its capture zone (or, on a module without the
+    //      bounds natives, within CAP_BREAK_RADIUS of the flag prop)
     // The drop only ever proves that SOMEBODY left the zone. This comment used
     // to claim the drop established "the victim was on the point, not merely on
     // the capping team" — it never did, and the gap was a live misattribution
@@ -2508,18 +2548,32 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
     if (killer != victim && !TK && is_user_connected(killer)) {
         new vt = g_player_team[victim];
         if (vt == TEAM_ALLIES || vt == TEAM_AXIS) {
-            // Where the victim died. Read BEFORE the flag scan: dodx sources it
-            // from pEdict->v.origin (never the pdata origin fields, which are
+            // Where the victim died. Read BEFORE the flag scan: dodx sources both
+            // of these from pEdict->v.* (never the pdata origin fields, which are
             // misaligned), and client_death fires from the Damage hook before
             // CDODPlayer::Killed(), so this is still the death position.
             //
-            // Fail CLOSED if it cannot be read — without a position there is no
-            // way to tell an on-point death from one across the map, and a
-            // credit given to the wrong player is worse than a break not
-            // counted. In practice the native only fails for a victim who is no
-            // longer ingame, which this path does not otherwise reach.
+            // The BOX, not just the origin, because GoldSrc decides trigger
+            // membership by BBOX OVERLAP. A point test rejects players the engine
+            // itself counted as in the zone -- under-counting in a new way while
+            // looking stricter and more correct. It also tracks stance: a prone
+            // player is the flatter volume the engine actually uses, which is
+            // exactly the case that gets decided at a zone edge.
+            //
+            // A victim with no box falls back to a degenerate one at the origin,
+            // which reproduces the old point behaviour rather than matching
+            // nothing.
+            new Float:vmin[3], Float:vmax[3];
             new Float:vorigin[3];
             new bool:have_origin = (dodx_get_user_origin(victim, vorigin) != 0);
+            new bool:have_vbox = false;
+
+            if (g_has_zone_bounds_native) {
+                have_vbox = (dodx_get_user_bounds(victim, vmin, vmax) != 0);
+            }
+            if (!have_vbox && have_origin) {
+                for (new a = 0; a < 3; a++) { vmin[a] = vorigin[a]; vmax[a] = vorigin[a]; }
+            }
 
             // Pick the CLOSEST point the victim's team is actively capturing,
             // not merely the first — two simultaneous caps are ordinary, and
@@ -2527,7 +2581,13 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
             new best_f = -1;
             new Float:best_d2 = 0.0;
 
-            for (new f = 0; have_origin && f < g_flag_count && f < MAX_FLAGS; f++) {
+            // Needs SOME position for the victim: a box on the containment path, an
+            // origin on the radius path. Without one there is no way to tell an
+            // on-point death from one across the map, and a credit given to the
+            // wrong player is worse than a break not counted -- so fail CLOSED.
+            new bool:have_pos = g_has_zone_bounds_native ? (have_vbox || have_origin) : have_origin;
+
+            for (new f = 0; have_pos && f < g_flag_count && f < MAX_FLAGS; f++) {
                 new dxs = g_cp_dodx_of_dll[f];
 
                 // LIVE area read, not g_flag_capping_team[] — that is only
@@ -2538,6 +2598,41 @@ public client_death(killer, victim, wpnindex, hitplace, TK) {
                 if (!dodx_area_get_data(dxs, CA_is_capturing)) continue;
                 if (dodx_area_get_data(dxs, CA_capturing_team) != vt) continue;
 
+                // PREFERRED: was the victim inside the capture zone itself?
+                //
+                // The flag prop and its dod_capture_area trigger are separate
+                // entities and are NOT co-located. Across the pool some control
+                // points sit entirely outside their own zone, and dod_jagd's prop
+                // is thousands of units from its trigger -- so a prop-anchored
+                // radius is simultaneously too small on one map and far too large
+                // on another, whatever value it is given. Containment needs no
+                // per-map constant, so a pool change cannot silently invalidate it.
+                if (g_has_zone_bounds_native) {
+                    new Float:zmin[3], Float:zmax[3];
+                    // Returns 0 for a degenerate box too -- a zero-volume zone
+                    // would match nothing and read as "this flag never sees a
+                    // break", indistinguishable from a flag nobody contested.
+                    if (!dodx_area_get_bounds(dxs, zmin, zmax)) continue;
+
+                    if (vmax[0] < zmin[0] || vmin[0] > zmax[0]) continue;
+                    if (vmax[1] < zmin[1] || vmin[1] > zmax[1]) continue;
+                    if (vmax[2] < zmin[2] || vmin[2] > zmax[2]) continue;
+
+                    // Zones can overlap. Nearest zone CENTRE only orders the
+                    // survivors; it never admits or rejects one, so it is a
+                    // tie-break and not a second threshold.
+                    new Float:zdx = ((vmin[0] + vmax[0]) - (zmin[0] + zmax[0])) * 0.5;
+                    new Float:zdy = ((vmin[1] + vmax[1]) - (zmin[1] + zmax[1])) * 0.5;
+                    new Float:zd2 = zdx * zdx + zdy * zdy;
+
+                    if (best_f < 0 || zd2 < best_d2) { best_f = f; best_d2 = zd2; }
+                    continue;
+                }
+
+                // FALLBACK, module without the bounds natives (today's fleet).
+                // Kept only so a dodx rollback degrades to the previous behaviour
+                // instead of reporting no cap breaks at all; it is wrong in both
+                // directions and is not the intended path.
                 new Float:cx = float(dodx_objective_get_data(dxs, CP_origin_x));
                 new Float:cy = float(dodx_objective_get_data(dxs, CP_origin_y));
 
