@@ -500,3 +500,135 @@
 .caster-tag-tk     { background-color: #c43030; color: #fff; }
 .caster-tag-streak { background-color: rgba(255, 215, 0, 0.22); color: #ffd700; }
 .caster-tag-assist { background-color: rgba(255, 255, 255, 0.08); color: #9aa0c0; font-weight: 700; }
+
+/* ── Career panel (league stats DB) ──────────────────────────────── */
+/* Hidden entirely when stats_db is off — see CareerPanel.jsx. These rules only
+   ever apply on an instance where the read layer is configured. */
+
+.caster-career-cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.caster-career-col {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.caster-career-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.caster-career-head {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #8990b5;
+  border-bottom-color: rgba(255, 255, 255, 0.14);
+}
+
+.caster-career-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.caster-career-allies .caster-career-name { color: #c8e090; }
+.caster-career-axis   .caster-career-name { color: #ffb8b8; }
+.caster-career-head .caster-career-name   { color: #8990b5; }
+
+/* Fixed-width numeric columns so the three stats line up down the list
+   regardless of name length. */
+.caster-career-stat {
+  flex: 0 0 38px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #9aa0c0;
+}
+
+.caster-career-kd {
+  color: #e8ecff;
+  font-weight: 700;
+}
+
+/* A debutant, not a zero. Muted so the eye skips it. */
+.caster-career-new .caster-career-name { opacity: 0.55; }
+
+.caster-career-note {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-style: italic;
+  color: #6b7192;
+}
+
+.caster-career-warn { color: #d98a5f; }
+
+/* ── Moments panel (derived, live) ───────────────────────────────── */
+
+.caster-moment-cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.caster-moment-col {
+  flex: 1 1 130px;
+  min-width: 0;
+}
+
+.caster-moment-head {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #8990b5;
+  padding-bottom: 3px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.caster-moment-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.caster-moment-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.caster-moment-value {
+  flex: 0 0 auto;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: #e8ecff;
+}
+
+/* Secondary by design — the count is the headline, the qualifier is context. */
+.caster-moment-detail {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: #6b7192;
+}
+
+.caster-moment-col .caster-idle {
+  margin: 6px 0 0;
+  font-size: 11px;
+}

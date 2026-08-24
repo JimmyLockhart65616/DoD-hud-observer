@@ -36,11 +36,48 @@ if [[ "${KTP_SKIP_PREPUSH:-0}" == "1" ]]; then
 fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-INFRA_DIR="$REPO_ROOT/../KTPInfrastructure"
+
+# Locate the sibling KTPInfrastructure checkout.
+#
+# Inside a git worktree, --show-toplevel is the WORKTREE root, so the plain
+# "$REPO_ROOT/../KTPInfrastructure" resolves to .claude/worktrees/KTPInfrastructure
+# and the hook refuses to run on a perfectly good checkout. --git-common-dir
+# points at the MAIN checkout's .git in both layouts, so its parent is the real
+# repo root and the sibling can be found from there too.
+#
+# KTP_INFRA_DIR overrides both, for a non-sibling layout.
+MAIN_ROOT="$(cd "$(git rev-parse --git-common-dir)/.." 2>/dev/null && pwd)"
+INFRA_DIR="${KTP_INFRA_DIR:-}"
+if [[ -z "$INFRA_DIR" ]]; then
+  for candidate in "$REPO_ROOT/../KTPInfrastructure" "$MAIN_ROOT/../KTPInfrastructure"; do
+    if [[ -d "$candidate" ]]; then
+      INFRA_DIR="$candidate"
+      break
+    fi
+  done
+fi
+INFRA_DIR="${INFRA_DIR:-$REPO_ROOT/../KTPInfrastructure}"
+
+# Canonicalise, keeping a NATIVE path.
+#
+# Two traps here, both of which end in the same misleading error — stage 2 mounts
+# this with `docker run -v "$INFRA_DIR:/infra"`, the mount comes up EMPTY, and the
+# compile fails "cannot stat /infra/artifacts/..." while the directory is plainly
+# right there on disk:
+#
+#   1. The candidates above still contain "..", which Docker Desktop does not
+#      normalise.
+#   2. On Git Bash, plain `pwd` returns an MSYS path (/d/Git/...) that Docker
+#      cannot mount at all. `pwd -W` returns the Windows form (D:/Git/...).
+#      This is why the ORIGINAL line worked: git rev-parse already emits a
+#      Windows-style path, so it never went through pwd.
+if [[ -d "$INFRA_DIR" ]]; then
+  INFRA_DIR="$(cd "$INFRA_DIR" && { pwd -W 2>/dev/null || pwd; })"
+fi
 
 if [[ ! -d "$INFRA_DIR" ]]; then
   echo "[pre-push] KTPInfrastructure not found at $INFRA_DIR" >&2
-  echo "[pre-push] Clone it as a sibling dir, or bypass with --no-verify" >&2
+  echo "[pre-push] Clone it as a sibling dir, set KTP_INFRA_DIR, or bypass with --no-verify" >&2
   exit 1
 fi
 

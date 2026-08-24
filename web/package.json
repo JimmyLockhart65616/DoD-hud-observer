@@ -20,7 +20,10 @@
     "moduleNameMapper": {
       "^react$": "<rootDir>/node_modules/react",
       "^react-dom$": "<rootDir>/node_modules/react-dom"
-    }
+    },
+    "testMatch": [
+      "**/src/**/*.{spec,test}.{js,jsx,ts,tsx}"
+    ]
   },
   "proxy": "http://localhost:3001",
   "eslintConfig": {

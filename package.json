@@ -37,6 +37,7 @@
     "hlds-log": "^1.1.2",
     "js-yaml": "^4.1.1",
     "lowdb": "^1.0.0",
+    "mysql2": "^3.23.4",
     "npm": "^9.1.1",
     "react-bootstrap": "^1.5.2",
     "react-icons": "^3.11.0",

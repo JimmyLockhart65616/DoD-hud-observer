@@ -62,6 +62,28 @@ let dmgSeq = 0;
 // match can't grow it without limit.
 const KILL_LOG_CAP = 150;
 
+// Derived caster stats (store slice `derived`). These are ACCUMULATED as events
+// arrive rather than derived at render from `kill_log`, because that slice is
+// capped: a long half can push past 150 kills and a panel computed from it would
+// quietly start reporting a moving window instead of the half. Counters are
+// per-player and bounded by the roster, so accumulating costs nothing.
+//
+// Deliberately NOT a composite score. Krod's accumulation weights ("bounded v3")
+// exist in no repo — only the shapes are public — and inventing our own numbers
+// would put a third scoring system on air alongside KTPR and accumulation. Each
+// of these three facts stands on its own and needs no weighting.
+
+// A streak worth ending. Below 3 a "shutdown" is just a kill, and the panel
+// would fill with noise.
+const SHUTDOWN_MIN_STREAK = 3;
+
+// Gap between kills that still counts as one burst. 5s is the plan's figure and
+// matches how a caster reads it — "three in a row, no time to react".
+const FAST_CHAIN_MAX_GAP_MS = 5000;
+
+// How far back a capture looks for the kills that made it possible.
+const CAP_SETUP_WINDOW_MS = 30000;
+
 // Per-player stat fields streamed by the plugin (player_score extension +
 // player_stats_summary rows). Shared so defaults/resets/copies can't drift.
 // `best_streak` is special-cased in addStatRows (max, not sum) for match totals.
@@ -272,6 +294,18 @@ export const useHudStore = create(set => ({
     // Flag-event feed entries (captures + cap breaks), shown under the flags bar
     flag_feed: [],
 
+    // Derived caster-only stats. Accumulated in addKill / addCapSetups, cleared
+    // with the rest of the half. Never selected by /screen.
+    //   shutdowns  { [user_id]: { count, best } }  best = longest streak ended
+    //   chains     { [user_id]: { n, ms } }        best burst this half
+    //   cap_setups { [user_id]: count }            kills shortly before own cap
+    derived: { shutdowns: {}, chains: {}, cap_setups: {} },
+
+    // In-progress burst per killer, { [user_id]: { n, firstAt, lastAt } }. Working
+    // state for `derived.chains`, kept separate because it is not a result: the
+    // panel reads the best chain, never the one currently running.
+    chain_run: {},
+
     // Kill streaks: { [user_id]: number } — consecutive kills without dying (resets on death/round)
     kill_streaks: {},
 
@@ -421,12 +455,63 @@ export const useHudStore = create(set => ({
 
     addKill: (kill) => set(state => {
         const streaks = { ...state.kill_streaks };
+
+        // READ BEFORE THE RESET BELOW. This is the victim's streak at the moment
+        // they died, which is the whole basis of a shutdown; once the reset runs
+        // it is gone, and nothing else on the entry carries it.
+        const victimStreak = streaks[kill.victim_id] || 0;
+
         // Increment killer's streak (only for normal kills, not suicides/teamkills)
         if (kill.kill_type === 'normal') {
             streaks[kill.killer_id] = (streaks[kill.killer_id] || 0) + 1;
         }
         // Reset victim's streak
         streaks[kill.victim_id] = 0;
+
+        // ---- derived caster stats ----
+        // Only normal kills. A teamkill or a suicide ends a streak but is not an
+        // achievement, and crediting one would be the same class of error as the
+        // TK frag decrement the plugin used to do.
+        const derived = state.derived;
+        let shutdowns = derived.shutdowns;
+        let chains    = derived.chains;
+
+        if (kill.kill_type === 'normal') {
+            const killerStreak = streaks[kill.killer_id];
+            const now = kill.addedAt ?? Date.now();
+
+            if (victimStreak >= SHUTDOWN_MIN_STREAK) {
+                const prev = shutdowns[kill.killer_id] || { count: 0, best: 0 };
+                shutdowns = {
+                    ...shutdowns,
+                    [kill.killer_id]: {
+                        count: prev.count + 1,
+                        best: Math.max(prev.best, victimStreak),
+                    },
+                };
+            }
+
+            // A burst continues only while the killer has NOT died and the kills
+            // are close together. killerStreak === 1 means the streak just reset,
+            // i.e. they died since their last kill — so that always starts a fresh
+            // chain regardless of the clock.
+            const run = state.chain_run[kill.killer_id];
+            const continues = run && killerStreak > 1 && (now - run.lastAt) <= FAST_CHAIN_MAX_GAP_MS;
+            const nextRun = continues
+                ? { n: run.n + 1, firstAt: run.firstAt, lastAt: now }
+                : { n: 1, firstAt: now, lastAt: now };
+
+            // Only a real burst is worth showing; a lone kill is not a chain.
+            if (nextRun.n >= 2) {
+                const best = chains[kill.killer_id];
+                const span = nextRun.lastAt - nextRun.firstAt;
+                if (!best || nextRun.n > best.n || (nextRun.n === best.n && span < best.ms)) {
+                    chains = { ...chains, [kill.killer_id]: { n: nextRun.n, ms: span } };
+                }
+            }
+
+            state = { ...state, chain_run: { ...state.chain_run, [kill.killer_id]: nextRun } };
+        }
         // Cap at 6 — visual limit, oldest evicted when a 7th arrives. Was
         // unbounded; observed 715+ kills in one prod match, and inactive-tab
         // OBS overlays couldn't auto-hide via setTimeout, so the entire history
@@ -434,10 +519,13 @@ export const useHudStore = create(set => ({
         const entry = {
             ...kill,
             streak: streaks[kill.killer_id] || 0,
+            victim_streak: victimStreak,
             id: ++killSeq,
             addedAt: Date.now(),
         };
         return {
+            chain_run: state.chain_run,
+            derived: { ...state.derived, shutdowns, chains },
             kills: [...state.kills.slice(-5), entry],
             // Deeper cap for the caster page's scrollback — bounded for the same
             // reason `kills` is (a 715-kill match must not accumulate forever).
@@ -445,6 +533,34 @@ export const useHudStore = create(set => ({
             kill_streaks: streaks,
         };
     }),
+    // Credit the kills that cleared the way for a capture.
+    //
+    // Called from the flag_captured handler, which knows the capturing side. Looks
+    // back over `kill_log` rather than accumulating, because the window is short
+    // (30s) and always well inside the 150-entry cap — unlike shutdowns and chains,
+    // which have to survive a whole half.
+    //
+    // Counts kills BY the capturing team, not kills of its opponents by anyone:
+    // a third party thinning the defence is not that team setting up its own cap.
+    // Suicides and teamkills are excluded for the same reason they are everywhere
+    // else here — they clear a defender but are nobody's work.
+    addCapSetups: (owner) => set(state => {
+        if (owner !== 'allies' && owner !== 'axis') return {};
+        const cutoff = Date.now() - CAP_SETUP_WINDOW_MS;
+        const setups = { ...state.derived.cap_setups };
+        let touched = false;
+
+        for (const k of state.kill_log) {
+            if (k.addedAt < cutoff) continue;
+            if (k.kill_type !== 'normal') continue;
+            if (k.killer?.team !== owner) continue;
+            setups[k.killer_id] = (setups[k.killer_id] || 0) + 1;
+            touched = true;
+        }
+
+        return touched ? { derived: { ...state.derived, cap_setups: setups } } : {};
+    }),
+
     addChat: (msg)  => set(state => ({ chat: [...state.chat.slice(-19), msg] })),
 
     // Cap at 3 — visual limit, oldest evicted when a 4th arrives.
@@ -485,6 +601,8 @@ export const useHudStore = create(set => ({
             flag_feed: [],
             chat: [],
             kill_streaks: {},
+            derived: { shutdowns: {}, chains: {}, cap_setups: {} },
+            chain_run: {},
             timeleft: null,
             timeleft_at: null,
             ...WAVES_CLEARED,
@@ -504,6 +622,8 @@ export const useHudStore = create(set => ({
         flag_feed: [],
         chat: [],
         kill_streaks: {},
+        derived: { shutdowns: {}, chains: {}, cap_setups: {} },
+        chain_run: {},
         allies_players: [],
         axis_players: [],
         flags: [],
@@ -597,6 +717,7 @@ export const SocketStoreComponent = () => {
     const addKill          = useHudStore(s => s.addKill);
     const addChat          = useHudStore(s => s.addChat);
     const addFlagEvent     = useHudStore(s => s.addFlagEvent);
+    const addCapSetups     = useHudStore(s => s.addCapSetups);
     const setAlliesScore   = useHudStore(s => s.setAlliesScore);
     const setAxisScore     = useHudStore(s => s.setAxisScore);
     const setHalf          = useHudStore(s => s.setHalf);
@@ -1199,6 +1320,10 @@ export const SocketStoreComponent = () => {
 
             // The flag feed announces every cap. Cumulative per-player stats are
             // shown on the capout board (round_end summary), not per single cap.
+            // Credit the kills that cleared the way, before the feed entry so a
+            // future render triggered by addFlagEvent already sees them.
+            addCapSetups(e.new_owner);
+
             addFlagEvent({
                 kind: 'captured',
                 flag_name: e.flag_name,

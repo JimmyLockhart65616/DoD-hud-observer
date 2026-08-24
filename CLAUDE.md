@@ -580,24 +580,49 @@ is an observation, the amount is a model.
   moment of the kill, (1) the victim's team is capturing that point per a **live**
   `CA_is_capturing`/`CA_capturing_team` read — never `g_flag_capping_team[]`,
   which the 0.5s zone poll writes and which used to drop every kill in the first
-  half-second of a capture — and (2) the victim died within `CAP_BREAK_RADIUS` of
-  it. Without the radius gate a kill anywhere on the map entered the FIFO and
-  could steal a break caused by a real on-point death seconds later; such a
-  credit is always wrong, since an off-point death cannot itself decrement the
-  zone count. The closest qualifying point wins, because 15 pool maps have
-  overlapping radii. Both defects were found independently by Drew in
-  `stats_logging.sma` (KTPAMXX #24/#25), which runs the same design against the
-  league stats DB — keep the two in step or the overlay and the DB will disagree
-  about the same play.
+  half-second of a capture — and (2) the victim died **inside that point's
+  capture zone**. Without the second gate a kill anywhere on the map entered the
+  FIFO and could steal a break caused by a real on-point death seconds later;
+  such a credit is always wrong, since an off-point death cannot itself decrement
+  the zone count. The closest qualifying point wins, because zones overlap. Both
+  defects were found independently by Drew in `stats_logging.sma` (KTPAMXX
+  #24/#25), which runs the same design against the league stats DB — keep the two
+  in step or the overlay and the DB will disagree about the same play.
 
-- **`CAP_BREAK_RADIUS` is 768 and is measured, not chosen.** The capture zone is
-  a brush, so its real extent comes out of BSP lump 14 —
-  `scripts/cap-radius-check.py <radius> <map.bsp>...` reports the furthest
-  horizontal corner of each `dod_capture_area` from its CP. Seven pool maps
-  exceed the 512 that `stats_logging` uses (peak `dod_saints2_b3e` 669), and a
-  radius under the zone's own reach loses genuine breaks silently. Re-run the
-  script when a map joins the pool. `dod_jagd` measures 5646 — one enormous
-  trigger volume, unservable by any fixed radius, and out of pool.
+- **Containment, NOT a radius — and the radius could never have been tuned into
+  correctness.** The flag prop and its `dod_capture_area` trigger are separate
+  entities and are **not co-located**: across the pool some control points sit
+  entirely *outside* their own zone, and `dod_jagd`'s prop is thousands of units
+  from its trigger. So any single radius is simultaneously too small on one map
+  and far too large on another, and no value fixes both. The pool is also in
+  flux, so a constant tuned to today's maps stops being valid the moment a swap
+  lands — silently. Reached independently upstream in **KTPAMXX PR #49**, which
+  makes the same argument against the same approach in `stats_logging`.
+
+- **Box-vs-box, not point-in-box.** GoldSrc decides trigger membership by bbox
+  overlap, so testing whether the victim's *origin* is inside the zone rejects
+  players the engine itself counted as in it — under-counting in a new way while
+  looking stricter. The player box also tracks stance, so a prone player is the
+  flatter volume the engine actually uses, which is exactly the case decided at a
+  zone edge.
+
+- **Needs `dodx_area_get_bounds` / `dodx_get_user_bounds`** (added by our KTPAMXX
+  PR, `pEdict->v.absmin/absmax` straight from the HL SDK, extension-mode safe).
+  Bound optionally via `plugin_natives`/`set_native_filter` as ONE flag —
+  a half-bound pair would mix a contained zone test with a point-origin victim.
+  **The obvious alternative, fakemeta's `pev(ent, pev_absmin)`, is barred**:
+  `fakemeta.inc` carries `#pragma reqlib fakemeta`, and the fleet's `modules.ini`
+  lists only `reapi`/`dodx`/`amxxcurl` with no fakemeta module shipped at all, so
+  a plugin including it does not LOAD — a whole-plugin outage, not a lost stat.
+
+- **`CAP_BREAK_RADIUS` (768) survives as a FALLBACK ONLY**, for a dodx without
+  the bounds natives, so a module rollback degrades to the previous behaviour
+  rather than reporting zero cap breaks. **Do not tune it** — the approach is
+  wrong, not the number. It was measured (`scripts/cap-radius-check.py` walks BSP
+  lump 14 for each `dod_capture_area`'s furthest horizontal corner from its CP;
+  seven pool maps exceed the 512 `stats_logging` used, peak `dod_saints2_b3e`
+  669), and measuring it correctly is precisely what showed the approach could
+  not work: `dod_jagd` came out at 5646.
 
 #### Flag ownership resets (map start / round restart)
 
@@ -743,11 +768,194 @@ composited into the broadcast.
   `⚠ opened after halftime`. The durable fix (a `half_archive` on `ServerState` that
   survives `half_start`) would also fix a latent on-air bug: an OBS browser-source
   reload during half 2 makes the `FINAL STATS` board show half-2 numbers only.
+- **Moments panel** (`MomentsPanel.jsx`) — three things the scoreboard cannot
+  show, each a sentence a caster can say out loud: **shutdowns** (who ended a
+  streak of 3+, and how long it was), **bursts** (fastest multi-kill, gap ≤5s),
+  and **cap setups** (kills by the capturing side in the 30s before their flag).
+  Half-scoped; clears with `kill_streaks`.
+  - **Accumulated in the store (`derived` slice), NOT derived at render from
+    `kill_log`** — that slice is capped at 150 entries and a long half can exceed
+    it, which would silently turn a half-scoped panel into a moving window.
+  - **A shutdown needs the victim's streak read BEFORE `addKill` resets it.**
+    Nothing else on the entry carries the pre-death value; the entry now also
+    stamps `victim_streak` so a consumer can see why one was credited.
+  - **A burst ends when the killer DIES, not on the clock.** Dying resets the
+    streak, so the next kill lands on streak 1 — that, plus the gap, is the
+    continuation test. `chain_run` holds the in-progress burst; `derived.chains`
+    holds the best one.
+  - **Teamkills and suicides credit nothing anywhere here**, matching the
+    plugin's rule that they never score.
+  - **Deliberately NOT a composite score.** Krod's accumulation weights
+    ("bounded v3") are unpushed local work — only the shapes are public — so a
+    number invented here would be a third scoring system on air alongside KTPR
+    and accumulation, disagreeing with both. Add the composite only once we can
+    mirror his constants. Contract pinned by `Socket.moments.test.js`.
+
 - **Do NOT add `gameEvents.on(...)` listeners from this page** — `SocketStoreComponent`'s
   effect cleanup calls `gameEvents.removeAllListeners()`, which wipes every listener
   globally, and `index.jsx` mounts under StrictMode (effects run mount→unmount→mount in
   dev). Extend the store instead; that's why the deep kill history is a `kill_log`
   slice rather than a direct subscription.
+
+---
+
+## League Stats Database (KTPHLStatsX read layer)
+
+`backend/src/statsdb/` is a **read-only** client for the league's MySQL `hlstatsx`
+database — Krod's (andsmit9 / Drew) pipeline: `stats_logging.amxx` →
+`logaddress_add` UDP → the KTPHLStatsX Perl daemon → MySQL. That pipeline is
+entirely **post-match**; our overlay is the only real-time surface in the
+ecosystem, so this layer exists to put *history* next to the live match, never to
+drive anything on air.
+
+**Nothing in this repo may write to that database.** `assertReadOnly` re-checks
+every statement at call time, the configured user is expected to hold SELECT
+only, and there is no write path. The two pipelines are deliberately **not**
+consolidated at the producer: ours is a low-latency HTTP feed behind an HLTV
+delay buffer, theirs is a durable UDP ledger, and merging them would couple an
+on-air dependency to a stats deploy cadence.
+
+- **Disabled by default** (`stats_db.enabled: false`), including in production
+  until a SELECT-only MySQL user exists on the data server. Every accessor
+  returns `null`/`[]` when off and the REST layer answers **503**, so a dev
+  laptop and CI degrade instead of throwing.
+- **Routes** (all inline in `app.ts`, all read-only): `/api/stats/matches`,
+  `/api/stats/matches/:matchId`, `/api/stats/players/:steamId`,
+  `/api/stats/players?ids=` (batch), `/api/stats/maps/:mapName/flags`, and
+  `/api/stats/_guard` for breaker diagnostics.
+### Publishing policy (league rules, not preferences)
+
+Set by the stats owner (Krod, 2026-08-24). Both are the kind of rule obeyed on
+the day it is written and quietly broken later by an unrelated change, so both
+are pinned by tests in `statsDb.test.ts`, not just documented here.
+
+- **12-man stats must not be surfaced.** Enforced as an **allowlist**,
+  `OFFICIAL_MATCH_TYPES = [0, 4]` (official + official OT), applied to every
+  query that can reach player stats. A blocklist would surface any type added
+  later by default, and the cost of that mistake is publishing exactly what we
+  were asked not to.
+  - **NULL is excluded, and in production that currently means EVERYTHING is.**
+    `ktp_matches.match_type` is NULL on all 3,766 prod rows (1,981 matches) —
+    the HLStatsX daemon never populates it, despite the column carrying the enum
+    in its comment and an `idx_retention(match_type, start_time)` index. So the
+    read layer returns nothing against prod today. That is the correct answer,
+    not a bug to route around. Filed as **KTPHLStatsX #37**.
+  - **Never rewrite the filter as `NOT IN (2)`, `!= 2`, or add
+    `OR match_type IS NULL`.** The first two also drop every NULL row — the
+    right result for the wrong reason — and start leaking the moment the column
+    is populated. The third restores the leak outright. All three are guarded.
+
+- **Per-player location and heatmap data must not be surfaced.** Position
+  samples deliberately have **NO REST route**; `positionSamples()` exists for
+  possible future server-side use only, and a test asserts `app.ts` never
+  references it. Static per-map **flag** coordinates stay allowed — that is map
+  geometry, identical for everyone, not player movement.
+
+### Load protection (`statsdb/guard.ts`)
+
+The data server also runs MySQL for the league, the HLStatsX daemon, the HLTV
+proxies and this backend, and these endpoints are **public and unauthenticated**.
+Seven layers, in order: enabled check → per-IP rate limit (60/min) → TTL cache →
+concurrency cap (4) → circuit breaker → MySQL-side `MAX_EXECUTION_TIME(2000)` →
+client timeout. Two properties are load-bearing:
+
+- **The breaker trips on SLOW SUCCESSES, not only errors** (`slowCallMs` 750).
+  A database that is merely struggling is exactly the case worth backing off
+  from, and it never raises an error on its own.
+- **`MAX_EXECUTION_TIME` is the layer that actually protects the server.** A
+  client timeout only stops *us* waiting; MySQL keeps working. The hint makes the
+  database kill its own statement (error 3024), and it holds even if this process
+  wedges or leaks a connection.
+
+**The two 503s must be told apart by the client, and the body is what says
+which.** `reason: "disabled"` is permanent (no database configured — the
+production default today) and a caller should stop asking; `reason: "shedding"`
+is transient by construction, because the breaker half-opens on its own and the
+concurrency cap clears as soon as in-flight queries finish. A client that
+latches off for a shed defeats the entire mechanism — the panel stays dark for
+the rest of a broadcast because the data server was briefly busy once. A 503
+with no `reason` (older backend) is read as permanent, which is the safe
+direction.
+
+**Clients must also let the roster SETTLE before asking.** Players connect one
+at a time, so a filling 12-man changes the id set twelve times in about a
+second; without a debounce that is twelve requests in a burst, which trips the
+concurrency cap and gets them shed at exactly the moment the panel first has
+something to show. Measured against the local stack before the fix: 8 shed
+requests on a single mocker run. `useCareerStats` waits 750ms.
+
+Shed requests answer **503 with Retry-After** and never touch MySQL. `undefined`
+from the work function means **404** (no such player) — distinct from 502 (query
+failed) and 503 (stand down), so a caller can tell "unknown" from "ask later".
+
+### Batch career reads
+
+`GET /api/stats/players?ids=a,b,c` is the form the caster page uses: a full
+roster is **one** query, one cache entry and one rate-limit token instead of
+twelve. Capped at `MAX_CAREER_BATCH` (24) and ids are sorted server-side so two
+clients with the same roster share the cache entry. **Absent ids are not an
+error** — the reply is a map and a missing key means "no league match recorded",
+which the UI renders differently from a zero.
+
+### Traps inherited from KTPHLStatsX's own README
+
+Each of these produces a plausible wrong answer rather than an error:
+
+- **`half` means two different things.** On `ktp_match_stats`, `half = 0` is the
+  stored match TOTAL; on the `hlstats_Events_*` tables the same value means the
+  daemon held no match context (warmup). Summing `ktp_match_stats` without a
+  half filter double-counts everything.
+- **`ktp_matches` holds one row PER HALF**, so a recent-match list must group or
+  a two-half match appears twice (OT, three times).
+- **Collation.** `hlstats_Events_*` are `utf8mb4_unicode_ci`, `ktp_*` are
+  `utf8mb4_0900_ai_ci`; joining `match_id` across the two families without an
+  explicit COLLATE raises "Illegal mix of collations".
+- **SteamID format.** `hlstats_PlayerUniqueIds.uniqueId` is `1:748805` with no
+  `STEAM_0:` prefix. Cross the boundary with `toHlstatsUniqueId`/`toHudSteamId`;
+  comparing the raw forms silently matches nothing.
+- **Receipt vs producer time.** Rows are stamped when the daemon receives them.
+  Timed analytics belong on `producer_match_id` / `producer_half` / `event_epoch`.
+- **Aggregates arrive as STRINGS** (DECIMAL/BIGINT under `bigNumberStrings`), so
+  an uncoerced career row serialises as `"kills": "70"` and `kills + 1` gives
+  `"701"`. `toNumbers` + `CAREER_NUMERIC` handle it centrally.
+
+### Local database (`data-server/sql/`)
+
+`start.sh` creates the `hlstatsx` DB, a SELECT-only user, then applies
+`01-schema.sql` and `02-fixture.sql` on **every** boot (idempotent), so anyone who
+starts the KTPInfrastructure stack gets a working read layer with no setup. Both
+files are **local-only and must never be applied to production** — the schema is a
+minimal subset of the tables we read, and the fixture is **synthetic**: invented
+players, no real player data.
+
+The fixture is shaped to exercise the traps rather than to look realistic: a
+`half = 0` TOTAL that sums exactly to its halves, one in-progress match with no
+TOTAL row (so those players correctly read as *no league record*), one match with
+`damage = 0` (reproducing KTPHLStatsX issue #33), an apostrophe in a name, and
+`flag_index` in dodx spawn order.
+
+**Its uniqueIds deliberately match the mocker's roster** (`STEAM_0:0:1001-1006`
+allies, `2001-2006` axis, minus the `STEAM_0:` prefix). That alignment is what
+makes the whole chain testable on one machine — run the mocker and every player on
+`/caster` has a career row. Break it and the panel goes correctly but uselessly
+blank, which is indistinguishable from the read layer being broken.
+
+### League Career panel (`/caster`)
+
+`web/src/components/caster/CareerPanel.jsx` + `useCareerStats.js` — the first
+surface that reads the stats DB rather than the socket feed. Two rules:
+
+- **It must disappear when the database is off.** `useCareerStats` reports
+  `unavailable` for both "not configured" and "shedding load", latches that state
+  so it stops polling, and the panel renders `null`. A permanently empty panel on
+  a caster's monitor reads as a broken page, not as a switched-off feature.
+- **It must never reach `/screen`.** These numbers are historical and refresh at
+  most every 5 minutes; an on-air overlay that depends on a MySQL query goes blank
+  when the data server is busy.
+
+Rows are labelled from the LIVE roster and joined on SteamID, so a player who has
+since changed their in-game name still matches. Contract pinned by
+`useCareerStats.test.js`.
 
 ---
 

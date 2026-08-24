@@ -33,6 +33,10 @@ services:
       # dev-shared config/local/config.yaml (whose frontend.origin stays :3000 for
       # the host `npm run backend` workflow).
       HUD_FRONTEND_ORIGIN: https://localhost
+      # The read-only hlstatsx layer (stats_db) is configured by ENV defaults in
+      # data-server/Dockerfile, so this stack and KTPInfrastructure's local stack
+      # both inherit it without either compose file needing to know. Override
+      # HUD_STATSDB_* here only to point at a different database.
     ports:
       - "443:443"
       - "80:80"
