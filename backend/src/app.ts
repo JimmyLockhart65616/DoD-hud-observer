@@ -4,6 +4,7 @@ import cors from 'cors';
 import config from './config';
 import * as statsDb from './statsdb/statsDb';
 import { StatsGuard } from './statsdb/guard';
+import { MAX_CAREER_BATCH } from './statsdb/queries';
 import { MatchRecorder } from './handler/matchRecorder';
 import { MetricsCollector } from './handler/metrics';
 import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './handler/ingest';
@@ -211,6 +212,36 @@ app.get('/api/stats/matches/:matchId', (req, res) => {
     const id = req.params.matchId;
     serveStats(req, res, `match:${id}`, TTL_MATCH,
         async () => ({ rows: await statsDb.matchPlayerStats(id) }));
+});
+
+// Career totals for a whole roster in ONE query and ONE cache entry. The caster
+// page asks for twelve players at a time; looping the single-player route would
+// mean twelve queries against a data server that also carries MySQL for the
+// league, the HLStatsX daemon, the HLTV proxies and this backend.
+//
+// Absent ids mean "no league matches recorded", which is not an error: the reply
+// is a map, always 200, and a caller reads a missing key as unknown.
+app.get('/api/stats/players', (req, res) => {
+    const ids = String(req.query.ids ?? '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+
+    if (!ids.length) {
+        res.status(400).json({ error: 'ids query parameter required (comma-separated SteamIDs)' });
+        return;
+    }
+    const unique = Array.from(new Set(ids));
+    if (unique.length > MAX_CAREER_BATCH) {
+        res.status(400).json({ error: `at most ${MAX_CAREER_BATCH} ids per request` });
+        return;
+    }
+
+    // Sorted so two clients asking for the same roster in different orders share
+    // the cache entry instead of each paying for a query.
+    const key = `careers:${[...unique].sort().join(',')}`;
+    serveStats(req, res, key, TTL_PLAYER,
+        async () => ({ players: await statsDb.playerCareers(unique) }));
 });
 
 app.get('/api/stats/players/:steamId', (req, res) => {

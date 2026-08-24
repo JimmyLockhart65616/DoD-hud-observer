@@ -36,11 +36,21 @@ INSERT IGNORE INTO hlstats_Players (playerId, lastName) VALUES
   (9009, 'quiet bill'),          (9010, 'Ada L.'),
   (9011, 'trench_broom'),        (9012, 'the milkman');
 
+-- The uniqueIds deliberately match the MOCKER's roster (backend/src/mocker/data.ts:
+-- STEAM_0:0:1001-1006 allies, STEAM_0:0:2001-2006 axis), minus the "STEAM_0:"
+-- prefix that hlstats does not store. That alignment is what makes the whole
+-- chain testable on one machine: run the mocker and every player on /caster has
+-- a career row to look up. Break it and the panel goes correctly but uselessly
+-- blank, which looks identical to the read layer being broken.
+--
+-- The display names below are NOT the mocker's, on purpose. The panel keys on
+-- SteamID and labels rows from the live HUD roster, so a name that disagrees with
+-- the feed proves the join is on the id and not on a name match.
 INSERT IGNORE INTO hlstats_PlayerUniqueIds (playerId, uniqueId, game) VALUES
-  (9001,'9:1000001','dod'), (9002,'9:1000002','dod'), (9003,'9:1000003','dod'),
-  (9004,'9:1000004','dod'), (9005,'9:1000005','dod'), (9006,'9:1000006','dod'),
-  (9007,'9:1000007','dod'), (9008,'9:1000008','dod'), (9009,'9:1000009','dod'),
-  (9010,'9:1000010','dod'), (9011,'9:1000011','dod'), (9012,'9:1000012','dod');
+  (9001,'0:1001','dod'), (9002,'0:1002','dod'), (9003,'0:1003','dod'),
+  (9004,'0:1004','dod'), (9005,'0:1005','dod'), (9006,'0:1006','dod'),
+  (9007,'0:2001','dod'), (9008,'0:2002','dod'), (9009,'0:2003','dod'),
+  (9010,'0:2004','dod'), (9011,'0:2005','dod'), (9012,'0:2006','dod');
 
 -- ---------------------------------------------------------------- matches
 -- Relative to NOW() so the default days=30 window always finds them, however

@@ -19,6 +19,7 @@ import {
     assertReadOnly, withExecutionCap, MAX_EXECUTION_TIME_MS,
     RECENT_MATCHES, MATCH_PLAYER_STATS, PLAYER_CAREER,
     FLAG_POSITIONS, POSITION_SAMPLES,
+    playerCareerBatchSql, MAX_CAREER_BATCH,
     toHlstatsUniqueId, toHudSteamId,
     type MatchRow, type PlayerMatchStatRow,
 } from './queries';
@@ -157,6 +158,38 @@ export async function playerCareer(steamId: string): Promise<Record<string, unkn
     if (!rows.length) return null;
     const row = toNumbers(rows[0], CAREER_NUMERIC);
     return { ...row, steam_id: toHudSteamId(String(row.steam_id ?? steamId)) };
+}
+
+/**
+ * Career totals for a whole roster in ONE query.
+ *
+ * The reason this exists rather than the caster page looping over
+ * `playerCareer`: twelve round trips would be twelve connections' worth of work
+ * on a data server that also runs MySQL for the league, the HLStatsX daemon, the
+ * HLTV proxies and this backend. One statement, one cache entry, one rate-limit
+ * token.
+ *
+ * Returns a MAP keyed by the HUD-form SteamID. Players with no recorded matches
+ * are absent rather than zero-filled — "never played a league match" and "played
+ * and scored nothing" are different facts and the caller renders them
+ * differently. Duplicate and over-limit inputs are the caller's problem to avoid;
+ * ids are de-duplicated here and the batch cap is enforced in the SQL builder.
+ */
+export async function playerCareers(steamIds: string[]): Promise<Record<string, Record<string, unknown>>> {
+    const unique = Array.from(new Set(steamIds.map(toHlstatsUniqueId).filter(Boolean)));
+    if (!unique.length) return {};
+    if (unique.length > MAX_CAREER_BATCH) {
+        throw new Error(`statsdb: ${unique.length} ids exceeds the ${MAX_CAREER_BATCH} career batch cap`);
+    }
+
+    const rows = await query<Record<string, unknown>>(playerCareerBatchSql(unique.length), unique);
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const raw of rows) {
+        const row = toNumbers(raw, CAREER_NUMERIC);
+        const steam = toHudSteamId(String(row.steam_id ?? ''));
+        out[steam] = { ...row, steam_id: steam };
+    }
+    return out;
 }
 
 export async function flagPositions(mapName: string): Promise<Record<string, unknown>[]> {

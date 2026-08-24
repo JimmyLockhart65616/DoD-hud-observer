@@ -711,6 +711,125 @@ composited into the broadcast.
 
 ---
 
+## League Stats Database (KTPHLStatsX read layer)
+
+`backend/src/statsdb/` is a **read-only** client for the league's MySQL `hlstatsx`
+database — Krod's (andsmit9 / Drew) pipeline: `stats_logging.amxx` →
+`logaddress_add` UDP → the KTPHLStatsX Perl daemon → MySQL. That pipeline is
+entirely **post-match**; our overlay is the only real-time surface in the
+ecosystem, so this layer exists to put *history* next to the live match, never to
+drive anything on air.
+
+**Nothing in this repo may write to that database.** `assertReadOnly` re-checks
+every statement at call time, the configured user is expected to hold SELECT
+only, and there is no write path. The two pipelines are deliberately **not**
+consolidated at the producer: ours is a low-latency HTTP feed behind an HLTV
+delay buffer, theirs is a durable UDP ledger, and merging them would couple an
+on-air dependency to a stats deploy cadence.
+
+- **Disabled by default** (`stats_db.enabled: false`), including in production
+  until a SELECT-only MySQL user exists on the data server. Every accessor
+  returns `null`/`[]` when off and the REST layer answers **503**, so a dev
+  laptop and CI degrade instead of throwing.
+- **Routes** (all inline in `app.ts`, all read-only): `/api/stats/matches`,
+  `/api/stats/matches/:matchId`, `/api/stats/players/:steamId`,
+  `/api/stats/players?ids=` (batch), `/api/stats/maps/:mapName/flags`, and
+  `/api/stats/_guard` for breaker diagnostics.
+- **Position samples deliberately have NO route.** Individual coordinates and
+  movement histories stay private; `positionSamples()` exists for future
+  server-side use only.
+
+### Load protection (`statsdb/guard.ts`)
+
+The data server also runs MySQL for the league, the HLStatsX daemon, the HLTV
+proxies and this backend, and these endpoints are **public and unauthenticated**.
+Seven layers, in order: enabled check → per-IP rate limit (60/min) → TTL cache →
+concurrency cap (4) → circuit breaker → MySQL-side `MAX_EXECUTION_TIME(2000)` →
+client timeout. Two properties are load-bearing:
+
+- **The breaker trips on SLOW SUCCESSES, not only errors** (`slowCallMs` 750).
+  A database that is merely struggling is exactly the case worth backing off
+  from, and it never raises an error on its own.
+- **`MAX_EXECUTION_TIME` is the layer that actually protects the server.** A
+  client timeout only stops *us* waiting; MySQL keeps working. The hint makes the
+  database kill its own statement (error 3024), and it holds even if this process
+  wedges or leaks a connection.
+
+Shed requests answer **503 with Retry-After** and never touch MySQL. `undefined`
+from the work function means **404** (no such player) — distinct from 502 (query
+failed) and 503 (stand down), so a caller can tell "unknown" from "ask later".
+
+### Batch career reads
+
+`GET /api/stats/players?ids=a,b,c` is the form the caster page uses: a full
+roster is **one** query, one cache entry and one rate-limit token instead of
+twelve. Capped at `MAX_CAREER_BATCH` (24) and ids are sorted server-side so two
+clients with the same roster share the cache entry. **Absent ids are not an
+error** — the reply is a map and a missing key means "no league match recorded",
+which the UI renders differently from a zero.
+
+### Traps inherited from KTPHLStatsX's own README
+
+Each of these produces a plausible wrong answer rather than an error:
+
+- **`half` means two different things.** On `ktp_match_stats`, `half = 0` is the
+  stored match TOTAL; on the `hlstats_Events_*` tables the same value means the
+  daemon held no match context (warmup). Summing `ktp_match_stats` without a
+  half filter double-counts everything.
+- **`ktp_matches` holds one row PER HALF**, so a recent-match list must group or
+  a two-half match appears twice (OT, three times).
+- **Collation.** `hlstats_Events_*` are `utf8mb4_unicode_ci`, `ktp_*` are
+  `utf8mb4_0900_ai_ci`; joining `match_id` across the two families without an
+  explicit COLLATE raises "Illegal mix of collations".
+- **SteamID format.** `hlstats_PlayerUniqueIds.uniqueId` is `1:748805` with no
+  `STEAM_0:` prefix. Cross the boundary with `toHlstatsUniqueId`/`toHudSteamId`;
+  comparing the raw forms silently matches nothing.
+- **Receipt vs producer time.** Rows are stamped when the daemon receives them.
+  Timed analytics belong on `producer_match_id` / `producer_half` / `event_epoch`.
+- **Aggregates arrive as STRINGS** (DECIMAL/BIGINT under `bigNumberStrings`), so
+  an uncoerced career row serialises as `"kills": "70"` and `kills + 1` gives
+  `"701"`. `toNumbers` + `CAREER_NUMERIC` handle it centrally.
+
+### Local database (`data-server/sql/`)
+
+`start.sh` creates the `hlstatsx` DB, a SELECT-only user, then applies
+`01-schema.sql` and `02-fixture.sql` on **every** boot (idempotent), so anyone who
+starts the KTPInfrastructure stack gets a working read layer with no setup. Both
+files are **local-only and must never be applied to production** — the schema is a
+minimal subset of the tables we read, and the fixture is **synthetic**: invented
+players, no real player data.
+
+The fixture is shaped to exercise the traps rather than to look realistic: a
+`half = 0` TOTAL that sums exactly to its halves, one in-progress match with no
+TOTAL row (so those players correctly read as *no league record*), one match with
+`damage = 0` (reproducing KTPHLStatsX issue #33), an apostrophe in a name, and
+`flag_index` in dodx spawn order.
+
+**Its uniqueIds deliberately match the mocker's roster** (`STEAM_0:0:1001-1006`
+allies, `2001-2006` axis, minus the `STEAM_0:` prefix). That alignment is what
+makes the whole chain testable on one machine — run the mocker and every player on
+`/caster` has a career row. Break it and the panel goes correctly but uselessly
+blank, which is indistinguishable from the read layer being broken.
+
+### League Career panel (`/caster`)
+
+`web/src/components/caster/CareerPanel.jsx` + `useCareerStats.js` — the first
+surface that reads the stats DB rather than the socket feed. Two rules:
+
+- **It must disappear when the database is off.** `useCareerStats` reports
+  `unavailable` for both "not configured" and "shedding load", latches that state
+  so it stops polling, and the panel renders `null`. A permanently empty panel on
+  a caster's monitor reads as a broken page, not as a switched-off feature.
+- **It must never reach `/screen`.** These numbers are historical and refresh at
+  most every 5 minutes; an on-air overlay that depends on a MySQL query goes blank
+  when the data server is busy.
+
+Rows are labelled from the LIVE roster and joined on SteamID, so a player who has
+since changed their in-game name still matches. Contract pinned by
+`useCareerStats.test.js`.
+
+---
+
 ## Prone Shame Timer
 - `prone_change` with `state: "prone"` or `state: "deployed"` includes a `timestamp` (unix ms from server)
 - Frontend calculates elapsed prone time from that timestamp

@@ -135,6 +135,13 @@ export const RECENT_MATCHES = `
 /**
  * One match's box score. `half = 0` is the stored match TOTAL, not a half —
  * callers asking for totals want exactly that row and must not sum the others.
+ *
+ * The LEFT JOIN onto hlstats_PlayerUniqueIds assumes ONE uniqueId per player.
+ * hlstats does not enforce that — a merged account can carry several — and each
+ * extra one would duplicate every row of the box score. Verified zero occurrences
+ * on the production database (2026-08-23); left as a plain join rather than a
+ * subquery so the day it stops being true shows up as visibly doubled numbers
+ * instead of an arbitrary id being picked silently.
  */
 export const MATCH_PLAYER_STATS = `
     SELECT s.match_id, s.half, s.player_id,
@@ -191,3 +198,46 @@ export const POSITION_SAMPLES = `
      ORDER BY game_time
      LIMIT ?
 `;
+
+/**
+ * Hard ceiling on a batch career lookup.
+ *
+ * Sized for a 12-man plus substitutions, not for a general-purpose bulk API.
+ * The point of the batch form is that a caster page with a full roster costs the
+ * shared data server ONE query instead of twelve — an unbounded IN list would
+ * give that saving back and then some.
+ */
+export const MAX_CAREER_BATCH = 24;
+
+/**
+ * Career totals for SEVERAL players in one statement.
+ *
+ * Same shape and same `half = 0` filter as PLAYER_CAREER, so a row from either
+ * is interchangeable. Built as a function because the placeholder count varies;
+ * the ids still go through as bound parameters, never interpolated.
+ *
+ * Players with no recorded matches are simply ABSENT from the result — the
+ * caller must not assume the response is index-aligned with its request.
+ */
+export function playerCareerBatchSql(count: number): string {
+    if (!Number.isInteger(count) || count < 1 || count > MAX_CAREER_BATCH) {
+        throw new Error(`statsdb: career batch size ${count} out of range 1..${MAX_CAREER_BATCH}`);
+    }
+    const placeholders = new Array(count).fill('?').join(',');
+    return `
+    SELECT u.uniqueId                AS steam_id,
+           MIN(p.lastName)           AS name,
+           COUNT(DISTINCT s.match_id) AS matches,
+           SUM(s.kills)              AS kills,
+           SUM(s.deaths)             AS deaths,
+           SUM(s.headshots)          AS headshots,
+           SUM(s.damage)             AS damage,
+           SUM(s.team_kills)         AS team_kills,
+           SUM(s.suicides)           AS suicides
+      FROM ktp_match_stats s
+      JOIN hlstats_PlayerUniqueIds u ON u.playerId = s.player_id
+      JOIN hlstats_Players p         ON p.playerId = s.player_id
+     WHERE u.uniqueId IN (${placeholders}) AND s.half = 0
+     GROUP BY u.uniqueId
+`;
+}

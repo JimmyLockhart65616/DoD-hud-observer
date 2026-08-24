@@ -6,6 +6,7 @@
 import {
     assertReadOnly, toHlstatsUniqueId, toHudSteamId,
     RECENT_MATCHES, MATCH_PLAYER_STATS, PLAYER_CAREER, FLAG_POSITIONS, POSITION_SAMPLES,
+    playerCareerBatchSql, MAX_CAREER_BATCH,
 } from '../statsdb/queries';
 import * as statsDb from '../statsdb/statsDb';
 
@@ -15,6 +16,7 @@ const ALL_QUERIES: Array<[string, string]> = [
     ['PLAYER_CAREER', PLAYER_CAREER],
     ['FLAG_POSITIONS', FLAG_POSITIONS],
     ['POSITION_SAMPLES', POSITION_SAMPLES],
+    ['PLAYER_CAREER_BATCH', playerCareerBatchSql(3)],
 ];
 
 describe('statsdb read-only guard', () => {
@@ -84,6 +86,28 @@ describe('query shapes', () => {
         expect(PLAYER_CAREER).toMatch(/s\.half\s*=\s*0/);
     });
 
+    // The batch form is the one the caster page uses, so it must agree with the
+    // single-player query on the half=0 filter — a divergence would make the
+    // roster panel and a drill-down disagree about the same player.
+    it('the career batch keeps the half=0 total filter', () => {
+        expect(playerCareerBatchSql(6)).toMatch(/s\.half\s*=\s*0/);
+    });
+
+    it('the career batch emits one placeholder per id and binds them', () => {
+        expect(playerCareerBatchSql(1)).toMatch(/IN \(\?\)/);
+        expect(playerCareerBatchSql(4)).toMatch(/IN \(\?,\?,\?,\?\)/);
+    });
+
+    // An unbounded IN list would give back the whole point of batching — one
+    // bounded query instead of N — and hand a caller a way to make the shared
+    // data server do arbitrary work.
+    it('the career batch refuses sizes outside 1..MAX', () => {
+        expect(() => playerCareerBatchSql(0)).toThrow(/out of range/);
+        expect(() => playerCareerBatchSql(MAX_CAREER_BATCH + 1)).toThrow(/out of range/);
+        expect(() => playerCareerBatchSql(2.5)).toThrow(/out of range/);
+        expect(() => playerCareerBatchSql(MAX_CAREER_BATCH)).toBeTruthy();
+    });
+
     it('position samples are bounded', () => {
         expect(POSITION_SAMPLES).toMatch(/LIMIT \?/);
     });
@@ -132,5 +156,19 @@ describe('disabled by default', () => {
         await expect(statsDb.recentMatches()).resolves.toEqual([]);
         await expect(statsDb.matchPlayerStats('x')).resolves.toEqual([]);
         await expect(statsDb.playerCareer('STEAM_0:1:1')).resolves.toBeNull();
+        await expect(statsDb.playerCareers(['STEAM_0:1:1'])).resolves.toEqual({});
+    });
+
+    // An empty roster must not reach the database at all — /caster mounts before
+    // any player has connected, and a warm-up page should cost nothing.
+    it('short-circuits an empty id list', async () => {
+        await expect(statsDb.playerCareers([])).resolves.toEqual({});
+    });
+
+    // The cap is enforced in the SQL builder too, but failing here gives the
+    // route a clean 400 rather than a 502 from deep inside the driver.
+    it('refuses a batch larger than the cap', async () => {
+        const tooMany = Array.from({ length: MAX_CAREER_BATCH + 1 }, (_, i) => `STEAM_0:0:${i}`);
+        await expect(statsDb.playerCareers(tooMany)).rejects.toThrow(/batch cap/);
     });
 });
