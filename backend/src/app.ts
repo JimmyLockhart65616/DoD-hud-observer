@@ -158,7 +158,11 @@ async function serveStats(
     req: any, res: any, cacheKey: string, ttlMs: number, work: () => Promise<unknown>,
 ): Promise<void> {
     if (!statsDb.isEnabled()) {
-        res.status(503).json({ error: 'stats database not configured on this instance' });
+        // `reason` is the machine-readable half: permanent, stop asking.
+        res.status(503).json({
+            reason: 'disabled',
+            error: 'stats database not configured on this instance',
+        });
         return;
     }
 
@@ -180,7 +184,11 @@ async function serveStats(
         if (out === null) {
             // Shed: breaker open, or too many already in flight. Say so plainly
             // — this is the "data server can't keep up, so stand down" path.
+            // TRANSIENT. A client must back off and retry, not stand down for
+            // good -- the breaker half-opens on its own and the concurrency cap
+            // clears as soon as the in-flight queries finish.
             res.set('Retry-After', '30').status(503).json({
+                reason: 'shedding',
                 error: 'stats temporarily unavailable (load shedding)',
                 breaker: statsGuard.getState(),
             });

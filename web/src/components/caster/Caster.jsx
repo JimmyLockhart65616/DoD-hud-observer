@@ -19,6 +19,7 @@ import { isClockStopped } from '../core/MatchPhase/MatchPhase';
 import { className as dodClassName } from '../core/dodClasses';
 import { getWeaponIcon } from '../screen/resources/weaponIcons';
 import CareerPanel from './CareerPanel';
+import MomentsPanel from './MomentsPanel';
 
 // Screen.css owns the .stats-board-* table styling and .flag-* strip that this
 // page reuses. There's no code splitting, so it's already in the bundle — the
@@ -450,6 +451,8 @@ function Caster() {
                         <Loadouts players={axisPlayers} team="axis" />
                     </div>
                 </section>
+
+                <MomentsPanel />
 
                 <CareerPanel alliesPlayers={alliesPlayers} axisPlayers={axisPlayers} />
 

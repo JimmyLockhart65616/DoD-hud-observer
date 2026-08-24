@@ -572,3 +572,63 @@
 }
 
 .caster-career-warn { color: #d98a5f; }
+
+/* ── Moments panel (derived, live) ───────────────────────────────── */
+
+.caster-moment-cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.caster-moment-col {
+  flex: 1 1 130px;
+  min-width: 0;
+}
+
+.caster-moment-head {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #8990b5;
+  padding-bottom: 3px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.caster-moment-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.caster-moment-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.caster-moment-value {
+  flex: 0 0 auto;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: #e8ecff;
+}
+
+/* Secondary by design — the count is the headline, the qualifier is context. */
+.caster-moment-detail {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: #6b7192;
+}
+
+.caster-moment-col .caster-idle {
+  margin: 6px 0 0;
+  font-size: 11px;
+}

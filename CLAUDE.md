@@ -728,6 +728,29 @@ composited into the broadcast.
   `⚠ opened after halftime`. The durable fix (a `half_archive` on `ServerState` that
   survives `half_start`) would also fix a latent on-air bug: an OBS browser-source
   reload during half 2 makes the `FINAL STATS` board show half-2 numbers only.
+- **Moments panel** (`MomentsPanel.jsx`) — three things the scoreboard cannot
+  show, each a sentence a caster can say out loud: **shutdowns** (who ended a
+  streak of 3+, and how long it was), **bursts** (fastest multi-kill, gap ≤5s),
+  and **cap setups** (kills by the capturing side in the 30s before their flag).
+  Half-scoped; clears with `kill_streaks`.
+  - **Accumulated in the store (`derived` slice), NOT derived at render from
+    `kill_log`** — that slice is capped at 150 entries and a long half can exceed
+    it, which would silently turn a half-scoped panel into a moving window.
+  - **A shutdown needs the victim's streak read BEFORE `addKill` resets it.**
+    Nothing else on the entry carries the pre-death value; the entry now also
+    stamps `victim_streak` so a consumer can see why one was credited.
+  - **A burst ends when the killer DIES, not on the clock.** Dying resets the
+    streak, so the next kill lands on streak 1 — that, plus the gap, is the
+    continuation test. `chain_run` holds the in-progress burst; `derived.chains`
+    holds the best one.
+  - **Teamkills and suicides credit nothing anywhere here**, matching the
+    plugin's rule that they never score.
+  - **Deliberately NOT a composite score.** Krod's accumulation weights
+    ("bounded v3") are unpushed local work — only the shapes are public — so a
+    number invented here would be a third scoring system on air alongside KTPR
+    and accumulation, disagreeing with both. Add the composite only once we can
+    mirror his constants. Contract pinned by `Socket.moments.test.js`.
+
 - **Do NOT add `gameEvents.on(...)` listeners from this page** — `SocketStoreComponent`'s
   effect cleanup calls `gameEvents.removeAllListeners()`, which wipes every listener
   globally, and `index.jsx` mounts under StrictMode (effects run mount→unmount→mount in
@@ -779,6 +802,23 @@ client timeout. Two properties are load-bearing:
   client timeout only stops *us* waiting; MySQL keeps working. The hint makes the
   database kill its own statement (error 3024), and it holds even if this process
   wedges or leaks a connection.
+
+**The two 503s must be told apart by the client, and the body is what says
+which.** `reason: "disabled"` is permanent (no database configured — the
+production default today) and a caller should stop asking; `reason: "shedding"`
+is transient by construction, because the breaker half-opens on its own and the
+concurrency cap clears as soon as in-flight queries finish. A client that
+latches off for a shed defeats the entire mechanism — the panel stays dark for
+the rest of a broadcast because the data server was briefly busy once. A 503
+with no `reason` (older backend) is read as permanent, which is the safe
+direction.
+
+**Clients must also let the roster SETTLE before asking.** Players connect one
+at a time, so a filling 12-man changes the id set twelve times in about a
+second; without a debounce that is twelve requests in a burst, which trips the
+concurrency cap and gets them shed at exactly the moment the panel first has
+something to show. Measured against the local stack before the fix: 8 shed
+requests on a single mocker run. `useCareerStats` waits 750ms.
 
 Shed requests answer **503 with Retry-After** and never touch MySQL. `undefined`
 from the work function means **404** (no such player) — distinct from 502 (query
