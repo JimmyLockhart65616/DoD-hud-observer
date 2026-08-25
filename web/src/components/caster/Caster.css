@@ -209,6 +209,15 @@
   margin: 14px 0 8px;
 }
 
+/* Keeps the minimap toggle next to FREEZE on the right. Without the wrapper the
+   toolbar's space-between strands it in the middle of the bar. */
+.caster-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .caster-scope {
   display: flex;
   flex-wrap: wrap;

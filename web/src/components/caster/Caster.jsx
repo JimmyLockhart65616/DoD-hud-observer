@@ -421,22 +421,24 @@ function Caster() {
                     recordedHalves={recordedHalves}
                     carryMissing={carryMissing}
                 />
-                {!minimapPinned && (
+                <div className="caster-toolbar-right">
+                    {!minimapPinned && (
+                        <button
+                            className={`caster-chip${minimapOn ? ' caster-chip-on' : ''}`}
+                            onClick={toggleMinimap}
+                            title="Show or hide the schematic minimap (remembered on this machine)"
+                        >
+                            TOGGLE MINI MAP
+                        </button>
+                    )}
                     <button
-                        className={`caster-chip${minimapOn ? ' caster-chip-on' : ''}`}
-                        onClick={toggleMinimap}
-                        title="Show or hide the schematic minimap (remembered on this machine)"
+                        className={`caster-chip caster-freeze${frozen ? ' caster-chip-frozen' : ''}`}
+                        onClick={toggleFreeze}
+                        title="Hold the table still while you read it — the feed keeps running underneath"
                     >
-                        MAP
+                        {frozen ? '▶ RESUME' : '❄ FREEZE'}
                     </button>
-                )}
-                <button
-                    className={`caster-chip caster-freeze${frozen ? ' caster-chip-frozen' : ''}`}
-                    onClick={toggleFreeze}
-                    title="Hold the table still while you read it — the feed keeps running underneath"
-                >
-                    {frozen ? '▶ RESUME' : '❄ FREEZE'}
-                </button>
+                </div>
             </div>
 
             {frozen && (
