@@ -209,6 +209,15 @@
   margin: 14px 0 8px;
 }
 
+/* Keeps the minimap toggle next to FREEZE on the right. Without the wrapper the
+   toolbar's space-between strands it in the middle of the bar. */
+.caster-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .caster-scope {
   display: flex;
   flex-wrap: wrap;
@@ -632,3 +641,29 @@
   margin: 6px 0 0;
   font-size: 11px;
 }
+
+/* ── Minimap (schematic — no background image, see Minimap.jsx) ──── */
+
+.caster-panel-minimap { flex: 0 1 360px; }
+
+.caster-minimap {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 340px;
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 3px;
+}
+
+.caster-minimap-flag {
+  fill: #8990b5;
+  font-size: 9px;
+  font-weight: 700;
+  text-anchor: middle;
+  /* The label is orientation, not data — never let it obscure a player dot. */
+  pointer-events: none;
+}
+
+.caster-minimap-dot { stroke: #11131f; stroke-width: 1.5; }
+.caster-minimap-allies { fill: #c8e090; }
+.caster-minimap-axis   { fill: #ffb8b8; }

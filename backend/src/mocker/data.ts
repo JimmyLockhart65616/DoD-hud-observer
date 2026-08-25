@@ -93,11 +93,11 @@ export default [
     // flag_name = BSP entity string. `reason` says how far the overlay trusts the
     // snapshot; see the flags_init table in CLAUDE.md.
     { "flags_init": { "time": 1100, "reason": "map_load", "flags": [
-        { "flag_id": 0, "flag_name": "POINT_ANZIO_PLAZA",   "owner": "neutral" },
-        { "flag_id": 1, "flag_name": "POINT_ANZIO_STREET",  "owner": "neutral" },
-        { "flag_id": 2, "flag_name": "POINT_ANZIO_HILL",    "owner": "neutral" },
-        { "flag_id": 3, "flag_name": "POINT_BRIDGE",        "owner": "neutral" },
-        { "flag_id": 4, "flag_name": "POINT_ANZIO_LAUNDRY", "owner": "neutral" },
+        { "flag_id": 0, "flag_name": "POINT_ANZIO_PLAZA",   "owner": "neutral", "x": -698, "y": 923 },
+        { "flag_id": 1, "flag_name": "POINT_ANZIO_STREET",  "owner": "neutral", "x": 448, "y": 800 },
+        { "flag_id": 2, "flag_name": "POINT_ANZIO_HILL",    "owner": "neutral", "x": 1375, "y": 1682 },
+        { "flag_id": 3, "flag_name": "POINT_BRIDGE",        "owner": "neutral", "x": 1040, "y": -288 },
+        { "flag_id": 4, "flag_name": "POINT_ANZIO_LAUNDRY", "owner": "neutral", "x": -1495, "y": -326 },
     ]}},
 
     // dod_player_spawn forward includes `name` (verified in plugin source line 466).
@@ -138,21 +138,21 @@ export default [
     // state). Socket-only on the backend (never written to events.jsonl). The real
     // plugin emits this 4×/sec; the mocker authors a few representative snapshots.
     { "player_state": { "time": 4800, "players": [
-        { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 2, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 2, "health": 100, "prone_state": "standing", "x": -1313, "y": 11 },
         // -1 = dodx 2.7.32 could not resolve the per-map ammo index. Rendered as
         // NO pip, distinct from a real 0 (dimmed pip). Placed on a full-roster
         // snapshot so all three pip states are on screen in one frame.
-        { "user_id": "STEAM_0:0:1002", "weapon": "thompson", "nades": -1, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:1003", "weapon": "garand",   "nades": 0, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 1, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:1005", "weapon": "thompson", "nades": 2, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": 2, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 2, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2002", "weapon": "mp40",     "nades": 2, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2003", "weapon": "kar",      "nades": 2, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2004", "weapon": "mp44",     "nades": 2, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2005", "weapon": "kar",      "nades": 2, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2006", "weapon": "mg42",     "nades": 1, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1002", "weapon": "thompson", "nades": -1, "health": 100, "prone_state": "standing", "x": -1176, "y": 322 },
+        { "user_id": "STEAM_0:0:1003", "weapon": "garand",   "nades": 0, "health": 100, "prone_state": "standing", "x": -1039, "y": 633 },
+        { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 1, "health": 100, "prone_state": "standing", "x": -1402, "y": 944 },
+        { "user_id": "STEAM_0:0:1005", "weapon": "thompson", "nades": 2, "health": 100, "prone_state": "standing", "x": -1265, "y": 1255 },
+        { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": 2, "health": 100, "prone_state": "standing", "x": -1128, "y": 1566 },
+        { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 2, "health": 100, "prone_state": "standing", "x": 987, "y": 11 },
+        { "user_id": "STEAM_0:0:2002", "weapon": "mp40",     "nades": 2, "health": 100, "prone_state": "standing", "x": 1124, "y": 322 },
+        { "user_id": "STEAM_0:0:2003", "weapon": "kar",      "nades": 2, "health": 100, "prone_state": "standing", "x": 1261, "y": 633 },
+        { "user_id": "STEAM_0:0:2004", "weapon": "mp44",     "nades": 2, "health": 100, "prone_state": "standing", "x": 898, "y": 944 },
+        { "user_id": "STEAM_0:0:2005", "weapon": "kar",      "nades": 2, "health": 100, "prone_state": "standing", "x": 1035, "y": 1255 },
+        { "user_id": "STEAM_0:0:2006", "weapon": "mg42",     "nades": 1, "health": 100, "prone_state": "standing", "x": 1172, "y": 1566 },
     ]}},
 
     // Mid-round snapshot: 1003/2002/2006 are dead by now (kills at 9s/10s/14s) and
@@ -175,15 +175,15 @@ export default [
         "allies": { "in": 3.75, "pending": 1 },
         "axis":   { "in": 8.25, "pending": 2 },
     }, "scoring": { "in": 21.25, "every": 30.5, "allies": 4, "axis": 2 }, "players": [
-        { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:1002", "weapon": "thompson", "nades": 2, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 1, "health": 88,  "prone_state": "deployed" },
-        { "user_id": "STEAM_0:0:1005", "weapon": "thompson", "nades": 1, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": 0, "health": 51,  "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 1, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2003", "weapon": "kar",      "nades": 2, "health": 62,  "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2004", "weapon": "mp44",     "nades": 1, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2005", "weapon": "kar",      "nades": 2, "health": 90,  "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing", "x": -1313, "y": 11 },
+        { "user_id": "STEAM_0:0:1002", "weapon": "thompson", "nades": 2, "health": 100, "prone_state": "standing", "x": -1176, "y": 322 },
+        { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 1, "health": 88,  "prone_state": "deployed", "x": -1402, "y": 944 },
+        { "user_id": "STEAM_0:0:1005", "weapon": "thompson", "nades": 1, "health": 100, "prone_state": "standing", "x": -1265, "y": 1255 },
+        { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": 0, "health": 51,  "prone_state": "standing", "x": -1128, "y": 1566 },
+        { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 1, "health": 100, "prone_state": "standing", "x": 987, "y": 11 },
+        { "user_id": "STEAM_0:0:2003", "weapon": "kar",      "nades": 2, "health": 62,  "prone_state": "standing", "x": 1261, "y": 633 },
+        { "user_id": "STEAM_0:0:2004", "weapon": "mp44",     "nades": 1, "health": 100, "prone_state": "standing", "x": 898, "y": 944 },
+        { "user_id": "STEAM_0:0:2005", "weapon": "kar",      "nades": 2, "health": 90,  "prone_state": "standing", "x": 1035, "y": 1255 },
     ]}},
 
     // Scoring clock with NO award pair — the plugin has locked the tick phase but
@@ -193,8 +193,8 @@ export default [
     // most likely to hit the fleet first and would otherwise never be seen locally.
     { "player_state": { "time": 19000,
       "scoring": { "in": 12.00, "every": 30.5 }, "players": [
-        { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 1, "health": 100, "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing", "x": -1313, "y": 11 },
+        { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 1, "health": 100, "prone_state": "standing", "x": 987, "y": 11 },
     ]}},
 
     // Post-trade snapshot: both sides are down bodies and the allies wave is about
@@ -206,15 +206,15 @@ export default [
         "allies": { "in": 1.25, "pending": 3 },
         "axis":   { "in": 6.50, "pending": 4 },
     }, "scoring": { "in": 2.75, "every": 30.5, "allies": 4, "axis": 0 }, "players": [
-        { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 0, "health": 88,  "prone_state": "deployed" },
+        { "user_id": "STEAM_0:0:1001", "weapon": "garand",   "nades": 1, "health": 74,  "prone_state": "standing", "x": -1313, "y": 11 },
+        { "user_id": "STEAM_0:0:1004", "weapon": "spring",   "nades": 0, "health": 88,  "prone_state": "deployed", "x": -1402, "y": 944 },
         // -1 is dodx 2.7.32 saying it could not resolve the per-map ammo index.
         // Deliberately alongside the real 0s above and below: this player's pip
         // must DISAPPEAR while theirs stay visible but dimmed. Older modules
         // returned 0 for both cases, which is the conflation KTPAMXX#15 is about.
-        { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": -1, "health": 51, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 0, "health": 100, "prone_state": "standing" },
-        { "user_id": "STEAM_0:0:2005", "weapon": "kar",      "nades": 2, "health": 90,  "prone_state": "standing" },
+        { "user_id": "STEAM_0:0:1006", "weapon": "garand",   "nades": -1, "health": 51, "prone_state": "standing", "x": -1128, "y": 1566 },
+        { "user_id": "STEAM_0:0:2001", "weapon": "kar",      "nades": 0, "health": 100, "prone_state": "standing", "x": 987, "y": 11 },
+        { "user_id": "STEAM_0:0:2005", "weapon": "kar",      "nades": 2, "health": 90,  "prone_state": "standing", "x": 1035, "y": 1255 },
     ]}},
 
     // Pre-engagement zone state — zone polling is 10Hz live; we sample at ~1Hz here.
@@ -504,11 +504,11 @@ export default [
     // Production: flags_init is re-emitted per round (47× in fixture, 6 H1 + 41 H2).
 
     { "flags_init": { "time": 63100, "reason": "match_start", "flags": [
-        { "flag_id": 0, "flag_name": "POINT_ANZIO_PLAZA",   "owner": "neutral" },
-        { "flag_id": 1, "flag_name": "POINT_ANZIO_STREET",  "owner": "neutral" },
-        { "flag_id": 2, "flag_name": "POINT_ANZIO_HILL",    "owner": "neutral" },
-        { "flag_id": 3, "flag_name": "POINT_BRIDGE",        "owner": "neutral" },
-        { "flag_id": 4, "flag_name": "POINT_ANZIO_LAUNDRY", "owner": "neutral" },
+        { "flag_id": 0, "flag_name": "POINT_ANZIO_PLAZA",   "owner": "neutral", "x": -698, "y": 923 },
+        { "flag_id": 1, "flag_name": "POINT_ANZIO_STREET",  "owner": "neutral", "x": 448, "y": 800 },
+        { "flag_id": 2, "flag_name": "POINT_ANZIO_HILL",    "owner": "neutral", "x": 1375, "y": 1682 },
+        { "flag_id": 3, "flag_name": "POINT_BRIDGE",        "owner": "neutral", "x": 1040, "y": -288 },
+        { "flag_id": 4, "flag_name": "POINT_ANZIO_LAUNDRY", "owner": "neutral", "x": -1495, "y": -326 },
     ]}},
 
     // Spawns — teams swapped (1001-1006 now axis classes, 2001-2006 now allied classes)

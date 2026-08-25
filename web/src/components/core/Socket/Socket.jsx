@@ -655,6 +655,7 @@ function makeDefaultPlayer(user_id, name, team) {
         dead:             false,
 
         prone_state:      'standing',
+        pos:              null,
         prone_since:      null,
         kills:            0,
         deaths:           0,
@@ -817,6 +818,7 @@ export const SocketStoreComponent = () => {
                 dead:             false,
 
                 prone_state:      'standing',
+        pos:              null,
                 prone_since:      null,
                 disconnected:     false,
             };
@@ -949,6 +951,16 @@ export const SocketStoreComponent = () => {
                     // indistinguishable from empty), so on an older module this
                     // arm simply never fires.
                     nades: typeof s.nades === 'number' && s.nades >= 0 ? s.nades : null,
+
+                    // Minimap position. An EXACT (0,0) is the plugin saying it
+                    // could not read the origin, not a player standing on the
+                    // world centre — mapped to null so the marker is hidden
+                    // rather than parking every unreadable player in one spot.
+                    // A real coordinate is never exactly 0 on both axes on any
+                    // DoD map, and the plugin sends integers.
+                    pos: (typeof s.x === 'number' && typeof s.y === 'number' && !(s.x === 0 && s.y === 0))
+                        ? { x: s.x, y: s.y }
+                        : null,
                 };
             });
             setAlliesPlayers(apply);

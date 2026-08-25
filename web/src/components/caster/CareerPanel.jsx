@@ -81,6 +81,19 @@ const CareerPanel = ({ alliesPlayers, axisPlayers }) => {
     if (status === 'unavailable') return null;
     if (!roster.length) return null;
 
+    // Nobody on this roster has a league record. Hide, for the same reason the
+    // 'unavailable' case hides: a panel listing twelve players as "no league
+    // record" carries no information and reads as a broken lookup rather than as
+    // an honest empty result.
+    //
+    // This is the LIVE state in production right now, not a hypothetical:
+    // ktp_matches.match_type is NULL on every row, so the official-play filter
+    // matches nothing and every career comes back empty (KTPHLStatsX #37). When
+    // that lands the panel reappears on its own, with no change here.
+    //
+    // Gated on ready so a slow first request does not flash the panel out.
+    if (status === 'ready' && Object.keys(careers).length === 0) return null;
+
     return (
         <section className="caster-panel caster-panel-career">
             <h2>
