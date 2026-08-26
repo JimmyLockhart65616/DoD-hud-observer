@@ -75,6 +75,22 @@ native dodx_area_get_bounds(index, Float:mins[3], Float:maxs[3]);
 native dodx_get_user_bounds(id, Float:mins[3], Float:maxs[3]);
 #endif
 
+// dodx_cp_identity_resolved: 1 once dodx has reordered its control-point array
+// into the game DLL's own index space — resolved from CControlPointMaster by
+// pvPrivateData identity roughly 2s after map load (KTPAMXX #56).
+//
+// This is the gate on init_cp_index_remap() below. A module that resolves
+// identity hands us DLL order already, so applying our hardcoded permutation on
+// top of that permutes saints2/donner a SECOND time. Binding it optionally is
+// what removes the coordinated dodx+plugin wave: on an older module the native
+// is absent, this stays false and the remap applies as it always has; on a
+// resolving module it reads 1 and the remap becomes the identity map. One build
+// is correct against both, so neither deploy order can break a map — which
+// matters because the HUD is enabled on all 24 instances, not a canary subset.
+#if !defined dodx_cp_identity_resolved
+native dodx_cp_identity_resolved();
+#endif
+
 // ktp_is_match_active: KTPMatchHandler's only native (KTPMatchHandler.sma:3852).
 // Returns 1 while a match is LIVE, PENDING (ready-up) or PRE-START — which is
 // exactly what makes it useful here: paired with our own g_matchActive (set only
@@ -203,6 +219,12 @@ new bool:g_has_round_time_native = true;
 // together, and a half-bound pair would silently mix a contained zone test with
 // a point-origin victim -- the exact under-counting containment exists to remove.
 new bool:g_has_zone_bounds_native = true;
+
+// dodx_cp_identity_resolved() availability (KTPAMXX #56+). False on every module
+// shipped to the fleet so far -- which is why init_cp_index_remap() still carries
+// the hardcoded saints2/donner permutations. Never call the native while false;
+// the runtime trap would abort the plugin.
+new bool:g_has_cp_identity_native = true;
 
 // Last accepted native reading + when, for the end-of-half artifact guard in
 // hud_timeleft_f(): as a half expires by timelimit the engine's OWN round-cycle
@@ -1719,6 +1741,10 @@ public native_filter(const name[], index, trap) {
     }
     if (!trap && (equal(name, "dodx_area_get_bounds") || equal(name, "dodx_get_user_bounds"))) {
         g_has_zone_bounds_native = false;
+        return PLUGIN_HANDLED;
+    }
+    if (!trap && equal(name, "dodx_cp_identity_resolved")) {
+        g_has_cp_identity_native = false;
         return PLUGIN_HANDLED;
     }
     if (!trap && equal(name, "dodx_get_score_tick_period")) {
@@ -3334,6 +3360,30 @@ public controlpoints_init() {
 // correct there — deliberately not listed.
 stock init_cp_index_remap() {
     for (new i = 0; i < MAX_FLAGS; i++) g_cp_dodx_of_dll[i] = i;
+
+    // dodx has resolved CP identity from the DLL itself, so mObjects is ALREADY
+    // in the DLL's index space and the identity map above is the whole answer.
+    // Every permutation below would be a second permutation on top of it.
+    //
+    // Re-checked on every call rather than latched at load, and that is
+    // load-bearing twice over:
+    //
+    //  - controlpoints_init fires TWICE per map on a resolving module: once from
+    //    the entity scan (pre-resolve, order provisional -> this reads 0 and the
+    //    tables below correctly apply) and again after the resolve (-> reads 1,
+    //    identity). So the flags_init snapshot self-corrects rather than needing
+    //    the first one to be right.
+    //  - the resolve legitimately FAILS on maps with no control point master or
+    //    more than one (dod_heutau, dod_overlord, dod_schwetz). dodx keeps
+    //    BSP/entity-scan order there, which is exactly what the tables are for.
+    // Nested rather than `flag && native()`: every other optional-native call
+    // site in this file guards this way, and calling an unbound native is a
+    // runtime trap that aborts the plugin mid-broadcast -- not something to rest
+    // on the compiler's short-circuit semantics.
+    if (g_has_cp_identity_native) {
+        if (dodx_cp_identity_resolved())
+            return;
+    }
 
     new mapname[64];
     get_mapname(mapname, charsmax(mapname));
