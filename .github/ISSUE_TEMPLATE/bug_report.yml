@@ -1,0 +1,80 @@
+name: Bug report
+description: Something in the overlay, backend, or plugin behaves wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing. Before you paste anything: **this repository is
+        public.** Never include the contents of `config/online/config.yaml`,
+        `deploy/hud-observer.service`, an ingest `auth_key`, or an rcon password
+        or transcript. See [SECURITY.md](https://github.com/JimmyLockhart65616/DoD-hud-observer/blob/master/SECURITY.md).
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where does it happen?
+      options:
+        - /screen — the on-air OBS overlay
+        - /hq — the operations board
+        - /caster — the caster reference page
+        - /watch — the server and match picker
+        - /help — the viewer guide
+        - Backend (ingest, recorder, REST, sockets)
+        - KTPHudObserver.amxx (the game-server plugin)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect instead?
+      description: |
+        For a wrong number, say what the overlay showed **and** what the game
+        itself showed — the gap between the two is usually the whole bug.
+      placeholder: |
+        The Allies score pill read 3 but the in-game scoreboard said 4, from
+        about halfway through half 2 until the end of the match.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How can we reproduce it?
+      description: |
+        If it reproduces against `npm run mocker`, that is the single most
+        useful thing you can tell us.
+    validations:
+      required: false
+
+  - type: input
+    id: match
+    attributes:
+      label: Match ID and map
+      description: |
+        From the URL or the recording directory, e.g.
+        `match-1777342963-NY1` on `dod_thunder2`. Lets us replay the exact
+        event stream.
+      placeholder: match-<epoch>-<server> on dod_<map>
+    validations:
+      required: false
+
+  - type: input
+    id: build
+    attributes:
+      label: Plugin build
+      description: |
+        Output of the `amx_ktp_versions` rcon command, or the commit SHA if
+        you are running locally. Skip if this is a frontend-only bug.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have not pasted any auth key, rcon password, or production config into this issue.
+          required: true

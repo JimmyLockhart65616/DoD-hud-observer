@@ -1,0 +1,12 @@
+# Code owners are requested for review automatically on any PR touching a
+# matching path. This does not *require* their approval unless a branch
+# protection rule or ruleset on master says so.
+
+* @JimmyLockhart65616
+
+# The plugin, the compile path, and CI all sit against the upstream KTP stack.
+# Uncomment to have Tony auto-requested on changes that can break it — ask him
+# first, this subscribes him to a review notification every time.
+# KTPHudObserver.sma      @afraznein
+# .github/workflows/      @afraznein
+# scripts/plugin-smoke.sh @afraznein

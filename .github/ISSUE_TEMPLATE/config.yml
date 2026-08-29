@@ -1,0 +1,17 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Missing or broken dodx / reapi native
+    url: https://github.com/afraznein/KTPAMXX
+    about: The AMXX fork providing dodx_ktp and reapi_ktp. File native-level bugs there.
+  - name: Deploy, Docker orchestration, or CI
+    url: https://github.com/afraznein/KTPInfrastructure
+    about: Server inventory, image builds, and the reusable smoke workflow this repo calls.
+  - name: Match start / end timing
+    url: https://github.com/afraznein/KTPMatchHandler
+    about: Emits the ktp_match_start and ktp_match_end forwards this plugin brackets a match with.
+  - name: Async HTTP module crashes or leaks
+    url: https://github.com/afraznein/KTPAmxxCurl
+    about: The curl module the plugin POSTs ingest events through.
+  - name: Security or credential exposure
+    url: https://github.com/JimmyLockhart65616/DoD-hud-observer/security/advisories/new
+    about: Report privately. Do not open a public issue for anything involving a key, password, or exposed endpoint.
