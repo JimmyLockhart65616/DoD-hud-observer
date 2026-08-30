@@ -618,13 +618,18 @@ export function createIngestRouter(
         // from events.jsonl and must see real-time-ordered events.
 
         if (event.event === 'ktp_match_start' && matchId) {
-            recorder.startMatch(
+            const started = recorder.startMatch(
                 matchId,
                 event.map ?? 'unknown',
                 event.match_type ?? 0,
                 event.half ?? 0,
                 sourceServer,
             );
+            if (!started) {
+                console.warn(`[ingest] Rejected ${event.event} for ${matchId} from ${sourceServer}`);
+                res.status(409).json({ error: 'event rejected by match recorder' });
+                return;
+            }
             // Force a fresh HLTV sample at match start so the buffer has an
             // accurate clock for the upcoming match's events.
             if (hltvSync?.isActive(sourceServer)) {
@@ -632,8 +637,20 @@ export function createIngestRouter(
             }
         }
 
+        if (matchId && SOCKET_ONLY_EVENTS.has(event.event)
+            && !recorder.canForwardTransientEvent(matchId, sourceServer)) {
+            console.warn(`[ingest] Rejected ${event.event} for ${matchId} from ${sourceServer}`);
+            res.status(409).json({ error: 'event rejected by match recorder' });
+            return;
+        }
+
         if (matchId && !SOCKET_ONLY_EVENTS.has(event.event)) {
-            recorder.recordEvent(matchId, event, sourceServer);
+            const recorded = recorder.recordEvent(matchId, event, sourceServer);
+            if (!recorded) {
+                console.warn(`[ingest] Rejected ${event.event} for ${matchId} from ${sourceServer}`);
+                res.status(409).json({ error: 'event rejected by match recorder' });
+                return;
+            }
         }
 
         if (event.event === 'ktp_match_end' && matchId) {

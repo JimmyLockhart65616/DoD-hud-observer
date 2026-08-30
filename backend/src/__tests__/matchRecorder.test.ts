@@ -4,7 +4,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { MatchRecorder } from '../handler/matchRecorder';
+import { LATE_EVENT_SETTLEMENT_MS, MatchRecorder } from '../handler/matchRecorder';
 
 function makeTmpDir(): string {
     const dir = path.join(os.tmpdir(), `recorder-test-${Date.now()}`);
@@ -56,6 +56,14 @@ describe('MatchRecorder', () => {
                 recorder.startMatch('KTP-004', 'dod_anzio', 1, 1, 'localhost');
             }).not.toThrow();
         });
+
+        it('rejects events from a different server for an active match', () => {
+            recorder.startMatch('KTP-005', 'dod_anzio', 1, 1, 'server-a');
+
+            expect(recorder.recordEvent('KTP-005', { event: 'kill' }, 'server-b')).toBe(false);
+            expect(recorder.getMetadata('KTP-005')!.eventCount).toBe(0);
+            expect(recorder.getEvents('KTP-005')).toEqual([]);
+        });
     });
 
     describe('recordEvent', () => {
@@ -81,6 +89,108 @@ describe('MatchRecorder', () => {
             recorder.recordEvent('KTP-012', { event: 'e1' }, 'localhost');
             recorder.recordEvent('KTP-012', { event: 'e2' }, 'localhost');
             expect(recorder.getMetadata('KTP-012')!.eventCount).toBe(2);
+        });
+
+        it('repairs a stale completed count after restart before appending an eligible late final', () => {
+            const matchId = 'KTP-late-after-restart';
+            recorder.startMatch(matchId, 'dod_anzio', 0, 2, 'localhost');
+            recorder.recordEvent(matchId, { event: 'half_end' }, 'localhost');
+            recorder.recordEvent(matchId, { event: 'ktp_match_end' }, 'localhost');
+            recorder.endMatch(matchId);
+            const endedAt = recorder.getMetadata(matchId)!.endedAt;
+            recorder.close();
+
+            const metaPath = path.join(tmpDir, matchId, 'metadata.json');
+            const stale = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+            stale.eventCount = 0;
+            fs.writeFileSync(metaPath, JSON.stringify(stale, null, 2) + '\n');
+            fs.appendFileSync(path.join(tmpDir, matchId, 'events.jsonl'), '   \n');
+
+            recorder = new MatchRecorder(tmpDir);
+            expect(recorder.recordEvent(matchId, {
+                event: 'team_score', source: 'engine-team-score-v1', sample_kind: 'final',
+                half: 2, tick: 1200.5, event_sequence: 4,
+                allies_team_slot: 2, axis_team_slot: 1,
+                allies_score: 3, axis_score: 5,
+            }, 'localhost')).toBe(true);
+
+            const meta = recorder.getMetadata(matchId)!;
+            expect(meta.endedAt).toBe(endedAt);
+            expect(meta.eventCount).toBe(3);
+            expect(recorder.getActiveMatchIds()).not.toContain(matchId);
+            expect(recorder.getEvents(matchId)?.map(e => e.event)).toEqual([
+                'half_end', 'ktp_match_end', 'team_score',
+            ]);
+            expect(JSON.parse(
+                fs.readFileSync(metaPath, 'utf-8')
+            )).toMatchObject({ endedAt, eventCount: 3 });
+        });
+
+        it('accepts only exact-source producer-order candidates during completed settlement', () => {
+            const matchId = 'KTP-late-allowlist';
+            recorder.startMatch(matchId, 'dod_anzio', 0, 2, 'server-a');
+            recorder.recordEvent(matchId, { event: 'ktp_match_end' }, 'server-a');
+            recorder.endMatch(matchId);
+            const endedAt = recorder.getMetadata(matchId)!.endedAt;
+
+            expect(recorder.recordEvent(matchId, {
+                event: 'team_score', source: 'engine-team-score-v1', sample_kind: 'final',
+            }, 'server-a')).toBe(true);
+            expect(recorder.recordEvent(matchId, {
+                event: 'player_stats_summary', reason: 'match_end', players: [],
+            }, 'server-a')).toBe(true);
+
+            expect(recorder.getMetadata(matchId)).toMatchObject({ endedAt, eventCount: 3 });
+            expect(recorder.getActiveMatchIds()).not.toContain(matchId);
+        });
+
+        it.each([
+            ['ordinary event', { event: 'kill' }],
+            ['legacy final', { event: 'team_score', sample_kind: 'final' }],
+            ['wrong score source', { event: 'team_score', source: 'other', sample_kind: 'final' }],
+            ['non-final official score', { event: 'team_score', source: 'engine-team-score-v1', sample_kind: 'change' }],
+            ['non-terminal summary', { event: 'player_stats_summary', reason: 'half_end' }],
+        ])('rejects completed settlement %s without changing durable state', (_name, event) => {
+            const matchId = `KTP-late-reject-${_name}`;
+            recorder.startMatch(matchId, 'dod_anzio', 0, 2, 'server-a');
+            recorder.recordEvent(matchId, { event: 'ktp_match_end' }, 'server-a');
+            recorder.endMatch(matchId);
+            const before = { ...recorder.getMetadata(matchId)! };
+
+            expect(recorder.recordEvent(matchId, event, 'server-a')).toBe(false);
+            expect(recorder.getMetadata(matchId)).toEqual(before);
+            expect(recorder.getEvents(matchId)).toEqual([{ event: 'ktp_match_end' }]);
+            expect(recorder.getActiveMatchIds()).not.toContain(matchId);
+        });
+
+        it('rejects a completed final from a different source server', () => {
+            const matchId = 'KTP-late-foreign';
+            recorder.startMatch(matchId, 'dod_anzio', 0, 2, 'server-a');
+            recorder.recordEvent(matchId, { event: 'ktp_match_end' }, 'server-a');
+            recorder.endMatch(matchId);
+            const before = { ...recorder.getMetadata(matchId)! };
+
+            expect(recorder.recordEvent(matchId, {
+                event: 'team_score', source: 'engine-team-score-v1', sample_kind: 'final',
+            }, 'server-b')).toBe(false);
+            expect(recorder.getMetadata(matchId)).toEqual(before);
+            expect(recorder.getEvents(matchId)).toEqual([{ event: 'ktp_match_end' }]);
+        });
+
+        it('rejects an otherwise eligible final after the finite settlement window', () => {
+            const matchId = 'KTP-late-expired';
+            recorder.startMatch(matchId, 'dod_anzio', 0, 2, 'server-a');
+            recorder.recordEvent(matchId, { event: 'ktp_match_end' }, 'server-a');
+            recorder.endMatch(matchId);
+            const meta = recorder.getMetadata(matchId)!;
+            meta.endedAt = new Date(Date.now() - LATE_EVENT_SETTLEMENT_MS - 1).toISOString();
+            const before = { ...meta };
+
+            expect(recorder.recordEvent(matchId, {
+                event: 'team_score', source: 'engine-team-score-v1', sample_kind: 'final',
+            }, 'server-a')).toBe(false);
+            expect(recorder.getMetadata(matchId)).toEqual(before);
+            expect(recorder.getEvents(matchId)).toEqual([{ event: 'ktp_match_end' }]);
         });
     });
 

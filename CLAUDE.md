@@ -251,6 +251,31 @@ by `do_send_json()`. This is used for replay event ordering and future HLTV demo
 { "tick": 25.0, "event": "time_sync", "timeleft": 1175 }
 ```
 
+### Official Team-Score Retention
+
+Official score rows are the `team_score` events carrying
+`source: "engine-team-score-v1"`. They also carry `event_sequence`,
+`sample_kind`, and the opaque `allies_team_slot` / `axis_team_slot` mapping.
+Legacy pub or mixed-version HUD score events omit those fields and are not an
+official score source.
+
+`events.jsonl` is an append-only record of HTTP **arrival order**. Each plugin
+event uses a separate asynchronous curl request, so lifecycle and score rows can
+arrive in a different order than the plugin called them. MatchRecorder settles
+that transport reordering without rewriting raw bytes: an early score baseline's
+half-0 auto-start metadata is upgraded only by a same-server `ktp_match_start`
+whose map is exact (or replaces `unknown`). Completed matches have a finite
+30-second settlement window, bound to the exact original `sourceServer`. Within
+that window only an official `team_score` with `sample_kind: "final"`, or the
+existing `player_stats_summary` with `reason: "match_end"`, may append. Rejected
+late, foreign-server, or conflicting lifecycle rows neither alter JSONL/metadata
+nor continue to socket delivery. Eligible late rows preserve inactivity and
+`endedAt`; a restart also reconciles persisted `eventCount` from nonblank JSONL
+rows before admission. After ingestion settlement, official consumers order the
+score stream by `(half, tick, event_sequence)`, never by JSONL position or whole-
+match `tick` alone. Post-match public projection and its final quality checks are
+downstream responsibilities and must wait for at least this settlement gate.
+
 ### Timer
 
 - `half_start` includes `timeleft`; `round_start` also includes `timeleft` as a sync point

@@ -142,16 +142,11 @@ describe('production fixture replay (NY1 dod_thunder2 12MAN)', () => {
         expect(meta.endedAt).not.toBeNull();
     });
 
-    // The captured metadata.json shows matchType=0/half=0 even though envelopes
-    // carry match_type=2/half=1 — because non-lifecycle events (player_score,
-    // player_connect, team_score) arrived BEFORE ktp_match_start at the warmup
-    // boundary, triggering recorder auto-start with defaults. ktp_match_start
-    // then no-ops because the match is already active.
-    //
-    // This is documented production behavior, not a bug. Codified here so a
-    // future "fix" can't silently change the on-disk shape without a test
-    // change + intentional migration plan.
-    it('reproduces the recorded matchType=0/half=0 due to pre-start event race', () => {
+    // The historical capture preserves the old matchType=0/half=0 race: warmup
+    // traffic arrived before ktp_match_start and the recorder never repaired its
+    // auto-start placeholder. Replaying the same raw arrival order now upgrades
+    // metadata from the authoritative lifecycle row without rewriting events.
+    it('repairs the historical pre-start metadata race during replay', () => {
         const recordedMeta = JSON.parse(fs.readFileSync(FIXTURE_METADATA_PATH, 'utf-8'));
         expect(recordedMeta.matchType).toBe(0);
         expect(recordedMeta.half).toBe(0);
@@ -161,8 +156,8 @@ describe('production fixture replay (NY1 dod_thunder2 12MAN)', () => {
         const meta = JSON.parse(
             fs.readFileSync(path.join(tmpDir, MATCH_ID, 'metadata.json'), 'utf-8'),
         );
-        expect(meta.matchType).toBe(0);
-        expect(meta.half).toBe(0);
+        expect(meta.matchType).toBe(2);
+        expect(meta.half).toBe(1);
     });
 
     it('per-event-type histogram on disk matches the captured fixture', () => {

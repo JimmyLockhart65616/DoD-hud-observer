@@ -286,13 +286,10 @@ describe('mocker lifecycle — scripted match round-trips through ingest → dis
         }
     });
 
-    it('codifies metadata.half quirk: pre-start team_score auto-starts match with half=0', async () => {
-        // Production behavior: if non-lifecycle events (team_score, player_score,
-        // player_connect) arrive BEFORE ktp_match_start at the warmup boundary,
-        // recorder auto-starts the match with default matchType=0/half=0. When
-        // ktp_match_start then arrives, it's a no-op (match already active).
-        // This is documented production behavior, not a bug. Codified here so a
-        // future "fix" can't silently change the on-disk shape.
+    it('repairs auto-start metadata when ktp_match_start arrives after team_score', async () => {
+        // Async plugin requests can deliver team_score before the lifecycle row.
+        // The recorder may auto-start with half=0, but ktp_match_start must
+        // upgrade that placeholder without losing the already-retained row.
 
         let tmpDir: string;
         let recorder: MatchRecorder;
@@ -307,26 +304,23 @@ describe('mocker lifecycle — scripted match round-trips through ingest → dis
         try {
             const matchId = 'KTP-mocker-pre-start-1';
 
-            // Non-lifecycle event BEFORE ktp_match_start: team_score.
-            // This should trigger auto-start with defaults (matchType=0, half=0).
+            // Non-lifecycle event BEFORE ktp_match_start triggers a placeholder.
             await request(app).post('/ingest').set('X-Auth-Key', AUTH_KEY)
                 .send({ event: 'team_score', match_id: matchId, allies_score: 0, axis_score: 0 });
 
-            // Now send ktp_match_start — should be a no-op for metadata.
+            // The authoritative lifecycle row repairs that placeholder in place.
             await request(app).post('/ingest').set('X-Auth-Key', AUTH_KEY)
                 .send({ event: 'ktp_match_start', match_id: matchId, map: 'dod_anzio', match_type: 2, half: 1 });
 
             await request(app).post('/ingest').set('X-Auth-Key', AUTH_KEY)
                 .send({ event: 'ktp_match_end', match_id: matchId });
 
-            // Check: metadata should show auto-start defaults (matchType=0, half=0),
-            // NOT the ktp_match_start values (matchType=2, half=1).
             const meta = JSON.parse(
                 fs.readFileSync(path.join(tmpDir, matchId, 'metadata.json'), 'utf-8'),
             );
-            expect(meta.matchType).toBe(0);  // auto-start default, not ktp_match_start's 2
-            expect(meta.half).toBe(0);       // auto-start default, not ktp_match_start's 1
-            expect(meta.map).toBe('unknown'); // auto-start default, not ktp_match_start's dod_anzio
+            expect(meta.matchType).toBe(2);
+            expect(meta.half).toBe(1);
+            expect(meta.map).toBe('dod_anzio');
         } finally {
             recorder.close();
             io.close();

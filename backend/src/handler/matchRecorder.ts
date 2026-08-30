@@ -2,6 +2,9 @@ import fs from 'fs';
 import path from 'path';
 
 const METADATA_FLUSH_INTERVAL = 100;
+export const LATE_EVENT_SETTLEMENT_MS = 30_000;
+
+const OFFICIAL_TEAM_SCORE_SOURCE = 'engine-team-score-v1';
 
 export interface MatchMetadata {
     matchId: string;
@@ -100,10 +103,39 @@ export class MatchRecorder {
     /**
      * Start tracking a new match. Called when ktp_match_start arrives.
      */
-    startMatch(matchId: string, map: string, matchType: number, half: number, sourceServer: string): void {
+    startMatch(matchId: string, map: string, matchType: number, half: number, sourceServer: string): boolean {
         if (this.activeMatches.has(matchId)) {
+            const existing = this.metadata.get(matchId);
+            if (!existing || existing.sourceServer !== sourceServer) {
+                console.warn(`[recorder] Rejected start for active match ${matchId}: source server mismatch`);
+                return false;
+            }
+            // Separate plugin POSTs can arrive out of call order. A score
+            // baseline may therefore auto-start the recorder before the
+            // authoritative lifecycle POST. Repair that placeholder in place:
+            // keep its already-appended events, count and earliest startedAt.
+            if (existing.endedAt === null && existing.half === 0 && half > 0) {
+                if (existing.map !== 'unknown' && existing.map !== map) {
+                    console.warn(`[recorder] Rejected placeholder upgrade for ${matchId}: map mismatch`);
+                    return false;
+                }
+                existing.map = map;
+                existing.matchType = matchType;
+                existing.half = half;
+                this.writeMetadata(matchId, existing);
+                console.log(`[recorder] Upgraded auto-started match ${matchId} (${map}, half ${half})`);
+                return true;
+            }
             console.warn(`[recorder] Match ${matchId} already started, ignoring duplicate start`);
-            return;
+            return true;
+        }
+
+        // A lifecycle start cannot legitimately arrive after a completed match
+        // within the producer's transport timeout. Never reopen or relabel a
+        // completed stable match id.
+        if (this.getCompletedMetadata(matchId)) {
+            console.warn(`[recorder] Match ${matchId} already completed, refusing late start`);
+            return false;
         }
 
         const dir = path.join(this.matchesDir, matchId);
@@ -131,6 +163,7 @@ export class MatchRecorder {
         this.activeMatches.add(matchId);
         this.lastEventAt.set(matchId, Date.now());
         console.log(`[recorder] Started match ${matchId} (${map}, half ${half})`);
+        return true;
     }
 
     /**
@@ -141,16 +174,42 @@ export class MatchRecorder {
      * If the match hasn't been explicitly started (no ktp_match_start seen),
      * auto-creates it — handles partial recordings and test scenarios.
      */
-    recordEvent(matchId: string, event: Record<string, unknown>, sourceServer: string): void {
+    recordEvent(matchId: string, event: Record<string, unknown>, sourceServer: string): boolean {
+        let completed: MatchMetadata | undefined;
         if (!this.activeMatches.has(matchId)) {
-            this.startMatch(matchId, (event.map as string) ?? 'unknown', 0, 0, sourceServer);
+            completed = this.getCompletedMetadata(matchId);
+            if (!completed) {
+                if (!this.startMatch(matchId, (event.map as string) ?? 'unknown', 0, 0, sourceServer)) {
+                    return false;
+                }
+            }
+        }
+
+        const meta = this.metadata.get(matchId);
+        if (!meta || meta.sourceServer !== sourceServer) {
+            console.warn(`[recorder] Rejected event for ${matchId}: source server mismatch`);
+            return false;
+        }
+
+        if (completed && !this.isAdmissibleCompletedEvent(completed, event)) {
+            console.warn(`[recorder] Rejected late event for completed match ${matchId} (${event.event ?? 'unknown'})`);
+            return false;
         }
 
         const jsonlPath = path.join(this.matchesDir, matchId, 'events.jsonl');
         fs.appendFileSync(jsonlPath, JSON.stringify(event) + '\n');
 
-        const meta = this.metadata.get(matchId)!;
         meta.eventCount++;
+
+        if (completed) {
+            // endMatch already flushed metadata. Every late row must likewise
+            // flush immediately so a restart cannot lose the settled count.
+            // Preserve endedAt and never add the match back to activeMatches.
+            this.writeMetadata(matchId, meta);
+            console.log(`[recorder] Appended late event to completed match ${matchId} (${event.event ?? 'unknown'})`);
+            return true;
+        }
+
         this.lastEventAt.set(matchId, Date.now());
 
         // Flush eventCount to metadata.json every 100 events so a hard crash
@@ -160,6 +219,7 @@ export class MatchRecorder {
         if (meta.eventCount % METADATA_FLUSH_INTERVAL === 0) {
             this.writeMetadata(matchId, meta);
         }
+        return true;
     }
 
     /**
@@ -213,6 +273,72 @@ export class MatchRecorder {
 
     getAllMetadata(): MatchMetadata[] {
         return [...this.metadata.values()];
+    }
+
+    /**
+     * Socket-only rows intentionally bypass JSONL, but known match ownership
+     * still applies. They may flow for an active match only from its bound
+     * server, and never flow after completion. Unknown/pub streams retain the
+     * pre-existing socket-only behavior because they have no recorder owner.
+     */
+    canForwardTransientEvent(matchId: string, sourceServer: string): boolean {
+        if (this.activeMatches.has(matchId)) {
+            const meta = this.metadata.get(matchId);
+            return !!meta && meta.sourceServer === sourceServer;
+        }
+        return !this.getCompletedMetadata(matchId);
+    }
+
+    /**
+     * Resolve completed metadata from memory or disk without activating it.
+     * rehydrateActiveMatches intentionally skips completed matches, but a late
+     * async POST must still settle correctly after a backend restart.
+     */
+    private getCompletedMetadata(matchId: string): MatchMetadata | undefined {
+        let meta = this.metadata.get(matchId);
+        if (!meta) {
+            const metaPath = path.join(this.matchesDir, matchId, 'metadata.json');
+            if (!fs.existsSync(metaPath)) return undefined;
+            try {
+                meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as MatchMetadata;
+                this.metadata.set(matchId, meta);
+            } catch {
+                return undefined;
+            }
+
+            if (typeof meta.endedAt === 'string') {
+                const eventCount = this.countStoredEvents(matchId);
+                if (meta.eventCount !== eventCount) {
+                    console.warn(`[recorder] Repaired completed match ${matchId} eventCount ${meta.eventCount} -> ${eventCount}`);
+                    meta.eventCount = eventCount;
+                    this.writeMetadata(matchId, meta);
+                }
+            }
+        }
+        return typeof meta.endedAt === 'string' ? meta : undefined;
+    }
+
+    private countStoredEvents(matchId: string): number {
+        const jsonlPath = path.join(this.matchesDir, matchId, 'events.jsonl');
+        if (!fs.existsSync(jsonlPath)) return 0;
+        return fs.readFileSync(jsonlPath, 'utf-8')
+            .split('\n')
+            .filter(line => line.trim()).length;
+    }
+
+    private isAdmissibleCompletedEvent(meta: MatchMetadata, event: Record<string, unknown>): boolean {
+        const endedAt = Date.parse(meta.endedAt!);
+        const elapsed = Date.now() - endedAt;
+        if (!Number.isFinite(endedAt) || elapsed < 0 || elapsed > LATE_EVENT_SETTLEMENT_MS) {
+            return false;
+        }
+
+        const officialFinal = event.event === 'team_score'
+            && event.source === OFFICIAL_TEAM_SCORE_SOURCE
+            && event.sample_kind === 'final';
+        const matchEndSummary = event.event === 'player_stats_summary'
+            && event.reason === 'match_end';
+        return officialFinal || matchEndSummary;
     }
 
     /**
