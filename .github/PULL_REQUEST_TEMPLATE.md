@@ -33,6 +33,8 @@
 
 <!-- Anything you're unsure about, or deliberately left out.
 
-     Outside contributors: the Tier 1 Smoke check will fail on your PR because
-     GitHub does not give repository secrets to workflows run from a fork. That
-     is not your change. Say so here and a maintainer will verify the build. -->
+     Outside contributors: the Tests workflow runs normally on your PR and is
+     real signal. Tier 1 Smoke will show as skipped — it needs a repository
+     secret that GitHub withholds from forks, so it cannot run on your PR and
+     that is expected, not a problem with your change. A maintainer verifies
+     the plugin build before merging. -->
