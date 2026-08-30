@@ -147,6 +147,137 @@ describe('POST /ingest — match lifecycle', () => {
         expect(meta.endedAt).not.toBeNull();
         expect(meta.eventCount).toBe(3);  // start + half_start + end
     });
+
+    it('settles an official score baseline that arrives before ktp_match_start', async () => {
+        const matchId = 'KTP-score-baseline-before-start';
+        const baseline = {
+            event: 'team_score', match_id: matchId, map: 'dod_anzio', match_type: 1, half: 1,
+            tick: 0.25, event_sequence: 1, source: 'engine-team-score-v1', sample_kind: 'baseline',
+            allies_team_slot: 1, axis_team_slot: 2, allies_score: 0, axis_score: 0,
+        };
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').send(baseline);
+
+        const placeholder = recorder.getMetadata(matchId)!;
+        expect(placeholder.half).toBe(0);
+        expect(placeholder.eventCount).toBe(1);
+        const originalStartedAt = placeholder.startedAt;
+
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').send({
+            event: 'ktp_match_start', match_id: matchId,
+            map: 'dod_anzio', match_type: 1, half: 1,
+        });
+
+        const settled = JSON.parse(fs.readFileSync(path.join(tmpDir, matchId, 'metadata.json'), 'utf-8'));
+        expect(settled).toMatchObject({
+            matchId, map: 'dod_anzio', matchType: 1, half: 1,
+            startedAt: originalStartedAt, endedAt: null, eventCount: 1,
+        });
+        // The lifecycle row is appended after startMatch repairs metadata. Its
+        // count remains in memory until the normal periodic/end flush.
+        expect(recorder.getMetadata(matchId)!.eventCount).toBe(2);
+        expect(recorder.getActiveMatchIds()).toContain(matchId);
+        expect(recorder.getEvents(matchId)?.map(e => e.event)).toEqual([
+            'team_score', 'ktp_match_start',
+        ]);
+        expect(recorder.getEvents(matchId)?.[0]).toMatchObject({
+            source: 'engine-team-score-v1', event_sequence: 1, sample_kind: 'baseline',
+        });
+    });
+
+    it('does not let a foreign source or wrong map relabel or append to an active placeholder', async () => {
+        const matchId = 'KTP-placeholder-origin';
+        const baseline = {
+            event: 'team_score', match_id: matchId, map: 'dod_anzio', match_type: 1, half: 1,
+            source: 'engine-team-score-v1', sample_kind: 'baseline', event_sequence: 1,
+            allies_team_slot: 1, axis_team_slot: 2, allies_score: 0, axis_score: 0,
+        };
+        await request(app).post('/ingest').set('X-Auth-Key', 'key')
+            .set('X-Server-Hostname', 'server-a').send(baseline).expect(200);
+
+        const socketTo = jest.spyOn(io, 'to');
+        socketTo.mockClear();
+
+        await request(app).post('/ingest').set('X-Auth-Key', 'key')
+            .set('X-Server-Hostname', 'server-b').send({
+                event: 'ktp_match_start', match_id: matchId,
+                map: 'dod_anzio', match_type: 1, half: 1,
+            }).expect(409, { error: 'event rejected by match recorder' });
+
+        await request(app).post('/ingest').set('X-Auth-Key', 'key')
+            .set('X-Server-Hostname', 'server-a').send({
+                event: 'ktp_match_start', match_id: matchId,
+                map: 'dod_flash', match_type: 1, half: 1,
+            }).expect(409, { error: 'event rejected by match recorder' });
+
+        expect(socketTo).not.toHaveBeenCalled();
+        expect(recorder.getMetadata(matchId)).toMatchObject({
+            map: 'dod_anzio', half: 0, sourceServer: 'server-a', eventCount: 1,
+        });
+        expect(recorder.getEvents(matchId)).toEqual([baseline]);
+        socketTo.mockRestore();
+    });
+
+    it('settles an official final arriving after ktp_match_end without reopening', async () => {
+        const matchId = 'KTP-score-final-after-end';
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').send({
+            event: 'ktp_match_start', match_id: matchId,
+            map: 'dod_anzio', match_type: 0, half: 2,
+        });
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').send({
+            event: 'ktp_match_end', match_id: matchId, map: 'dod_anzio', match_type: 0, half: 2,
+        });
+        const endedBeforeFinal = JSON.parse(
+            fs.readFileSync(path.join(tmpDir, matchId, 'metadata.json'), 'utf-8')
+        ).endedAt;
+
+        const final = {
+            event: 'team_score', match_id: matchId, map: 'dod_anzio', match_type: 0, half: 2,
+            tick: 1250.5, event_sequence: 9, source: 'engine-team-score-v1', sample_kind: 'final',
+            allies_team_slot: 2, axis_team_slot: 1, allies_score: 4, axis_score: 7,
+        };
+        await request(app).post('/ingest').set('X-Auth-Key', 'key').send(final);
+
+        const settled = JSON.parse(fs.readFileSync(path.join(tmpDir, matchId, 'metadata.json'), 'utf-8'));
+        expect(settled.endedAt).toBe(endedBeforeFinal);
+        expect(settled.eventCount).toBe(3);
+        expect(recorder.getActiveMatchIds()).not.toContain(matchId);
+
+        const rows = recorder.getEvents(matchId)!;
+        expect(rows.map(e => e.event)).toEqual(['ktp_match_start', 'ktp_match_end', 'team_score']);
+        expect(rows[2]).toEqual(final);
+    });
+
+    it('returns 409 and does not continue to sockets for a rejected completed event', async () => {
+        const matchId = 'KTP-completed-rejection';
+        await request(app).post('/ingest').set('X-Auth-Key', 'key')
+            .set('X-Server-Hostname', 'server-a').send({
+                event: 'ktp_match_start', match_id: matchId,
+                map: 'dod_anzio', match_type: 0, half: 2,
+            }).expect(200);
+        await request(app).post('/ingest').set('X-Auth-Key', 'key')
+            .set('X-Server-Hostname', 'server-a').send({
+                event: 'ktp_match_end', match_id: matchId,
+            }).expect(200);
+
+        const before = { ...recorder.getMetadata(matchId)! };
+        const socketTo = jest.spyOn(io, 'to');
+        socketTo.mockClear();
+        await request(app).post('/ingest').set('X-Auth-Key', 'key')
+            .set('X-Server-Hostname', 'server-a')
+            .send({ event: 'kill', match_id: matchId })
+            .expect(409, { error: 'event rejected by match recorder' });
+        await request(app).post('/ingest').set('X-Auth-Key', 'key')
+            .set('X-Server-Hostname', 'server-a')
+            .send({ event: 'player_state', match_id: matchId, user_id: 'STEAM_0:1:1' })
+            .expect(409, { error: 'event rejected by match recorder' });
+
+        expect(socketTo).not.toHaveBeenCalled();
+        expect(recorder.getMetadata(matchId)).toEqual(before);
+        expect(recorder.getEvents(matchId)?.map(e => e.event)).toEqual([
+            'ktp_match_start', 'ktp_match_end',
+        ]);
+        socketTo.mockRestore();
+    });
 });
 
 // KTPMatchHandler MATCH_TYPE enum (KTPMatchHandler.sma:84):
