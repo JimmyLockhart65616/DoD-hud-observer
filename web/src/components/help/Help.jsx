@@ -211,11 +211,11 @@ class Help extends React.Component {
                             </ul>
                             <p>
                                 For the full event schema and architecture details, see the{' '}
-                                <a href="https://github.com/JimmyLockhart65616/DoD-hud-observer/blob/master/CLAUDE.md">
+                                <a href="https://github.com/JimmyLockhart65616/DoD-hud-observer/blob/HEAD/CLAUDE.md">
                                     CLAUDE.md
                                 </a>{' '}
                                 and{' '}
-                                <a href="https://github.com/JimmyLockhart65616/DoD-hud-observer/blob/master/docs/VIEWER_GUIDE.md">
+                                <a href="https://github.com/JimmyLockhart65616/DoD-hud-observer/blob/HEAD/docs/VIEWER_GUIDE.md">
                                     VIEWER_GUIDE.md
                                 </a>{' '}
                                 on GitHub.

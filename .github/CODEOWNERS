@@ -1,6 +1,6 @@
 # Code owners are requested for review automatically on any PR touching a
 # matching path. This does not *require* their approval unless a branch
-# protection rule or ruleset on master says so.
+# protection rule or ruleset on main says so.
 
 * @JimmyLockhart65616
 
