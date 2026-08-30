@@ -156,11 +156,22 @@ carries the table. Do not estimate it.
 - Screenshots are worth a lot for anything that renders. `npm run e2e` drops
   them in `e2e/snapshots/`.
 
-**Note for outside contributors:** the Tier 1 Smoke workflow calls a reusable
-workflow in KTPInfrastructure using a repository secret, and GitHub does not
-give secrets to workflows triggered from a fork. That check will fail on your
-PR for reasons you cannot fix and that are not about your code. Say so in the
-PR and a maintainer will verify the build.
+### What CI runs on your PR
+
+| Workflow | What it proves | Runs on a fork PR? |
+| --- | --- | --- |
+| **Tests** | Backend Jest + the frontend store machine | **Yes** — needs no secrets |
+| **Tier 1 Smoke** | The plugin compiles and actually loads on a booted server | **No** — skipped, see below |
+
+Tier 1 Smoke calls a reusable workflow in KTPInfrastructure using a repository
+secret, and GitHub does not give secrets to workflows triggered from a fork.
+Rather than failing your PR with a checkout error you cannot fix, the job
+skips itself and a `fork-notice` job explains why in the Actions tab. **That
+skip is expected and is not a problem with your change** — a maintainer
+verifies the plugin build before merging.
+
+The Tests workflow is unaffected and gives you real signal either way, so a
+green Tests run on a fork PR means what it says.
 
 ## Where a bug actually belongs
 

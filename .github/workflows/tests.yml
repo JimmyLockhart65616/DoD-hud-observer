@@ -1,0 +1,85 @@
+# Node test suites — backend Jest + frontend store machine.
+#
+# Complements Tier 1 Smoke, which compiles and boots the AMXX plugin. Between
+# them: smoke.yml proves the plugin still loads on a real server, this proves
+# the backend and the frontend state machine still behave.
+#
+# This workflow uses NO secrets, on purpose. Tier 1 Smoke needs one to reach
+# KTPInfrastructure and is therefore skipped on fork pull requests (see the
+# comment in smoke.yml). Everything here runs from the checkout alone, so it
+# runs identically for an outside contributor's fork PR — which is what stops
+# a fork PR from arriving with no automated verification at all.
+#
+# Both jobs run `npm ci` with no flags, deliberately: that is exactly what
+# CONTRIBUTING.md tells a contributor to run, so CI fails the same way their
+# machine would rather than papering over a broken install with a flag they
+# were never told about. See .npmrc for why plain `npm ci` works at all.
+
+name: Tests
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run's answer irrelevant.
+# Cancel it rather than making a contributor queue behind their own stale run.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Jest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run backend suite
+        run: npm run test
+
+  web:
+    name: Frontend (store machine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      # BOTH installs are required, and the root one is not redundant.
+      # web/package.json does not declare zustand — it resolves from the root
+      # tree by hoisting (CLAUDE.md: "zustand is hoisted to the root
+      # node_modules while react lives in web/node_modules"). Install only web/
+      # and the suite fails at import, not at assertion, which reads as a
+      # broken test rather than a missing dependency.
+      - name: Install root dependencies (hoisted deps the web suite resolves)
+        run: npm ci
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Run frontend suite
+        run: npm run test:web

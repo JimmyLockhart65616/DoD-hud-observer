@@ -8,7 +8,7 @@ body:
         Thanks for filing. Before you paste anything: **this repository is
         public.** Never include the contents of `config/online/config.yaml`,
         `deploy/hud-observer.service`, an ingest `auth_key`, or an rcon password
-        or transcript. See [SECURITY.md](https://github.com/JimmyLockhart65616/DoD-hud-observer/blob/master/SECURITY.md).
+        or transcript. See [SECURITY.md](https://github.com/JimmyLockhart65616/DoD-hud-observer/blob/HEAD/SECURITY.md).
 
   - type: dropdown
     id: surface

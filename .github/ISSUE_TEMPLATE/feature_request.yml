@@ -54,6 +54,6 @@ body:
         If you know it does not, say so — a new field usually means a plugin
         change plus a fleet-wide redeploy, which is a much bigger ask than a
         frontend change and is worth knowing up front. The event schema is in
-        [CLAUDE.md](https://github.com/JimmyLockhart65616/DoD-hud-observer/blob/master/CLAUDE.md).
+        [CLAUDE.md](https://github.com/JimmyLockhart65616/DoD-hud-observer/blob/HEAD/CLAUDE.md).
     validations:
       required: false
