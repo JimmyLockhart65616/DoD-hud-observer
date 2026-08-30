@@ -107,8 +107,13 @@ native ktp_is_match_active();
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.8.0"
+#define VERSION "2.9.0"
 #define AUTHOR  "cadaver"
+
+// Retained official-score producer/schema identity. Consumers MUST require this
+// literal before treating a team_score row as authoritative match telemetry;
+// the legacy pub-HUD path deliberately omits it.
+#define TEAM_SCORE_SOURCE "engine-team-score-v1"
 
 #define MAX_PLAYERS     32
 #define MAX_FLAGS       32
@@ -203,6 +208,38 @@ new g_matchId[128];
 new g_matchMap[64];
 new g_matchType;
 new g_matchHalf;
+
+// Official engine team-score mapping. KTPMatchHandler emits
+// ktp_match_side_map immediately before the matching ktp_match_start. Keep the
+// pending and bound identities separate: a next-half mapping arriving while an
+// old half is still active must not silently re-label that old half's scores.
+// Every official emit re-checks the full bound tuple so a stale map/half/type
+// fails closed instead of entering the retained stream.
+new bool:g_score_map_pending = false;
+new g_score_pending_match_id[128];
+new g_score_pending_map[64];
+new g_score_pending_match_type[16];
+new g_score_pending_half;
+new g_score_pending_allies_slot;
+new g_score_pending_axis_slot;
+
+new bool:g_score_map_bound = false;
+new g_score_bound_match_id[128];
+new g_score_bound_map[64];
+new g_score_bound_match_type[16];
+new g_score_bound_half;
+new g_score_allies_slot;
+new g_score_axis_slot;
+new bool:g_score_mapping_warned = false;
+
+// Authoritative ordering is half-local. Reset to zero immediately before the
+// baseline; the baseline itself is sequence 1. get_gametime() can repeat at
+// two-decimal wire precision, so sequence is the deterministic tie-breaker.
+new g_score_event_sequence = 0;
+new bool:g_score_have_last = false;
+new bool:g_score_half_finalized = false;
+new g_score_last_allies;
+new g_score_last_axis;
 // Gametime when the live half's clock expires, anchored at ktp_match_start
 // (KTPMatchHandler fires it right after the go-live mp_clan_restartround).
 // 0.0 = no live half → hud_timeleft() falls back to get_timeleft() (pubs).
@@ -762,6 +799,11 @@ public task_emit_flags() {
 }
 
 public plugin_cfg() {
+    // A level boundary invalidates the old half's score authorization even if
+    // plugin globals happen to survive this engine build's changelevel. The
+    // next half must receive and exact-bind its own side-map forward.
+    score_mapping_reset_level();
+
     // Reset flag state
     for (new i = 0; i < MAX_FLAGS; i++) {
         g_flag_owner[i]          = -1;
@@ -821,6 +863,27 @@ public plugin_cfg() {
     // backend. Every on-air phase EDGE is forward-driven, so a wedged task here
     // can only ever cost the pregame caption.
     set_task(PHASE_POLL_INTERVAL, "task_phase_poll", TASK_ID_PHASE_POLL, _, _, "b");
+}
+
+// AMXX invokes this immediately before a level transition. It is the backstop
+// for manual/unexpected changelevels and also permits an ordered duplicate of a
+// half_end final. Query DODX here; never carry a cached or lifecycle score.
+public server_changelevel(map[]) {
+    if (g_matchActive && score_mapping_is_current()) {
+        emit_official_team_score("final", true);
+        g_score_half_finalized = true;
+    }
+}
+
+// Raw `changelevel` commands do not reliably trigger server_changelevel on
+// AMXX. plugin_end is the last engine lifecycle edge before level teardown, so
+// repeat the same DODX query as a best-effort final backstop. A preceding
+// half_end/server_changelevel final may be duplicated; sequence orders it.
+public plugin_end() {
+    if (g_matchActive && score_mapping_is_current()) {
+        emit_official_team_score("final", true);
+        g_score_half_finalized = true;
+    }
 }
 
 public task_init_config() {
@@ -1769,10 +1832,210 @@ stock is_match_active() {
     return g_has_match_active_native ? ktp_is_match_active() : 0;
 }
 
+// Official engine team score. Consumers must require TEAM_SCORE_SOURCE before
+// treating a retained team_score row as authoritative match telemetry.
+stock score_match_type_name(MatchType:matchType, out[], len) {
+    switch (matchType) {
+        case MATCH_TYPE_COMPETITIVE: copy(out, len, "competitive");
+        case MATCH_TYPE_SCRIM:       copy(out, len, "scrim");
+        case MATCH_TYPE_12MAN:       copy(out, len, "12man");
+        case MATCH_TYPE_DRAFT:       copy(out, len, "draft");
+        case MATCH_TYPE_KTP_OT:      copy(out, len, "ktpOT");
+        case MATCH_TYPE_DRAFT_OT:    copy(out, len, "draftOT");
+        default:                     copy(out, len, "unknown");
+    }
+}
+
+stock bool:score_half_is_valid(half) {
+    return half == 1 || half == 2 || half >= 101;
+}
+
+stock score_mapping_clear_pending() {
+    g_score_map_pending = false;
+    g_score_pending_match_id[0] = '^0';
+    g_score_pending_map[0] = '^0';
+    g_score_pending_match_type[0] = '^0';
+    g_score_pending_half = 0;
+    g_score_pending_allies_slot = 0;
+    g_score_pending_axis_slot = 0;
+}
+
+stock score_mapping_clear_bound() {
+    g_score_map_bound = false;
+    g_score_bound_match_id[0] = '^0';
+    g_score_bound_map[0] = '^0';
+    g_score_bound_match_type[0] = '^0';
+    g_score_bound_half = 0;
+    g_score_allies_slot = 0;
+    g_score_axis_slot = 0;
+    g_score_mapping_warned = false;
+    g_score_event_sequence = 0;
+    g_score_have_last = false;
+    g_score_half_finalized = false;
+    g_score_last_allies = 0;
+    g_score_last_axis = 0;
+}
+
+stock score_mapping_reset_level() {
+    score_mapping_clear_pending();
+    score_mapping_clear_bound();
+}
+
+// Bind only the side map immediately preceding this exact lifecycle signal.
+// The side-map ABI carries canonical matchType as a string while the established
+// match-start ABI carries the MatchType enum cell, so compare via one mapping.
+stock bool:score_mapping_bind(const matchId[], const mapName[], MatchType:matchType, half) {
+    score_mapping_clear_bound();
+
+    new canonical_type[16];
+    score_match_type_name(matchType, canonical_type, charsmax(canonical_type));
+
+    new bool:exact = g_score_map_pending
+        && !equal(canonical_type, "unknown")
+        && equal(g_score_pending_match_id, matchId)
+        && equal(g_score_pending_map, mapName)
+        && equal(g_score_pending_match_type, canonical_type)
+        && g_score_pending_half == half;
+
+    if (!exact) {
+        server_print("[HUD] team_score mapping rejected for match=%s map=%s type=%s half=%d",
+                     matchId, mapName, canonical_type, half);
+        score_mapping_clear_pending();
+        return false;
+    }
+
+    copy(g_score_bound_match_id, charsmax(g_score_bound_match_id), matchId);
+    copy(g_score_bound_map, charsmax(g_score_bound_map), mapName);
+    copy(g_score_bound_match_type, charsmax(g_score_bound_match_type), canonical_type);
+    g_score_bound_half = half;
+    g_score_allies_slot = g_score_pending_allies_slot;
+    g_score_axis_slot = g_score_pending_axis_slot;
+    g_score_map_bound = true;
+
+    // One-shot handoff: it cannot authorize a later lifecycle signal.
+    score_mapping_clear_pending();
+    return true;
+}
+
+stock bool:score_mapping_is_current() {
+    if (!g_score_map_bound) return false;
+
+    new canonical_type[16];
+    score_match_type_name(MatchType:g_matchType, canonical_type, charsmax(canonical_type));
+    return equal(g_score_bound_match_id, g_matchId)
+        && equal(g_score_bound_map, g_matchMap)
+        && equal(g_score_bound_match_type, canonical_type)
+        && g_score_bound_half == g_matchHalf;
+}
+
+stock bool:score_mapping_matches_lifecycle(const matchId[], const mapName[],
+                                            MatchType:matchType, half, bool:require_half) {
+    if (!score_mapping_is_current()) return false;
+
+    new canonical_type[16];
+    score_match_type_name(matchType, canonical_type, charsmax(canonical_type));
+    return equal(g_score_bound_match_id, matchId)
+        && equal(g_score_bound_map, mapName)
+        && equal(g_score_bound_match_type, canonical_type)
+        && (!require_half || g_score_bound_half == half);
+}
+
+// DODX gamerules is the sole authority for baseline, changes and finals. Never
+// substitute lifecycle-forward scores, player/capture points, or KTPR values.
+stock bool:emit_official_team_score(const sample_kind[], bool:force) {
+    if (!g_matchActive || !score_mapping_is_current()) {
+        if (g_matchActive && !g_score_mapping_warned) {
+            server_print("[HUD] team_score official emit suppressed: exact side map is unavailable/stale");
+            g_score_mapping_warned = true;
+        }
+        return false;
+    }
+
+    // After the half_end boundary, ignore any late TeamScore broadcast during
+    // the intermission. Boundary/changelevel finals may still force a duplicate.
+    if (!force && g_score_half_finalized) return false;
+
+    new allies = dodx_get_team_score(TEAM_ALLIES);
+    new axis   = dodx_get_team_score(TEAM_AXIS);
+
+    // TeamScore can rebroadcast identical state. Keep official mid-half rows
+    // change-only; explicit boundaries pass force=true, so duplicate finals are
+    // retained and ordered as the contract permits.
+    if (!force && g_score_have_last
+        && allies == g_score_last_allies && axis == g_score_last_axis) {
+        return false;
+    }
+
+    g_score_event_sequence++;
+
+    new json[320];
+    formatex(json, charsmax(json),
+        "{^"event^":^"team_score^",^"allies_score^":%d,^"axis_score^":%d,^"allies_team_slot^":%d,^"axis_team_slot^":%d,^"event_sequence^":%d,^"source^":^"%s^",^"sample_kind^":^"%s^"}",
+        allies, axis, g_score_allies_slot, g_score_axis_slot,
+        g_score_event_sequence, TEAM_SCORE_SOURCE, sample_kind);
+    post_event(json);
+
+    g_score_have_last = true;
+    g_score_last_allies = allies;
+    g_score_last_axis = axis;
+    return true;
+}
+
+// Preserve historical pub and mixed-version HUD behavior. Deliberately omit
+// the official source, slots, sequence and sample kind so it cannot masquerade
+// as official-ready retained telemetry.
+stock emit_legacy_team_score(allies, axis) {
+    new json[128];
+    formatex(json, charsmax(json),
+        "{^"event^":^"team_score^",^"allies_score^":%d,^"axis_score^":%d}",
+        allies, axis);
+    post_event(json);
+}
+
 // ─── KTPMatchHandler Forwards ────────────────────────────────────────────────
+
+// KTPMatchHandler public multi-forward. First three arguments are Pawn strings;
+// the final three are integer cells. OT side assignment is authoritative input
+// here (101, 102, ... can alternate independently), never inferred from parity.
+public ktp_match_side_map(const matchId[], const mapName[], const matchType[], half,
+                          allies_team_slot, axis_team_slot) {
+    score_mapping_clear_pending();
+
+    if (!matchId[0] || !mapName[0] || !matchType[0]
+        || equal(matchType, "unknown")
+        || !score_half_is_valid(half)
+        || allies_team_slot <= 0 || axis_team_slot <= 0
+        || allies_team_slot == axis_team_slot) {
+        server_print("[HUD] team_score side-map forward rejected (type=%s half=%d allies_slot=%d axis_slot=%d)",
+                     matchType, half, allies_team_slot, axis_team_slot);
+        return;
+    }
+
+    // Only the six agreed canonical values are eligible to bind. A typo or a
+    // future value remains unavailable until both ends agree on its semantics.
+    if (!equal(matchType, "competitive") && !equal(matchType, "scrim")
+        && !equal(matchType, "12man") && !equal(matchType, "draft")
+        && !equal(matchType, "ktpOT") && !equal(matchType, "draftOT")) {
+        server_print("[HUD] team_score side-map forward rejected: non-canonical match type %s", matchType);
+        return;
+    }
+
+    copy(g_score_pending_match_id, charsmax(g_score_pending_match_id), matchId);
+    copy(g_score_pending_map, charsmax(g_score_pending_map), mapName);
+    copy(g_score_pending_match_type, charsmax(g_score_pending_match_type), matchType);
+    g_score_pending_half = half;
+    g_score_pending_allies_slot = allies_team_slot;
+    g_score_pending_axis_slot = axis_team_slot;
+    g_score_map_pending = true;
+}
 
 // half: 1=1st half, 2=2nd half, 101+=OT round
 public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) {
+    // Reset sequence/last-value state and exact-bind BEFORE the baseline. A
+    // missing, stale or mismatched side map leaves the entire half dark for
+    // official score rather than publishing ambiguously labelled rows.
+    score_mapping_bind(matchId, map, matchType, half);
+
     g_matchActive = true;
 
     // Phase: a match is going live on this level. Clearing the halftime latch
@@ -1876,16 +2139,19 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
         half, hud_timeleft_f());
     post_event(json);
 
-    // Seed cumulative team score for the new half. KTPMatchHandler restores
-    // 1st-half scores into gamerules via dodx_set_team_score before firing
-    // this forward (see KTPMatchHandler.sma:6891), so dodx_get_team_score
-    // reads the correct value (0/0 on half 1, carryover on half 2/OT).
-    new allies_seed = dodx_get_team_score(TEAM_ALLIES);
-    new axis_seed   = dodx_get_team_score(TEAM_AXIS);
-    formatex(json, charsmax(json),
-        "{^"event^":^"team_score^",^"allies_score^":%d,^"axis_score^":%d}",
-        allies_seed, axis_seed);
-    post_event(json);
+    // Explicit official baseline. KTPMatchHandler has already restored the
+    // carried cumulative values into gamerules and the exact side map is bound;
+    // this queries DODX itself rather than trusting lifecycle-forward scores.
+    if (!score_mapping_is_current()) {
+        // Mixed-version rollout: keep the live HUD working, but deliberately
+        // omit every official discriminator so this row cannot be retained as
+        // authoritative score telemetry.
+        emit_legacy_team_score(
+            dodx_get_team_score(TEAM_ALLIES),
+            dodx_get_team_score(TEAM_AXIS));
+    } else {
+        emit_official_team_score("baseline", true);
+    }
 
     // Refresh flag state and send roster dump
     do_flags_init("match_start");
@@ -1965,6 +2231,15 @@ public ktp_match_end(const matchId[], const map[], MatchType:matchType, team1Sco
     // OT win/limit, abandons, forfeits).
     emit_stats_summary(SUMMARY_MATCH_END);
 
+    // DODX final is immediately before the match_end lifecycle event. The
+    // forward's team1Score/team2Score arguments have a known side-swap caveat
+    // and are never the authority for this retained observation.
+    if (score_mapping_matches_lifecycle(matchId, map, matchType, 0, false)) {
+        emit_official_team_score("final", true);
+    } else {
+        server_print("[HUD] team_score match final suppressed: terminal tuple does not match bound side map");
+    }
+
     // Emit BEFORE clearing g_matchActive so post_event() still injects match_id/map.
     // Event name must match the backend's lifecycle handler in ingest.ts (which
     // calls recorder.endMatch on ktp_match_end) — see backend/src/handler/ingest.ts.
@@ -2017,12 +2292,33 @@ public ktp_match_end(const matchId[], const map[], MatchType:matchType, team1Sco
 // guard mirrors emit_stats_summary's dedupe so a double changelevel-hook fire emits
 // the marker once.
 public ktp_half_end(const matchId[], const map[], MatchType:matchType, half, team1Score, team2Score) {
+    // Authorize before touching the dedupe timestamp. A delayed callback for a
+    // stale map/half must not consume the 2s guard and suppress the valid final
+    // that follows it. When no current side map exists (mixed-version rollout),
+    // preserve the historical deduped half_end path without an official final.
+    new bool:have_current_score_map = score_mapping_is_current();
+    new bool:score_authorized = score_mapping_matches_lifecycle(
+        matchId, map, matchType, half, true);
+    if (have_current_score_map && !score_authorized) {
+        server_print("[HUD] team_score half_end rejected: terminal tuple does not match current side map");
+        return;
+    }
+
     new Float:now = get_gametime();
     if (g_lastHalfEndFwdAt > 0.0 && now - g_lastHalfEndFwdAt < 2.0) return;
     g_lastHalfEndFwdAt = now;
 
     server_print("[HUD] ktp_half_end forward (%s half=%d %d-%d) — emitting half_end + stats summary",
                  matchId, half, team1Score, team2Score);
+
+    // Query the engine and retain the explicit final immediately before the
+    // half_end marker. Duplicate same-value finals are legal and sequenced.
+    if (score_authorized) {
+        emit_official_team_score("final", true);
+        g_score_half_finalized = true;
+    } else {
+        server_print("[HUD] team_score half final unavailable: no exact current side map");
+    }
 
     new json[160];
     formatex(json, charsmax(json),
@@ -3075,11 +3371,18 @@ public ev_team_score() {
     // awards surface purely as TeamScore broadcasts.
     score_tick_observe(allies, axis);
 
-    new json[128];
-    formatex(json, charsmax(json),
-        "{^"event^":^"team_score^",^"allies_score^":%d,^"axis_score^":%d}",
-        allies, axis);
-    post_event(json);
+    if (g_matchActive) {
+        if (score_mapping_is_current()) {
+            // Re-query inside the official producer so baseline/change/final
+            // all share exactly one DODX-only construction path.
+            emit_official_team_score("change", false);
+        } else {
+            // Mixed-version rollout: HUD-compatible but not official-ready.
+            emit_legacy_team_score(allies, axis);
+        }
+    } else {
+        emit_legacy_team_score(allies, axis);
+    }
 }
 
 public task_time_sync() {
