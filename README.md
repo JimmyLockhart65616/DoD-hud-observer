@@ -144,6 +144,16 @@ Expected output is ~14.7 KB with one harmless `client_disconnect` deprecation wa
 - [docs/VIEWER_GUIDE.md](docs/VIEWER_GUIDE.md) — what each panel on the overlay means
 - [CLAUDE.md](CLAUDE.md) — full event schema, class IDs, weapon names, compile recipe, architecture notes
 
+## Contributing
+
+Bug reports are welcome from anyone; small fixes are welcome as pull requests.
+Start with **[CONTRIBUTING.md](CONTRIBUTING.md)** — it covers local setup, the
+test commands, and the two hard rules (no Metamod anywhere in the game-server
+pipeline, and never commit operator secrets).
+
+To report a security issue, see [SECURITY.md](SECURITY.md). Please don't open a
+public issue for anything involving a key, password, or exposed endpoint.
+
 ## License
 
-[MIT](https://choosealicense.com/licenses/mit/)
+[MIT](LICENSE)

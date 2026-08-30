@@ -1,0 +1,59 @@
+name: Feature or change request
+description: Propose something new on the overlay, or a change to what is there
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Anything that renders on `/screen` goes out live to everyone watching a
+        KTP broadcast, so on-air space is the scarcest resource in this project.
+        The strongest case for a panel is usually **the sentence a caster would
+        say out loud because of it**.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What can't you see today?
+      description: Describe the gap, not the solution.
+      placeholder: |
+        There is no way to tell how close a team is to the next territorial
+        scoring tick, so casters can't build tension around holding mid.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface should this live on?
+      description: |
+        `/caster` is the low-risk home for anything new — it is a second
+        monitor, never composited into the broadcast. New panels usually
+        start there and get promoted to `/screen` once a caster asks.
+      options:
+        - /caster — caster reference (default for anything new)
+        - /screen — the on-air overlay
+        - /hq — the operations board
+        - /watch — the server and match picker
+        - Backend or API only
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: data
+    attributes:
+      label: Does the data for this already exist?
+      description: |
+        If you know it does not, say so — a new field usually means a plugin
+        change plus a fleet-wide redeploy, which is a much bigger ask than a
+        frontend change and is worth knowing up front. The event schema is in
+        [CLAUDE.md](https://github.com/JimmyLockhart65616/DoD-hud-observer/blob/master/CLAUDE.md).
+    validations:
+      required: false
