@@ -39,7 +39,7 @@ jobs:
   #
   # This is a JOB-level `if`, not a workflow-level trigger filter, on purpose.
   # A job skipped by `if` still reports a check-run conclusion of "skipped",
-  # which satisfies a required status check if master is ever protected. A
+  # which satisfies a required status check if main is ever protected. A
   # workflow filtered out by its trigger reports nothing at all and leaves a
   # required check Pending forever — that would block every fork PR instead of
   # unblocking it.

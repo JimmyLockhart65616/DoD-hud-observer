@@ -149,7 +149,7 @@ carries the table. Do not estimate it.
 
 ## Pull requests
 
-- Branch off `master`. One logical change per PR.
+- Branch off `main`. One logical change per PR.
 - Fill in the template — especially the extension-mode checkbox if you touched
   the plugin.
 - Run `npm run test:all` and, for `.sma` changes, `npm run plugin:smoke`.
