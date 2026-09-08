@@ -95,6 +95,8 @@ const reverse = new Map<string, string>();
  */
 const SCALAR_ID_FIELDS = new Set([
     'user_id', 'killer_id', 'victim_id', 'attacker_id', 'breaker_id',
+    // Same value, different spelling: the league stats rows call it `steam_id`.
+    'steam_id',
 ]);
 
 /** Fields holding an array of player ids. */

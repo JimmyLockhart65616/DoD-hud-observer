@@ -901,9 +901,14 @@ on-air dependency to a stats deploy cadence.
   returns `null`/`[]` when off and the REST layer answers **503**, so a dev
   laptop and CI degrade instead of throwing.
 - **Routes** (all inline in `app.ts`, all read-only): `/api/stats/matches`,
-  `/api/stats/matches/:matchId`, `/api/stats/players/:steamId`,
+  `/api/stats/matches/:matchId`, `/api/stats/players/:playerId`,
   `/api/stats/players?ids=` (batch), `/api/stats/maps/:mapName/flags`, and
   `/api/stats/_guard` for breaker diagnostics.
+- **Every route that can reach player identity speaks in tokens, never
+  SteamIDs** — the two player routes take a `p_<16hex>` token and the box score
+  publishes one. These are public and unauthenticated, so the pseudonym
+  boundary is what stands between them and the league roster; the surface tests
+  in `pseudonym.test.ts` are what keep a new route from forgetting it.
 ### Publishing policy (league rules, not preferences)
 
 Set by the stats owner (Krod, 2026-08-24). Both are the kind of rule obeyed on

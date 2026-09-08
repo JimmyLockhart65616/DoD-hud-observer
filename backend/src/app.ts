@@ -231,10 +231,14 @@ app.get('/api/stats/matches', (req, res) => {
 
 // `half = 0` rows are the stored match TOTAL, not a third half. Passed through
 // as-is; a caller that sums every row double-counts the whole board.
+//
+// Scoped to the match id rather than a server hostname: a box score never
+// outlives its match, and one scope per response is what keeps each half and
+// the `half = 0` total on a single token per player.
 app.get('/api/stats/matches/:matchId', (req, res) => {
     const id = req.params.matchId;
     serveStats(req, res, `match:${id}`, TTL_MATCH,
-        async () => ({ rows: await statsDb.matchPlayerStats(id) }));
+        async () => ({ rows: pseudonymize(await statsDb.matchPlayerStats(id), id) }));
 });
 
 // Career totals for a whole roster in ONE query and ONE cache entry. The caster

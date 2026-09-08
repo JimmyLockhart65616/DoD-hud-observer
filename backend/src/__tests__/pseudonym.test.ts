@@ -361,3 +361,71 @@ describe('publication surfaces — no SteamID may cross the wire', () => {
         expect(strip.allies[0].user_id).toBe(mintPlayerId('STEAM_0:0:31337', host));
     });
 });
+
+/**
+ * The league stats box score — the surface the first cut of the pseudonym
+ * boundary missed.
+ *
+ * `/api/stats/matches/:matchId` reads `hlstats_PlayerUniqueIds.uniqueId` into a
+ * `steam_id` column and published it raw, unauthenticated, beside the in-game
+ * name and K/D, while `/api/stats/players` beside it had already been closed.
+ * The mechanism was right and the route simply did not call it, which is the
+ * failure this whole file exists to catch.
+ */
+describe('league stats box score — the /api/stats/matches/:matchId surface', () => {
+    // Synthetic ids. A real one must never enter a fixture: the fixtures are the
+    // one part of a privacy test that gets copied into the next test.
+    const rows = [
+        { match_id: 'm-box', half: 0, player_id: 9001, name: 'Alpha', steam_id: 'STEAM_0:0:1001', kills: 40, deaths: 20 },
+        { match_id: 'm-box', half: 1, player_id: 9001, name: 'Alpha', steam_id: 'STEAM_0:0:1001', kills: 22, deaths: 11 },
+        { match_id: 'm-box', half: 2, player_id: 9001, name: 'Alpha', steam_id: 'STEAM_0:0:1001', kills: 18, deaths: 9 },
+        { match_id: 'm-box', half: 0, player_id: 9002, name: 'Bravo', steam_id: 'STEAM_0:0:2001', kills: 12, deaths: 30 },
+    ];
+
+    it('publishes tokens, not SteamIDs', () => {
+        const out = pseudonymize(rows, 'm-box');
+        expect(JSON.stringify(out)).not.toMatch(STEAMID_RE);
+        expect(out.every(r => /^p_[0-9a-f]{16}$/.test(r.steam_id))).toBe(true);
+    });
+
+    it('gives one player ONE token across every half and the half=0 total', () => {
+        // A box score is unreadable if a player's halves cannot be joined to
+        // their own total — which is the whole reason the scope is the match.
+        const out = pseudonymize(rows, 'm-box');
+        expect(new Set(out.slice(0, 3).map(r => r.steam_id)).size).toBe(1);
+        expect(out[3].steam_id).not.toBe(out[0].steam_id);
+    });
+
+    it('leaves the box score itself intact', () => {
+        const out = pseudonymize(rows, 'm-box');
+        expect(out[0].player_id).toBe(9001);   // hlstats row key, not a player identity
+        expect(out[0].match_id).toBe('m-box');
+        expect(out[0].name).toBe('Alpha');
+        expect(out[0].kills).toBe(40);
+        expect(out[0].half).toBe(0);
+    });
+
+    it('leaves an absent steam_id absent — the LEFT JOIN can miss', () => {
+        // statsDb maps a NULL uniqueId to ''. Minting on that would publish one
+        // shared token for every player the join failed to resolve.
+        const out = pseudonymize([{ ...rows[0], steam_id: '' }], 'm-box');
+        expect(out[0].steam_id).toBe('');
+    });
+
+    it('scopes per match — two matches do not share a token for one player', () => {
+        const a = pseudonymize(rows, 'm-box-a')[0].steam_id;
+        const b = pseudonymize(rows, 'm-box-b')[0].steam_id;
+        expect(a).not.toBe(b);
+    });
+
+    // WIRING GUARD, not a mechanism test. Every surface test above builds its
+    // own express app, so all of them would still pass with the real route
+    // publishing raw ids — that is exactly how this shipped. This one reads the
+    // route that actually serves production.
+    it('app.ts routes the box score through pseudonymize', () => {
+        const src = fs.readFileSync(path.join(__dirname, '..', 'app.ts'), 'utf8');
+        const callSites = src.split('\n').filter(l => l.includes('statsDb.matchPlayerStats('));
+        expect(callSites.length).toBeGreaterThan(0);   // control: a rename must fail loudly, not vacuously pass
+        for (const line of callSites) expect(line).toContain('pseudonymize(');
+    });
+});
