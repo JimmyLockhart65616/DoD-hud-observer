@@ -4,6 +4,7 @@ import { MatchRecorder } from './matchRecorder';
 import { MetricsCollector } from './metrics';
 import { HltvDelayBuffer } from './hltvDelayBuffer';
 import { HltvSyncService } from './hltvSync';
+import { pseudonymize } from './pseudonym';
 
 // ─── Per-Server State Cache ──────────────────────────────────────────────────
 // Tracks the latest game state per server so late-joining frontends get a
@@ -15,6 +16,10 @@ import { HltvSyncService } from './hltvSync';
 // so only genuine ghosts age out. 5 min is generous enough for pre-match
 // lobbies where players can sit idle without emitting per-player events.
 const PLAYER_STALE_MS = 5 * 60 * 1000;
+
+// Display name for a player seen spawning before this process ever saw them
+// connect. Deliberately not the user_id — see the roster arms below.
+const UNKNOWN_PLAYER_NAME = '(unknown)';
 
 // Socket-only events: live overlay state that must NOT be persisted to
 // events.jsonl. player_state is the 4 Hz per-player snapshot (every alive
@@ -56,6 +61,10 @@ interface ServerState {
     timeleftReleasedAt: number;   // Date.now() when `timeleft` was cached (post-buffer release
                                   // instant). Used to age-adjust the value for late joiners so a
                                   // reload doesn't anchor a minutes-stale countdown at "now".
+    broadcastLagMs: number;       // Release instant minus ingest instant for the most recently
+                                  // released event, i.e. how far behind live the CONTENT of this
+                                  // cache is. Distinct from metrics' last-seen age, which measures
+                                  // the ingest stream and is ~0 even on a fully delayed server.
     half: number | null;          // current half (1, 2, 101+) from latest half_start
     round_phase: 'freeze' | 'live' | 'end' | null;  // latest round_start_freeze/round_start/round_end
     halftime_summary: any | null; // latest player_stats_summary with reason half_end —
@@ -85,6 +94,7 @@ function getOrCreateState(server: string): ServerState {
             flags: null,
             timeleft: null,
             timeleftReleasedAt: 0,
+            broadcastLagMs: 0,
             half: null,
             round_phase: null,
             halftime_summary: null,
@@ -98,9 +108,17 @@ function getOrCreateState(server: string): ServerState {
     return serverStates.get(server)!;
 }
 
-function updateServerState(server: string, event: any): void {
+function updateServerState(server: string, event: any, enqueuedAt?: number): void {
     const state = getOrCreateState(server);
     const now = Date.now();
+
+    // How far behind the ingest stream the content of this cache now is. Both
+    // ends come from THIS process's clock — enqueuedAt is stamped in the ingest
+    // handler, now is stamped at release — so it is immune to game-server clock
+    // skew, unlike anything derived from the plugin's own `plugin_sent_at`.
+    // Undefined enqueuedAt means the event bypassed the delay buffer, i.e. this
+    // server isn't in hltv_sync and the content is live: lag 0.
+    state.broadcastLagMs = enqueuedAt != null ? Math.max(0, now - enqueuedAt) : 0;
 
     switch (event.event) {
         case 'ktp_match_start':
@@ -154,7 +172,15 @@ function updateServerState(server: string, event: any): void {
             state.players.set(event.user_id, {
                 ...state.players.get(event.user_id),
                 user_id: event.user_id,
-                name: event.name ?? state.players.get(event.user_id)?.name ?? event.user_id,
+                // NOT `?? event.user_id`. player_spawn and roster_player carry no
+                // `name` (see the event schema), so a player whose player_connect
+                // this process never saw — an out-of-order arrival, or a backend
+                // restart mid-match — fell through to the SteamID and published it
+                // as a DISPLAY NAME. That routed identity around the pseudonym
+                // boundary entirely: `name` is allowlisted by the support-poller
+                // and republished to ktpleague.gg, so the id would have gone
+                // public in the one field nobody thought to check.
+                name: event.name ?? state.players.get(event.user_id)?.name ?? UNKNOWN_PLAYER_NAME,
                 team: event.team,
                 class_id: event.class_id,
                 weapon_primary: event.weapon_primary,
@@ -172,7 +198,8 @@ function updateServerState(server: string, event: any): void {
             state.players.set(event.user_id, {
                 ...state.players.get(event.user_id),
                 user_id: event.user_id,
-                name: event.name ?? state.players.get(event.user_id)?.name ?? event.user_id,
+                // Never `?? event.user_id` — see the player_spawn arm above.
+                name: event.name ?? state.players.get(event.user_id)?.name ?? UNKNOWN_PLAYER_NAME,
                 team: event.team,
                 class_id: event.alive ? event.class_id : null,
                 weapon_primary: event.alive ? event.weapon_primary : null,
@@ -474,6 +501,8 @@ export interface CachedServerView {
     alliesScore: number | null;
     axisScore: number | null;
     timeleft: number | null;   // age-adjusted to call time
+    /** See ServerState.broadcastLagMs — age of this cache's CONTENT, not of ingest. */
+    broadcastLagMs: number;
     flags: CachedServerFlag[];
     allies: CachedServerPlayer[];
     axis: CachedServerPlayer[];
@@ -496,7 +525,7 @@ export function getCachedServerView(server: string): CachedServerView {
             hasCache: false, map: null, half: null, roundPhase: null,
             phase: null, phaseMode: '',
             matchActive: false, alliesScore: null, axisScore: null,
-            timeleft: null, flags: [], allies: [], axis: [],
+            timeleft: null, broadcastLagMs: 0, flags: [], allies: [], axis: [],
         };
     }
 
@@ -517,7 +546,8 @@ export function getCachedServerView(server: string): CachedServerView {
         if (now - (p.lastSeen ?? 0) > PLAYER_STALE_MS) return;
         (p.team === 'allies' ? allies : axis).push({
             user_id: p.user_id,
-            name: p.name ?? p.user_id,
+            // Same reason as the roster arms above: never fall back to the id.
+            name: p.name ?? UNKNOWN_PLAYER_NAME,
             kills: p.kills ?? 0,
             deaths: p.deaths ?? 0,
         });
@@ -536,6 +566,7 @@ export function getCachedServerView(server: string): CachedServerView {
         alliesScore: state.team_score?.allies_score ?? null,
         axisScore: state.team_score?.axis_score ?? null,
         timeleft,
+        broadcastLagMs: state.broadcastLagMs,
         // Ownership ONLY. flag_captured updates `owner` and nothing else, and
         // there is no flag_zone_players arm in updateServerState — so
         // contested/progress/zone counts are frozen at whatever the last
@@ -573,12 +604,21 @@ export function getCachedServerView(server: string): CachedServerView {
  * callback exactly once at startup, rather than per ingest router.
  */
 export function makeFireToSockets(io: SocketServer) {
-    return (server: string, matchId: string | undefined, event: any) => {
-        updateServerState(server, event);
-        if (matchId) io.to(matchId).emit(event.event, JSON.stringify(event));
-        io.to(`server:${server}`).emit(event.event, JSON.stringify(event));
-        io.to('all').emit(event.event, JSON.stringify(event));
-        io.to('hud_socket').emit(event.event, JSON.stringify(event));
+    return (server: string, matchId: string | undefined, event: any, enqueuedAt?: number) => {
+        // Cache FIRST, with the real ids. The state cache feeds late-joiner
+        // snapshots and /api/hq, both of which pseudonymize on their own way
+        // out — keeping real ids here is what lets the career join resolve.
+        updateServerState(server, event, enqueuedAt);
+
+        // ...and publish the pseudonymized copy. This is the boundary: past
+        // this line no SteamID reaches a socket client. Stringified once rather
+        // than per room — four identical JSON.stringify calls of a 12-player
+        // player_state at 4 Hz x 24 servers is real work for no reason.
+        const payload = JSON.stringify(pseudonymize(event, server));
+        if (matchId) io.to(matchId).emit(event.event, payload);
+        io.to(`server:${server}`).emit(event.event, payload);
+        io.to('all').emit(event.event, payload);
+        io.to('hud_socket').emit(event.event, payload);
     };
 }
 

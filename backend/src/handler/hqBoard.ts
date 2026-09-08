@@ -26,6 +26,7 @@
 import type { MatchMetadata, MatchRecorder } from './matchRecorder';
 import type { MetricsCollector } from './metrics';
 import { compareServerHostnames } from './serverList';
+import { pseudonymize } from './pseudonym';
 import {
     getCachedServerView,
     listCachedServers,
@@ -71,7 +72,42 @@ export interface HqServer {
     hostname: string;
     status: HqStatus;
     online: boolean;
-    lastEventAgeMs: number | null;   // null = never seen by metrics
+
+    /**
+     * Age of the newest event to ARRIVE at ingest. An ingest heartbeat: it says
+     * the plugin is alive and POSTing, and is ~0 on a healthy server whether or
+     * not that server is broadcast-delayed. null = never seen by metrics.
+     *
+     * It is NOT the age of the content in this response. Reading it as such is
+     * exactly the trap this field was renamed out of (issue #19): the numbers
+     * beside it — score, roster, flags — come from getCachedServerView(), which
+     * only advances on the POST-delay path, while metrics.recordEvent() fires at
+     * arrival, before delayBuffer.enqueue(). A reviewer measured 4–468 ms here on
+     * 24 servers all reporting delaySeconds 60 and reasonably concluded the delay
+     * was not being applied. It was; this field just answers a different question.
+     *
+     * For the age of the content, use broadcastLagMs.
+     */
+    ingestAgeMs: number | null;
+
+    /**
+     * Age of the CONTENT: release instant minus ingest instant for the most
+     * recently released event on this server. ~0 on an undelayed server,
+     * ~delaySeconds*1000 on one in hltv_sync. null = nothing released yet.
+     *
+     * Both ends are stamped by this process, so no game-server clock skew enters
+     * — which is why this, and not a `plugin_sent_at` difference, is the number
+     * to trust.
+     */
+    broadcastLagMs: number | null;
+
+    /**
+     * @deprecated Renamed to ingestAgeMs; same value. Kept because this endpoint
+     * is public and unauthenticated, so there is no way to know who reads it.
+     * Drop after Season 10.
+     */
+    lastEventAgeMs: number | null;
+
     totalEvents: number;
 
     map: string | null;
@@ -235,8 +271,8 @@ export function buildHqOverview(
     const servers = [...hostnames].map((hostname): HqServer => {
         const view = getCachedServerView(hostname);
         const meta = info.get(hostname);
-        const lastEventAgeMs = meta ? now - meta.last_seen : null;
-        const online = lastEventAgeMs != null && lastEventAgeMs < ONLINE_MS;
+        const ingestAgeMs = meta ? now - meta.last_seen : null;
+        const online = ingestAgeMs != null && ingestAgeMs < ONLINE_MS;
         const active = activeByServer.get(hostname) ?? null;
         const delayActive = hltv?.isActive(hostname) ?? false;
 
@@ -244,7 +280,9 @@ export function buildHqOverview(
             hostname,
             status: deriveStatus(online, view, active != null),
             online,
-            lastEventAgeMs,
+            ingestAgeMs,
+            broadcastLagMs: view.hasCache ? view.broadcastLagMs : null,
+            lastEventAgeMs: ingestAgeMs,   // deprecated alias — see the interface
             totalEvents: meta?.total_events ?? 0,
 
             // Cache first (delay-correct, and survives a restart once one event
@@ -278,8 +316,12 @@ export function buildHqOverview(
             delaySeconds: delayActive ? (delayByServer.get(hostname) ?? null) : null,
 
             flags: view.flags,
-            allies: view.allies,
-            axis: view.axis,
+            // The publication boundary for this endpoint. The cache holds real
+            // SteamIDs (the career join needs them); everything leaving here
+            // carries the opaque token instead. Scope is the hostname, so the
+            // token matches the one the socket path emits for the same player.
+            allies: pseudonymize(view.allies, hostname),
+            axis: pseudonymize(view.axis, hostname),
             playerCount: view.allies.length + view.axis.length,
 
             matchId: active?.matchId ?? null,

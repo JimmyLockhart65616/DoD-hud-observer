@@ -53,7 +53,7 @@ function emptyView(over: Partial<ReturnType<typeof getCachedServerView>> = {}) {
         hasCache: true, map: null, half: null, roundPhase: null,
         phase: null, phaseMode: '',
         matchActive: false, alliesScore: null, axisScore: null,
-        timeleft: null, flags: [], allies: [], axis: [],
+        timeleft: null, broadcastLagMs: 0, flags: [], allies: [], axis: [],
         ...over,
     };
 }
@@ -319,12 +319,43 @@ describe('GET /api/hq — projection over ingested events', () => {
         const res = await request(app).get('/api/hq');
         const s = strip(res.body, host);
 
-        expect(s.allies).toEqual([
-            { user_id: 'a2', name: 'High', kills: 11, deaths: 4 },
-            { user_id: 'a1', name: 'Low', kills: 3, deaths: 8 },
+        // Names, K/D and ordering are unchanged; the id is now the opaque token
+        // (see the pseudonymization test below for the identity contract).
+        expect(s.allies.map((p: any) => [p.name, p.kills, p.deaths])).toEqual([
+            ['High', 11, 4],
+            ['Low', 3, 8],
         ]);
-        expect(s.axis).toEqual([{ user_id: 'x1', name: 'Axel', kills: 7, deaths: 7 }]);
+        expect(s.axis.map((p: any) => [p.name, p.kills, p.deaths])).toEqual([['Axel', 7, 7]]);
         expect(s.playerCount).toBe(3);
+    });
+
+    // Issue #19: /api/hq is public and unauthenticated, and carried live SteamIDs
+    // next to in-game names and K/D — the league's own roster. Everything about
+    // the strip stays the same except the id.
+    it('publishes an opaque token instead of the SteamID, stably and per player', async () => {
+        const host = 'KTP - Pseudonym';
+        await post({ event: 'player_connect', user_id: 'STEAM_0:0:123', name: 'Alice', team: 'allies' }, host);
+        await post({ event: 'player_connect', user_id: 'STEAM_0:1:456', name: 'Bob', team: 'axis' }, host);
+
+        const first = strip((await request(app).get('/api/hq')).body, host);
+        const alice = first.allies[0];
+        const bob = first.axis[0];
+
+        // The whole point: no SteamID anywhere in the payload, in any field.
+        expect(JSON.stringify(first)).not.toMatch(/STEAM_\d/);
+
+        expect(alice.user_id).toMatch(/^p_[0-9a-f]{16}$/);
+        expect(bob.user_id).toMatch(/^p_[0-9a-f]{16}$/);
+        // Distinct players must not collapse onto one token — they are React keys
+        // and dictionary keys downstream, so a collision would merge two players.
+        expect(alice.user_id).not.toBe(bob.user_id);
+        // Names still identify the row for a human; only the id is replaced.
+        expect(alice.name).toBe('Alice');
+
+        // Stable across polls — /hq re-renders at 1 Hz, so a token that moved
+        // would remount every row and throw away React's reconciliation.
+        const second = strip((await request(app).get('/api/hq')).body, host);
+        expect(second.allies[0].user_id).toBe(alice.user_id);
     });
 
     it('excludes spectators and unassigned players from both rosters and the count', async () => {
@@ -429,7 +460,9 @@ describe('GET /api/hq — projection over ingested events', () => {
         const s = strip(res.body, host);
 
         expect(s.half).toBe(2);
-        expect(s.allies).toEqual([{ user_id: 'a1', name: 'Carry', kills: 0, deaths: 0 }]);
+        expect(s.allies).toEqual([
+            { user_id: expect.stringMatching(/^p_/), name: 'Carry', kills: 0, deaths: 0 },
+        ]);
     });
 
     it('reports BETWEEN after ktp_match_end even though half stays set', async () => {
@@ -621,7 +654,7 @@ describe('getCachedServerView — unknown server', () => {
             hasCache: false, map: null, half: null, roundPhase: null,
             phase: null, phaseMode: '',
             matchActive: false, alliesScore: null, axisScore: null,
-            timeleft: null, flags: [], allies: [], axis: [],
+            timeleft: null, broadcastLagMs: 0, flags: [], allies: [], axis: [],
         });
     });
 });

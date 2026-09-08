@@ -2,6 +2,7 @@ import { Server } from 'socket.io';
 import { createServer } from 'http';
 import { MatchRecorder } from '../handler/matchRecorder';
 import { getServerSnapshot } from '../handler/ingest';
+import { pseudonymize } from '../handler/pseudonym';
 
 /**
  * Creates a Socket.IO server with match-based room routing.
@@ -63,11 +64,17 @@ export function createSocketServer(origin: string, recorder: MatchRecorder) {
             socket.join(`server:${serverName}`);
             console.log(`[socket] ${socket.id} joined server room server:${serverName}`);
 
-            // Replay cached state so late joiners see current game state
+            // Replay cached state so late joiners see current game state.
+            //
+            // This is a SECOND publication boundary and it does not go through
+            // makeFireToSockets — the snapshot is read straight out of the state
+            // cache, which holds real SteamIDs on purpose. Pseudonymize here or
+            // every overlay reload and every /caster open leaks the roster, which
+            // is the single most-hit join path we have.
             const snapshot = getServerSnapshot(serverName);
             for (const raw of snapshot) {
-                const parsed = JSON.parse(raw);
-                socket.emit(parsed.event, raw);
+                const parsed = pseudonymize(JSON.parse(raw), serverName);
+                socket.emit(parsed.event, JSON.stringify(parsed));
             }
             if (snapshot.length > 0) {
                 console.log(`[socket] Replayed ${snapshot.length} cached events to ${socket.id}`);

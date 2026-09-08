@@ -8,6 +8,7 @@ import { MAX_CAREER_BATCH } from './statsdb/queries';
 import { MatchRecorder } from './handler/matchRecorder';
 import { MetricsCollector } from './handler/metrics';
 import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './handler/ingest';
+import { pseudonymize, resolvePlayerId, rekeyByToken } from './handler/pseudonym';
 import { buildHqOverview } from './handler/hqBoard';
 import { buildServerList } from './handler/serverList';
 import { createSocketServer } from './socket/socket';
@@ -37,8 +38,8 @@ const { httpServer: socketHttp, io } = createSocketServer(config.frontend.origin
 // socket server. The callback is required by the constructor — there's no
 // setter — so the buffer can't be assembled in a half-wired state.
 const fireToSockets = makeFireToSockets(io);
-const delayBuffer = new HltvDelayBuffer(hltvSync, ({ server, matchId, event }) =>
-    fireToSockets(server, matchId, event));
+const delayBuffer = new HltvDelayBuffer(hltvSync, ({ server, matchId, event, enqueuedAt }) =>
+    fireToSockets(server, matchId, event, enqueuedAt));
 
 // Rescue events stranded by a changelevel on every fresh sample — see
 // wireStrandedRescue for the full timing story (heartbeat self-healing of
@@ -102,18 +103,32 @@ app.get('/api/matches/stored', (_req, res) => {
 // score, roster and clock for the wall display at /hq. Read-only projection over
 // the state cache + recorder + metrics; shares no state or middleware with
 // /ingest and nothing the broadcast overlay reads.
+//
+// PUBLIC AND UNAUTHENTICATED. The nginx vhost proxies /api/* straight through,
+// so this answers 200 to anyone on the internet. The paragraph above describes
+// how it is WIRED, not who can reach it, and it was read as "internal" by two
+// separate reviewers on that basis (issue #19) — including by the people running
+// the deployment. Player identity leaves here pseudonymized (see pseudonym.ts);
+// treat every field added below as published.
 app.get('/api/hq', (_req, res) => {
     res.json(buildHqOverview(recorder, metrics, hltvSync));
 });
 
-// Serve events.jsonl for a completed match (replay)
+// Serve events.jsonl for a completed match (replay).
+//
+// PUBLIC AND UNAUTHENTICATED, like everything else on this vhost. events.jsonl
+// keeps real SteamIDs on disk — it is the operator-owned record and the league
+// stats join reads it — so the mapping happens HERE, on the way out, rather
+// than at record time. Scope is the recording server, so a replayed id matches
+// the token the live socket emitted for that same player.
 app.get('/api/matches/:matchId/events', (req, res) => {
     const events = recorder.getEvents(req.params.matchId);
     if (!events) {
         res.status(404).json({ error: 'match not found or no events recorded' });
         return;
     }
-    res.json({ events });
+    const scope = recorder.getMetadata(req.params.matchId)?.sourceServer ?? req.params.matchId;
+    res.json({ events: pseudonymize(events, scope) });
 });
 
 // ---------------------------------------------------------------------------
@@ -245,17 +260,57 @@ app.get('/api/stats/players', (req, res) => {
         return;
     }
 
+    // The resolve half of the pseudonym boundary, and the reason /caster keeps
+    // working without ever holding a SteamID: the page passes back the same
+    // opaque tokens it got over the socket, and the real ids are recovered here,
+    // in-process, purely to build the MySQL query.
+    //
+    // A token this process never minted (one from before a restart, or invented)
+    // simply drops out. That is the existing contract, not a new failure mode —
+    // the reply is a map, and an absent key already means "no league match
+    // recorded", which the panel renders as no record rather than as an error.
+    const pairs = unique
+        .map(token => ({ token, steam: resolvePlayerId(token) }))
+        .filter((p): p is { token: string; steam: string } => p.steam !== undefined);
+
+    if (!pairs.length) {
+        res.json({ players: {} });
+        return;
+    }
+
+    // Cache key stays in TOKEN space. Keying on the resolved SteamIDs would let
+    // one client's cached response — which is keyed BY TOKEN — be served to a
+    // client holding different tokens for the same players, handing back rows it
+    // could not look up. Tokens are stable per process, so two clients watching
+    // the same server still share the entry, which is the case that matters.
+    //
     // Sorted so two clients asking for the same roster in different orders share
     // the cache entry instead of each paying for a query.
     const key = `careers:${[...unique].sort().join(',')}`;
-    serveStats(req, res, key, TTL_PLAYER,
-        async () => ({ players: await statsDb.playerCareers(unique) }));
+    serveStats(req, res, key, TTL_PLAYER, async () => ({
+        players: rekeyByToken(await statsDb.playerCareers(pairs.map(p => p.steam)), pairs),
+    }));
 });
 
-app.get('/api/stats/players/:steamId', (req, res) => {
-    const id = req.params.steamId;
-    serveStats(req, res, `player:${id}`, TTL_PLAYER,
-        async () => (await statsDb.playerCareer(id)) ?? undefined);
+// Single-player career. Takes an opaque TOKEN, not a SteamID.
+//
+// It has no frontend consumer (the Career panel uses the batch form) and is kept
+// for diagnostics — but as a public route accepting a raw SteamID it was an
+// oracle: anyone could ask this backend whether a given SteamID plays in the
+// league, and read their record, without ever seeing the id on our wire. Taking
+// only tokens means a caller has to have been given the id by us to ask about
+// it, which closes that without changing what a legitimate caller can do.
+app.get('/api/stats/players/:playerId', (req, res) => {
+    const token = req.params.playerId;
+    const steam = resolvePlayerId(token);
+    if (!steam) {
+        res.status(404).json({ error: 'unknown player id' });
+        return;
+    }
+    serveStats(req, res, `player:${token}`, TTL_PLAYER, async () => {
+        const row = await statsDb.playerCareer(steam);
+        return row ? { ...row, steam_id: token } : undefined;
+    });
 });
 
 // Static per-flag world coordinates for a map (2D — dodx exposes no CP_origin_z).

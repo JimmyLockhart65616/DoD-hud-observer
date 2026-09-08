@@ -56,6 +56,17 @@ server-side so every field on a strip comes from one instant. Two notes:
   `hltv_sync.servers` is shown ~`delaySeconds` behind live (60s on the league
   fleet). Surfaced per strip as `delayActive`/`delaySeconds`. Servers absent from
   that config are effectively live — the lag is a config property, not a code one.
+- **`ingestAgeMs` is NOT the age of the content**, and the old name
+  (`lastEventAgeMs`) said it was. It is an ingest heartbeat: `metrics.recordEvent()`
+  fires at arrival, *before* `delayBuffer.enqueue()`, while the score/roster/flags
+  beside it come from `getCachedServerView()`, which only advances post-delay. So
+  it reads 4–468 ms on a fleet that is genuinely 60 s behind — which is exactly how
+  a reviewer concluded the delay was not being applied (issue #19). Use
+  **`broadcastLagMs`** for content age; both its ends are stamped by this process,
+  so game-server clock skew cannot enter (unlike a `plugin_sent_at` difference,
+  which reads ~55 s against a real 60 s). `lastEventAgeMs` is kept as a deprecated
+  alias — the endpoint is public, so there is no way to know who reads it — and
+  should be dropped after Season 10.
 - **Statuses** (first match wins): `NO_SIGNAL` (no ingest <60s) → `STALE`
   (signal, no cache — the backend-restart window) → `BETWEEN` → `LIVE` (a round
   has begun) → `WARMUP`. `BETWEEN` keys on the additive `matchActive` field, NOT
@@ -198,6 +209,51 @@ there is nothing to provision per match and nothing to reset afterwards.
 - Display name comes from `player_connect` event (`name` field = in-game name)
 - On `half_start`: wipe all player stats, keep player roster (they'll re-send `player_spawn`)
 - Dproto (non-Steam) fake IDs are acceptable — identity only needs to be unique within a match session
+
+### Pseudonymization at the publication boundary
+
+The SteamID above is what the **plugin sends** and what the backend keeps
+internally. **It is not what leaves the backend.** Every outbound surface is
+public and unauthenticated — the nginx vhost proxies `/api/*` and `/socket.io/`
+straight through — and they carried live SteamIDs next to in-game names and K/D,
+i.e. the league roster (issue #19; 12/12 ids in a stored match resolved to league
+player records). `backend/src/handler/pseudonym.ts` replaces them with an opaque
+`p_<16 hex>` token on the way out.
+
+- **Real ids stay INSIDE**: the per-server state cache, `events.jsonl` on disk,
+  and the league stats join all keep the SteamID. Only the wire is pseudonymized.
+  That is why the recorder is untouched and forensics still work.
+- **There are FOUR outbound boundaries, not three**, and the fourth is the one
+  that gets missed: `makeFireToSockets` (live stream), `buildHqOverview`
+  (`/api/hq`), `/api/matches/:id/events` (replay), and **`join_server`'s snapshot
+  replay in `socket/socket.ts`** — which reads the cache directly rather than
+  going through `makeFireToSockets`, and is the *most-hit* join path we have
+  (every OBS reload, every `/caster` open). Pinned by `pseudonym.test.ts`.
+- **The frontend needed no changes at all.** Every one of the ~79 `user_id` uses
+  in `Socket.jsx` is a React `key=` or a dictionary lookup; the id is never parsed
+  and never displayed. Keep it that way — anything that *interprets* a `user_id`
+  is a bug.
+- **Scope is the SERVER HOSTNAME, not the match id.** The state cache is never
+  evicted, `/hq` shows rosters with no match running, and a `server:<host>` room
+  streams across match boundaries — a per-match scope would re-mint every id at
+  each boundary and make the same player read as a new one.
+- **The career join resolves SERVER-SIDE.** `/api/stats/players?ids=` takes
+  tokens, resolves them in-process, queries MySQL with the real ids, then
+  `rekeyByToken`s the answer back. So `/caster` works unchanged and the browser
+  never holds a SteamID. `rekeyByToken` also **rewrites `steam_id` inside the
+  row** — the career row carries the id in its body as well as its key, so
+  re-keying alone puts it straight back on the wire.
+- `/api/stats/players/:playerId` takes a **token, not a SteamID**. As a public
+  route accepting a raw id it was an oracle: anyone could ask whether a given
+  SteamID plays in the league and read their record.
+- **Never `?? user_id` as a display-name fallback.** `player_spawn` and
+  `roster_player` carry no `name`, so a player whose `player_connect` this process
+  missed fell through to the SteamID *as a name* — routing identity around the
+  boundary entirely, into the one field the support-poller allowlists and
+  republishes to ktpleague.gg. Use `UNKNOWN_PLAYER_NAME`.
+- Tokens rotate on restart unless `HUD_PSEUDONYM_SECRET` is set. That is fine: a
+  restart drops every socket, and an unresolvable token already means "no league
+  record", which the panel renders rather than erroring on.
 
 ---
 
