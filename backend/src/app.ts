@@ -231,10 +231,16 @@ app.get('/api/stats/matches', (req, res) => {
 
 // `half = 0` rows are the stored match TOTAL, not a third half. Passed through
 // as-is; a caller that sums every row double-counts the whole board.
+// Historical box score for one league match. PUBLIC and unauthenticated like the
+// rest of /api/*, and these rows carry `steam_id` straight from the league DB —
+// measured leaking 36 real SteamIDs with names and full stats on a single prod
+// request. Scope is the MATCH id, not a server hostname: there is no live server
+// context here, and per-match scoping means a player's historical appearances
+// cannot be linked to each other by token either.
 app.get('/api/stats/matches/:matchId', (req, res) => {
     const id = req.params.matchId;
     serveStats(req, res, `match:${id}`, TTL_MATCH,
-        async () => ({ rows: await statsDb.matchPlayerStats(id) }));
+        async () => ({ rows: pseudonymize(await statsDb.matchPlayerStats(id), id) }));
 });
 
 // Career totals for a whole roster in ONE query and ONE cache entry. The caster

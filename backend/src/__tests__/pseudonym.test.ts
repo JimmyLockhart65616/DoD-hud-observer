@@ -151,6 +151,35 @@ describe('pseudonym — the event walker', () => {
         expect(ev.assist_ids[0]).toBe('STEAM_0:0:6');
     });
 
+    // REGRESSION GUARD. /api/stats/matches/:matchId serves league-DB rows whose
+    // identity column is `steam_id`, not `user_id`, so it kept publishing real
+    // SteamIDs after every overlay surface was closed — 36 of them, with names and
+    // full stats, on one production request. Identity reached the wire under a
+    // different field name.
+    it('rewrites steam_id on league stats rows', () => {
+        const rows = [
+            { match_id: '1777859644-ATL1', half: 0, player_id: 88,
+              name: '[bb] reppo', steam_id: 'STEAM_0:0:104450108', kills: 67 },
+            { match_id: '1777859644-ATL1', half: 1, player_id: 91,
+              name: 'someone', steam_id: 'STEAM_0:1:22222', kills: 12 },
+        ];
+        const out = pseudonymize(rows, '1777859644-ATL1');
+
+        expect(JSON.stringify(out)).not.toMatch(STEAMID_RE);
+        expect(out[0].steam_id).toMatch(/^p_[0-9a-f]{16}$/);
+        expect(out[0].steam_id).not.toBe(out[1].steam_id);
+        // The box score itself must survive intact — only identity changes.
+        expect(out[0].name).toBe('[bb] reppo');
+        expect(out[0].kills).toBe(67);
+        expect(out[0].match_id).toBe('1777859644-ATL1');
+    });
+
+    it('scopes stats rows per match, so one player is unlinkable across matches', () => {
+        const row = { steam_id: 'STEAM_0:0:104450108' };
+        expect(pseudonymize(row, 'match-A').steam_id)
+            .not.toBe(pseudonymize(row, 'match-B').steam_id);
+    });
+
     it('passes through events with no player id at all', () => {
         const ev = { event: 'round_start', timeleft: 1197.5 };
         expect(pseudonymize(ev, scope)).toEqual(ev);

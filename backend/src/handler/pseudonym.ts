@@ -95,6 +95,12 @@ const reverse = new Map<string, string>();
  */
 const SCALAR_ID_FIELDS = new Set([
     'user_id', 'killer_id', 'victim_id', 'attacker_id', 'breaker_id',
+    // Not a live-overlay field: this is the league stats DB's own column, on the
+    // rows /api/stats/matches/:matchId serves. It was publishing real SteamIDs
+    // with names and full stats on a public route long after the socket and HQ
+    // surfaces were closed — the identity leak of #19 simply reached the wire by
+    // a different name. Listed here so the walker covers any stats payload too.
+    'steam_id',
 ]);
 
 /** Fields holding an array of player ids. */
