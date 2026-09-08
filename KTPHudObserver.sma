@@ -199,6 +199,15 @@ new g_cvar_key[128];
 
 // Match state (set by ktp_match_start / ktp_match_end forwards)
 new bool:g_matchActive = false;
+
+// Official team-score telemetry v1 (source "engine-team-score-v1").
+// KTPInfrastructure's import_team_score_events.py is fail-closed: it skips any
+// team_score row that does not carry the full producer contract, which is why
+// ktp_team_score_observations was empty. Sequence is per half, starts at 1, and
+// must be unique and non-decreasing in tick; a duplicate is fatal to the half.
+new g_tsSeq = 0;
+new bool:g_tsBaselineSent = false;
+new bool:g_tsFinalSent = false;
 new g_matchId[128];
 new g_matchMap[64];
 new g_matchType;
@@ -1882,10 +1891,10 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
     // reads the correct value (0/0 on half 1, carryover on half 2/OT).
     new allies_seed = dodx_get_team_score(TEAM_ALLIES);
     new axis_seed   = dodx_get_team_score(TEAM_AXIS);
-    formatex(json, charsmax(json),
-        "{^"event^":^"team_score^",^"allies_score^":%d,^"axis_score^":%d}",
-        allies_seed, axis_seed);
-    post_event(json);
+    g_tsSeq = 0;
+    g_tsBaselineSent = true;
+    g_tsFinalSent = false;
+    ts_post_official("baseline", allies_seed, axis_seed);
 
     // Refresh flag state and send roster dump
     do_flags_init("match_start");
@@ -1968,6 +1977,11 @@ public ktp_match_end(const matchId[], const map[], MatchType:matchType, team1Sco
     // Emit BEFORE clearing g_matchActive so post_event() still injects match_id/map.
     // Event name must match the backend's lifecycle handler in ingest.ts (which
     // calls recorder.endMatch on ktp_match_end) — see backend/src/handler/ingest.ts.
+    // A terminal path that never produced a half_end still has to close its
+    // half. A second consecutive final is explicitly allowed -- the importer
+    // retains every raw row and publishes the last one.
+    ts_post_official("final", team1Score, team2Score);
+
     new json[256];
     formatex(json, charsmax(json),
         "{^"event^":^"ktp_match_end^",^"allies_score^":%d,^"axis_score^":%d}",
@@ -2023,6 +2037,13 @@ public ktp_half_end(const matchId[], const map[], MatchType:matchType, half, tea
 
     server_print("[HUD] ktp_half_end forward (%s half=%d %d-%d) — emitting half_end + stats summary",
                  matchId, half, team1Score, team2Score);
+
+    // Close the half's official team-score stream first: the importer requires
+    // each half to end on a "final", and rows after it are rejected.
+    if (!g_tsFinalSent) {
+        g_tsFinalSent = true;
+        ts_post_official("final", team1Score, team2Score);
+    }
 
     new json[160];
     formatex(json, charsmax(json),
@@ -3062,6 +3083,29 @@ public task_poll_player_state() {
     if ((!first || have_wave || have_tick) && g_cvar_url[0]) post_event(ps_json);
 }
 
+// Emit one official-v1 team_score observation.
+//
+// Side slots are the stable match-team identity that survives the halftime
+// swap: the team that played Allies in half 1 is match-team 1 all match. KTP
+// plays each OT half on the same sides as the regulation half with the same
+// parity, so the whole rule is parity of the half number -- Allies is slot 1 on
+// odd halves (1, 101, 103...) and slot 2 on even ones (2, 102, 104...).
+//
+// sample_kind must open each half with exactly one "baseline" and close it with
+// a "final"; consecutive finals are allowed (half_end then match_end) and the
+// importer publishes the last one.
+stock ts_post_official(const kind[], allies, axis) {
+    if (!g_matchActive) return;
+    new allies_slot = (g_matchHalf % 2 == 1) ? 1 : 2;
+    new axis_slot   = (allies_slot == 1) ? 2 : 1;
+    g_tsSeq++;
+    new json[256];
+    formatex(json, charsmax(json),
+        "{^"event^":^"team_score^",^"allies_score^":%d,^"axis_score^":%d,^"source^":^"engine-team-score-v1^",^"event_sequence^":%d,^"allies_team_slot^":%d,^"axis_team_slot^":%d,^"sample_kind^":^"%s^"}",
+        allies, axis, g_tsSeq, allies_slot, axis_slot, kind);
+    post_event(json);
+}
+
 public ev_team_score() {
     // Read from gamerules (dodx_get_team_score), not from DODX message-tracked
     // globals (dod_get_team_score). In extension mode the DODX Client_TeamScore
@@ -3075,11 +3119,16 @@ public ev_team_score() {
     // awards surface purely as TeamScore broadcasts.
     score_tick_observe(allies, axis);
 
-    new json[128];
-    formatex(json, charsmax(json),
-        "{^"event^":^"team_score^",^"allies_score^":%d,^"axis_score^":%d}",
-        allies, axis);
-    post_event(json);
+    // A half must open on a baseline; if the half_start seed did not land
+    // (dropped POST, late forward), the first observation we do make becomes it
+    // rather than leaving the half with no opening row, which is fatal to the
+    // whole half at import.
+    if (!g_tsBaselineSent) {
+        g_tsBaselineSent = true;
+        ts_post_official("baseline", allies, axis);
+    } else {
+        ts_post_official("change", allies, axis);
+    }
 }
 
 public task_time_sync() {
