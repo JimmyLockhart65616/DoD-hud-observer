@@ -3933,6 +3933,27 @@ stock do_flags_init(const reason[] = "tick") {
         new owner;
         if (authoritative) {
             owner = dodx_objective_get_data(dx, CP_owner);
+            // CP_owner is the engine's CURRENT holder (m_iTeam), and it reads 0
+            // for a control point no team has taken since the last reset -- NOT
+            // "neutral by design". On a map that authors home flags, a flag that
+            // opens owned and is never contested therefore reads 0 for the whole
+            // match while the game itself draws it owned.
+            //
+            // Measured on dod_armory_b6 (match 1.3-6770-NY1, 2026-09-09): both
+            // home flags read 0 at both halves' authoritative snapshots and never
+            // appeared in a single capture, while the map's BSP authors
+            // point_default_owner=1 on Allied First and =2 on Axis First.
+            //
+            // The authored value is exactly what CP_default_owner carries, and it
+            // is already read one line above. Resolve against it -- but only here,
+            // on an authoritative snapshot. That gate is what makes this safe
+            // without any "has it been captured yet" bookkeeping: map_load,
+            // match_start and reset are all definitionally post-reset moments, so
+            // an uncaptured flag's true owner IS its default. The `tick` path
+            // never re-reads ownership at all (it reuses g_flag_owner below), so
+            // a flag legitimately captured to neutral mid-half keeps that state.
+            if (owner == 0 && g_flag_default_owner[i] != 0)
+                owner = g_flag_default_owner[i];
             g_flag_owner[i] = owner;
         } else {
             owner = g_flag_owner[i];
