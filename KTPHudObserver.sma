@@ -107,7 +107,7 @@ native ktp_is_match_active();
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.9.0"
+#define VERSION "2.9.1"
 #define AUTHOR  "cadaver"
 
 // Retained official-score producer/schema identity. Consumers MUST require this
@@ -787,6 +787,15 @@ public plugin_init() {
     // and confirms the deferred-emission fix on the clientless docker stack.
     //   amx_hud_test_cap <cp> <new_owner> <old_owner> [steamid] [name]
     register_concmd("amx_hud_test_cap", "cmd_test_cap", ADMIN_RCON, "<cp> <new> <old> [sid] [name] — repro cap timing");
+
+    // Local repro for #20. The rcon `kick` path is blocked unconditionally in the
+    // KTP-ReHLDS engine (Host_Kick_f), and new_bot exposes no removal command, so
+    // a disconnect cannot be caused from outside on the bot stack. This drives the
+    // same two steps client_disconnect does, in the same order — retain the row,
+    // then zero the slot — so the retention + emit + dedupe path is exercised for
+    // real rather than reasoned about.
+    //   amx_hud_test_drop <userid>
+    register_concmd("amx_hud_test_drop", "cmd_test_drop", ADMIN_RCON, "<id> — simulate client_disconnect teardown");
 #endif
 
     // Periodic tasks are scheduled in plugin_cfg (see below) so they get
@@ -1096,6 +1105,12 @@ stock reset_player_stats_slot(id) {
     }
 }
 
+#define MAX_DEPARTED 16
+
+new g_departed_count = 0;
+new g_departed_steamid[MAX_DEPARTED][32];   // dedupe key only
+new g_departed_row[MAX_DEPARTED][512];      // sized to match pbuf in emit_stats_summary
+
 // Zero every per-player stat accumulator (half-scoped). Called at go-live from
 // ktp_match_start and re-run once at the engine's restart edge
 // (do_golive_stat_rewipe) so kills landing in the go-live countdown — which the
@@ -1108,6 +1123,80 @@ stock wipe_all_stat_accumulators() {
         g_player_objscore[i] = 0;
         reset_player_stats_slot(i);
     }
+    g_departed_count = 0;
+}
+
+// ─── Departed-player retention (issue #20) ──────────────────────────────────
+//
+// emit_stats_summary walks the LIVE roster, and client_disconnect zeroes
+// g_player_team[] and every accumulator. So a player who drops takes their half
+// with them, and any summary emitted afterwards skips them via BOTH per-player
+// `continue`s. That is fatal specifically for SUMMARY_MATCH_END, which runs
+// after gameplay stops — i.e. while the server is already emptying. Measured
+// across 613 production recordings: match_end boards carry 35% of the eligible
+// roster, median 3 of 12, against round_end's 410-of-418 and half_end's 84-of-97.
+//
+// The tell that this is drops and not the buffer guard: survivors are a
+// SUBSEQUENCE of roster order in 532 of 532 partial boards but an exact PREFIX
+// in only 11 — and `break` can only ever produce a prefix, while a per-player
+// `continue` produces a subsequence.
+//
+// Capture therefore has to stop depending on the live roster. Retiming the emit
+// earlier still races the drop cascade; retaining the row at the moment it would
+// otherwise be destroyed cannot. The row is stored PRE-FORMATTED because that is
+// the only thing the summary needs, and it avoids fourteen parallel arrays that
+// would each have to be kept in step with the emit format.
+
+// The one place a summary row's shape is written down. Shared by the live emit
+// loop and by retain_departed_player so a retained row can never drift out of
+// step with a live one — the reason the row is stored formatted rather than as
+// fourteen retained integers.
+stock format_summary_row(out[], len, const steamid[], const name_esc[],
+                         const team_str[], id) {
+    return formatex(out, len,
+        "{^"user_id^":^"%s^",^"name^":^"%s^",^"team^":^"%s^",^"kills^":%d,^"deaths^":%d,^"assists^":%d,^"damage^":%d,^"hs_kills^":%d,^"nade_kills^":%d,^"gun_kills^":%d,^"hits^":%d,^"hs_hits^":%d,^"obj_score^":%d,^"caps^":%d,^"cap_breaks^":%d,^"best_streak^":%d}",
+        steamid, name_esc, team_str,
+        g_player_kills[id], g_player_deaths[id], g_player_assists[id],
+        g_player_damage[id], g_player_hs_kills[id],
+        g_player_nade_kills[id], g_player_gun_kills[id],
+        g_player_hits[id], g_player_hs_hits[id], g_player_objscore[id],
+        g_player_caps[id], g_player_cap_breaks[id], g_player_best_streak[id]);
+}
+
+// Snapshot a player's summary row immediately before client_disconnect zeroes it.
+// Only while a match is live and only for a real side — a spectator or an
+// unassigned joiner has nothing to contribute to a board.
+stock retain_departed_player(id) {
+    if (!g_matchActive) return;
+
+    new team = g_player_team[id];
+    if (team != TEAM_ALLIES && team != TEAM_AXIS) return;
+
+    new steamid[32];
+    get_steamid(id, steamid, charsmax(steamid));
+    if (!steamid[0]) return;
+
+    // Reconnect within the same half: overwrite the earlier row rather than
+    // carrying two. The live slot restarts at zero on reconnect (stats are
+    // slot-scoped by design), so the retained row stays the fuller record until
+    // they depart again.
+    new slot = -1;
+    for (new i = 0; i < g_departed_count; i++) {
+        if (equal(g_departed_steamid[i], steamid)) { slot = i; break; }
+    }
+    if (slot < 0) {
+        if (g_departed_count >= MAX_DEPARTED) return;   // bounded; oldest kept
+        slot = g_departed_count++;
+    }
+
+    new name[64], name_esc[128], team_str[16];
+    get_user_name(id, name, charsmax(name));
+    escape_json(name, name_esc, charsmax(name_esc));
+    get_team_str(team, team_str, charsmax(team_str));
+
+    copy(g_departed_steamid[slot], charsmax(g_departed_steamid[]), steamid);
+    format_summary_row(g_departed_row[slot], charsmax(g_departed_row[]),
+                       steamid, name_esc, team_str, id);
 }
 
 // Re-wipe the half's accumulators at the ENGINE's go-live restart edge, snapping
@@ -2300,8 +2389,25 @@ public ktp_half_end(const matchId[], const map[], MatchType:matchType, half, tea
     new bool:score_authorized = score_mapping_matches_lifecycle(
         matchId, map, matchType, half, true);
     if (have_current_score_map && !score_authorized) {
+        // Log and CONTINUE — deliberately not a return.
+        //
+        // This guard exists for the team_score final, and the `if
+        // (score_authorized)` block below already suppresses that correctly. An
+        // early return here additionally skipped the half_end marker and
+        // emit_stats_summary(SUMMARY_HALF_END) — and the halftime board is the one
+        // capture in this plugin that lands complete (84 of 97 on production,
+        // against match_end's 9 of 94). Trading it away to reject a score sample
+        // is the wrong side of that bargain.
+        //
+        // Reachability, since it decides how much this matters: KTPMatchHandler
+        // calls emit_match_side_map() from exactly one site, immediately before
+        // ExecuteForward(g_fwdMatchStart), so the bound tuple always equals the
+        // plugin's own current match state. ktp_half_end fires pre-changelevel
+        // with half hardcoded to 1, while the half-2 binding happens after the
+        // changelevel — so in normal play the tuples agree and this branch is
+        // unreachable. It is live only for a stale or duplicated callback, which
+        // is what the comment above describes. Raised by afraznein on #20.
         server_print("[HUD] team_score half_end rejected: terminal tuple does not match current side map");
-        return;
     }
 
     new Float:now = get_gametime();
@@ -2551,6 +2657,13 @@ public client_disconnect(id) {
     formatex(json, charsmax(json),
         "{^"event^":^"player_disconnect^",^"user_id^":^"%s^"}", steamid);
     post_event(json);
+
+    // BEFORE the teardown below, which destroys everything a summary row needs.
+    // This is the whole of the fix for the truncated match_end board (#20): the
+    // match-end summary runs after gameplay stops, i.e. while players are already
+    // dropping, so by the time it walks the roster the data is not merely
+    // unreachable — it has been zeroed. Retiming the emit cannot recover it.
+    retain_departed_player(id);
 
     g_player_team[id]   = 0;
     g_player_prone[id]  = PRONE_STANDING;
@@ -3063,6 +3176,12 @@ stock emit_stats_summary(reason, const capout_team[] = "", const capout_by[] = "
 
     new maxp = get_maxplayers();
     new bool:first = true;
+
+    // SteamIDs emitted from the live roster, so the retained pass below can skip
+    // anyone who reconnected rather than emitting them twice.
+    static emitted[MAX_DEPARTED + MAX_PLAYERS][32];
+    new emitted_count = 0;
+
     for (new id = 1; id <= maxp && id <= MAX_PLAYERS; id++) {
         if (!is_user_connected(id)) continue;
         if (is_user_hltv(id)) continue;
@@ -3089,16 +3208,37 @@ stock emit_stats_summary(reason, const capout_team[] = "", const capout_by[] = "
         escape_json(name, name_esc, charsmax(name_esc));
         get_team_str(team, team_str, charsmax(team_str));
 
+        // Emitted live, so this SteamID must not also come back from the
+        // retained list below.
+        if (emitted_count < MAX_DEPARTED + MAX_PLAYERS) {
+            copy(emitted[emitted_count], charsmax(emitted[]), steamid);
+            emitted_count++;
+        }
+
         static pbuf[512];
-        formatex(pbuf, charsmax(pbuf),
-            "%s{^"user_id^":^"%s^",^"name^":^"%s^",^"team^":^"%s^",^"kills^":%d,^"deaths^":%d,^"assists^":%d,^"damage^":%d,^"hs_kills^":%d,^"nade_kills^":%d,^"gun_kills^":%d,^"hits^":%d,^"hs_hits^":%d,^"obj_score^":%d,^"caps^":%d,^"cap_breaks^":%d,^"best_streak^":%d}",
-            first ? "" : ",", steamid, name_esc, team_str,
-            g_player_kills[id], g_player_deaths[id], g_player_assists[id],
-            g_player_damage[id], g_player_hs_kills[id],
-            g_player_nade_kills[id], g_player_gun_kills[id],
-            g_player_hits[id], g_player_hs_hits[id], g_player_objscore[id],
-            g_player_caps[id], g_player_cap_breaks[id], g_player_best_streak[id]);
+        if (!first) add(json, charsmax(json), ",");
+        format_summary_row(pbuf, charsmax(pbuf), steamid, name_esc, team_str, id);
         add(json, charsmax(json), pbuf);
+        first = false;
+    }
+
+    // Players who left while the match was live. Their accumulators are already
+    // gone (client_disconnect zeroes them), so this retained row is the only
+    // remaining record — see retain_departed_player. Without it a match_end
+    // board carries a median of 3 of 12.
+    for (new i = 0; i < g_departed_count; i++) {
+        // Same reservation as the live loop: whole entries only.
+        if (strlen(json) > BUFFER_SIZE - 1024) break;
+
+        new bool:dupe = false;
+        for (new j = 0; j < emitted_count; j++) {
+            if (equal(emitted[j], g_departed_steamid[i])) { dupe = true; break; }
+        }
+        // Reconnected before the summary: the live row already spoke for them.
+        if (dupe) continue;
+
+        if (!first) add(json, charsmax(json), ",");
+        add(json, charsmax(json), g_departed_row[i]);
         first = false;
     }
 
@@ -4216,6 +4356,50 @@ public cmd_test_cap(id, level, cid) {
             else copy(g_flag_test_name[cp][n], charsmax(g_flag_test_name[][]), g_flag_test_sid[cp][n]);
             g_flag_test_count[cp] = n + 1;
         }
+    }
+    return PLUGIN_HANDLED;
+}
+
+// Mirror of client_disconnect's teardown, minus the actual engine drop. Order is
+// load-bearing and is the whole point of the test: retain BEFORE zeroing.
+public cmd_test_drop(id, level, cid) {
+    if (!cmd_access(id, level, cid, 2)) return PLUGIN_HANDLED;
+
+    new arg[8];
+    read_argv(1, arg, charsmax(arg));
+    new target = str_to_num(arg);
+    if (target < 1 || target > MAX_PLAYERS) {
+        server_print("[HUD] test_drop: bad id %d", target);
+        return PLUGIN_HANDLED;
+    }
+
+    new nm[64];
+    if (is_user_connected(target)) get_user_name(target, nm, charsmax(nm));
+    else copy(nm, charsmax(nm), "(not connected)");
+    server_print("[HUD] test_drop: simulating disconnect teardown for %d (%s) k=%d d=%d dmg=%d",
+                 target, nm, g_player_kills[target], g_player_deaths[target], g_player_damage[target]);
+
+    retain_departed_player(target);
+
+    g_player_team[target]   = 0;
+    g_player_alive[target]  = 0;
+    g_player_kills[target]    = 0;
+    g_player_deaths[target]   = 0;
+    g_player_objscore[target] = 0;
+    reset_player_stats_slot(target);
+
+    server_print("[HUD] test_drop: retained=%d", g_departed_count);
+
+    // Optional second arg: emit the summary in the SAME frame as the teardown.
+    // Without this the target is still physically connected, so its next spawn
+    // re-sets g_player_team and it rejoins the live roster before any separate
+    // rcon lands — which makes the live row, not the retained one, the source and
+    // silently tests nothing. Emitting here is the only way to observe the state
+    // a real disconnect leaves behind on a server whose clients cannot be kicked.
+    if (read_argc() >= 3) {
+        g_lastSummaryAt[SUMMARY_MANUAL] = 0.0;   // bypass the 2s dedupe
+        emit_stats_summary(SUMMARY_MANUAL);
+        server_print("[HUD] test_drop: emitted summary in-frame");
     }
     return PLUGIN_HANDLED;
 }
