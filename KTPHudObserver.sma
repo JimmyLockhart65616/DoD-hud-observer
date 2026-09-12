@@ -107,7 +107,7 @@ native ktp_is_match_active();
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.9.1"
+#define VERSION "2.9.2"
 #define AUTHOR  "cadaver"
 
 // Retained official-score producer/schema identity. Consumers MUST require this
@@ -1111,6 +1111,24 @@ new g_departed_count = 0;
 new g_departed_steamid[MAX_DEPARTED][32];   // dedupe key only
 new g_departed_row[MAX_DEPARTED][512];      // sized to match pbuf in emit_stats_summary
 
+// ─── Summary skip accounting (issue #25) ────────────────────────────────────
+//
+// #20's retention fix was measured INERT on match_end: of 4,890 rows missing
+// from match_end boards across 914 recordings, 2 had a same-half disconnect.
+// Retention can only recover a row client_disconnect destroyed, so the cause is
+// something else and the emit loop's three skip paths are indistinguishable
+// from outside — the board simply arrives short.
+//
+// So count them and put the counts ON the summary event, where they land in
+// events.jsonl and can be measured over the whole corpus rather than inferred.
+// A server_print would answer the same question only for whoever is tailing a
+// console at the time.
+//
+// The counts are scoped to players SEEN THIS HALF. Counting raw loop exits is
+// useless: the loop walks entity ids 1..maxp, so every empty slot fails
+// is_user_connected and would bury the signal under ~20 vacant slots.
+new bool:g_player_seen_half[MAX_PLAYERS + 1];
+
 // Zero every per-player stat accumulator (half-scoped). Called at go-live from
 // ktp_match_start and re-run once at the engine's restart edge
 // (do_golive_stat_rewipe) so kills landing in the go-live countdown — which the
@@ -1123,7 +1141,13 @@ stock wipe_all_stat_accumulators() {
         g_player_objscore[i] = 0;
         reset_player_stats_slot(i);
     }
+    // Retained rows hold PRE-wipe stats, so they must die with the stats.
     g_departed_count = 0;
+    // g_player_seen_half is deliberately NOT cleared here. This function also
+    // runs at the go-live re-wipe, which is a stats-only correction INSIDE the
+    // half — the roster does not reset there. Clearing it here undercounted
+    // roster_seen to just the players who had respawned since go-live (measured
+    // 4 of 12). It is cleared at the half boundary in ktp_match_start instead.
 }
 
 // ─── Departed-player retention (issue #20) ──────────────────────────────────
@@ -2170,6 +2194,10 @@ public ktp_match_start(const matchId[], const map[], MatchType:matchType, half) 
 
     // Reset per-player kill/death/objscore counters — stats wipe on half start.
     wipe_all_stat_accumulators();
+    // The half boundary IS the roster boundary — cleared here rather than inside
+    // wipe_all_stat_accumulators, which also runs at the go-live re-wipe.
+    for (new i = 0; i <= MAX_PLAYERS; i++) g_player_seen_half[i] = false;
+
     for (new r = 0; r < SummaryReason; r++) {
         g_lastSummaryAt[r] = 0.0;
     }
@@ -2485,6 +2513,9 @@ stock do_roster_dump() {
         get_team_str(team, team_str, charsmax(team_str));
 
         g_player_team[id] = team;
+        // On this half's roster — see g_player_seen_half. Guarded above by the
+        // ALLIES/AXIS continue, so reaching here already means a real side.
+        g_player_seen_half[id] = true;
 
         new json[384];
         formatex(json, charsmax(json),
@@ -2713,6 +2744,7 @@ public dod_client_spawn(id) {
     get_wpn_name_for_slot(id, DODWT_SECONDARY, wpn_secondary, charsmax(wpn_secondary));
 
     g_player_team[id]  = team;
+    if (team == TEAM_ALLIES || team == TEAM_AXIS) g_player_seen_half[id] = true;
     g_player_prone[id] = PRONE_STANDING;
     g_player_alive[id] = 1;
     // Fresh life at full health — the baseline every applied-damage clamp in
@@ -2743,6 +2775,7 @@ public dod_client_changeteam(id, team, oldteam) {
     get_team_str(team, team_str, charsmax(team_str));
 
     g_player_team[id] = team;
+    if (team == TEAM_ALLIES || team == TEAM_AXIS) g_player_seen_half[id] = true;
 
     new json[128];
     formatex(json, charsmax(json),
@@ -3182,8 +3215,17 @@ stock emit_stats_summary(reason, const capout_team[] = "", const capout_by[] = "
     static emitted[MAX_DEPARTED + MAX_PLAYERS][32];
     new emitted_count = 0;
 
+    // Skip accounting, scoped to this half's roster — see g_player_seen_half.
+    new seen_roster = 0, skip_disconnected = 0, skip_team = 0, skip_buffer = 0, retained_emitted = 0;
+    for (new i = 1; i <= MAX_PLAYERS; i++) if (g_player_seen_half[i]) seen_roster++;
+
     for (new id = 1; id <= maxp && id <= MAX_PLAYERS; id++) {
-        if (!is_user_connected(id)) continue;
+        if (!is_user_connected(id)) {
+            // Only interesting for a player who WAS on this half's roster; a
+            // vacant slot fails this too and would drown the signal.
+            if (g_player_seen_half[id]) skip_disconnected++;
+            continue;
+        }
         if (is_user_hltv(id)) continue;
 
         // Use the plugin-tracked team, NOT the live get_user_team(id). At the
@@ -3192,7 +3234,10 @@ stock emit_stats_summary(reason, const capout_team[] = "", const capout_by[] = "
         // match_end board (confirmed on 1783044529-ATL1). g_player_team is set on
         // spawn/team-change and persists through intermission until disconnect.
         new team = g_player_team[id];
-        if (team != TEAM_ALLIES && team != TEAM_AXIS) continue;
+        if (team != TEAM_ALLIES && team != TEAM_AXIS) {
+            if (g_player_seen_half[id]) skip_team++;
+            continue;
+        }
 
         // Whole entries only. Reserve room for this player's row (<=512) PLUS
         // post_event's envelope prefix, which rides on the SAME BUFFER_SIZE
@@ -3200,7 +3245,7 @@ stock emit_stats_summary(reason, const capout_team[] = "", const capout_by[] = "
         // 1024 covers row + envelope + slack so the wrapped payload can never
         // exceed BUFFER_SIZE and truncate into invalid JSON. 6v6 never trips it;
         // on a 32-slot server the summary caps at ~17 whole rows (graceful).
-        if (strlen(json) > BUFFER_SIZE - 1024) break;
+        if (strlen(json) > BUFFER_SIZE - 1024) { skip_buffer = 1; break; }
 
         new steamid[32], name[64], name_esc[128], team_str[16];
         get_steamid(id, steamid, charsmax(steamid));
@@ -3240,9 +3285,39 @@ stock emit_stats_summary(reason, const capout_team[] = "", const capout_by[] = "
         if (!first) add(json, charsmax(json), ",");
         add(json, charsmax(json), g_departed_row[i]);
         first = false;
+        retained_emitted++;
     }
 
-    add(json, charsmax(json), "]}");
+    // Skip accounting rides the event so it lands in events.jsonl and can be
+    // measured over the corpus — the board arriving short is exactly the case
+    // where nobody is watching a console. ~110 bytes, absorbed by the 1024-byte
+    // reservation above (row 512 + envelope ~290 leaves ~220 of slack).
+    //
+    // THE IDENTITY, because it is not the obvious one:
+    //
+    //     roster_seen == emitted_live + skip_disconnected + skip_team
+    //
+    // The LIVE loop partitions the roster, so those three account for all of it.
+    // emitted_retained is NOT part of that sum — it counts rows the retained
+    // pass recovered, and every one of them was ALSO counted as a skip by the
+    // live loop that passed over them. A player torn down mid-half therefore
+    // shows up once in skip_team and once in emitted_retained; adding all four
+    // over-counts, which is exactly the mistake this comment exists to prevent.
+    //
+    // How to read it (#25): if a short board shows skip_disconnected ~= the
+    // shortfall, the engine had already dropped those clients by emit time and
+    // retention never had a chance — capture must stop depending on live
+    // connection. If skip_team carries it, the tracked team is being cleared
+    // instead. If both are ~0 and the board is still short, the roster
+    // derivation is wrong and this is the wrong tree entirely.
+    new diag[160];
+    formatex(diag, charsmax(diag),
+        ",^"roster_seen^":%d,^"emitted_live^":%d,^"emitted_retained^":%d,^"skip_disconnected^":%d,^"skip_team^":%d,^"skip_buffer^":%d",
+        seen_roster, emitted_count, retained_emitted, skip_disconnected, skip_team, skip_buffer);
+
+    add(json, charsmax(json), "]");
+    add(json, charsmax(json), diag);
+    add(json, charsmax(json), "}");
     post_event(json);
 }
 
