@@ -126,6 +126,31 @@ describe('pseudonym — the event walker', () => {
         expect(out.players[0].name).toBe('Alice');
     });
 
+    it('carries the 2.9.2 summary accounting block through untouched', () => {
+        // The walker's contract is that it "covers whatever the plugin adds next
+        // as long as it reuses one of the field names above" — these counters
+        // (d01764a) are the first fields added since that was written, and a
+        // future field-allowlist rewrite of the walker would drop them silently.
+        // A dropped counter is worse than a missing one: the board still reads
+        // fine and the corpus measurement issue #25 asked for quietly stops
+        // agreeing with events.jsonl.
+        const summary = {
+            event: 'player_stats_summary', reason: 'match_end',
+            players: [{ user_id: 'STEAM_0:0:11', name: 'Alice', kills: 3 }],
+            roster_seen: 12, emitted_live: 1, emitted_retained: 0,
+            skip_disconnected: 11, skip_team: 0, skip_buffer: 0,
+        };
+        const out = pseudonymize(summary, scope);
+        expect(JSON.stringify(out)).not.toMatch(STEAMID_RE);
+        expect(out.players[0].user_id).toMatch(/^p_/);
+        expect(out.roster_seen).toBe(12);
+        expect(out.emitted_live).toBe(1);
+        expect(out.emitted_retained).toBe(0);
+        expect(out.skip_disconnected).toBe(11);
+        expect(out.skip_team).toBe(0);
+        expect(out.skip_buffer).toBe(0);
+    });
+
     it('leaves the OTHER *_id fields alone', () => {
         // The reason SCALAR_ID_FIELDS is an explicit allowlist and not a
         // /_id$/ regex: rewriting any of these would corrupt the flag bar, the

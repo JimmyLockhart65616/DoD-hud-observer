@@ -771,12 +771,52 @@ every CP in one frame.
       "kills": 0, "deaths": 0, "assists": 0, "damage": 0,
       "hs_kills": 0, "nade_kills": 0, "gun_kills": 0, "hits": 0, "hs_hits": 0, "obj_score": 0,
       "caps": 0, "cap_breaks": 0, "best_streak": 0 }
-  ]
-}
+  ],
+  "roster_seen": 12, "emitted_live": 12, "emitted_retained": 0,
+  "skip_disconnected": 0, "skip_team": 0, "skip_buffer": 0 }
 ```
 
 - `reason` `round_end` is a full **capout**; `capout_team`/`capout_by` (the team + the
   names of the final flag's captors) are present only on that reason and title the board.
+
+#### Summary skip accounting (plugin 2.9.2)
+
+The six counters ride the event, not a `server_print`, so they land in
+`events.jsonl` and a short board can be explained across the whole corpus rather
+than by whoever happened to be tailing a console when one went out (issue #25).
+Scoped to players **seen this half** (`g_player_seen_half`) — counting raw loop
+exits is useless, since `emit_stats_summary` walks entity ids 1..maxp and ~20
+vacant slots fail `is_user_connected`.
+
+- **The identity is not the obvious one**:
+
+  ```
+  roster_seen == emitted_live + skip_disconnected + skip_team
+  ```
+
+  The live loop *partitions* the half's roster into those three. `emitted_retained`
+  is **not** part of that sum — it counts rows the retained pass recovered, and
+  every one of them was ALSO counted as a skip by the live loop that passed over
+  it, so a torn-down player appears once in `skip_team` and once in
+  `emitted_retained`. Adding all four over-counts.
+- `players.length == emitted_live + emitted_retained` — the counters describe the
+  board they ride on. Exact by construction (the live loop's dedupe array is 48
+  against a 32-slot ceiling, so its bounds guard can never bind).
+- `skip_buffer` is set when the live loop breaks out on the whole-entries buffer
+  guard, which leaves the partition legitimately incomplete — so the identity
+  above is only asserted when it is 0. The **retained** pass has its own guard
+  that stops appending *without* setting `skip_buffer`; both identities still
+  hold there, so the loss is diagnostic only, and it is unreachable at league
+  roster sizes (a one-player board is 439 bytes against `BUFFER_SIZE` 4096).
+- Reading it against #25: `skip_disconnected` ≈ the shortfall → the engine had
+  already dropped those clients by emit time and retention never had a chance;
+  `skip_team` carries it → the tracked team is being cleared instead; both ≈ 0 and
+  the board still short → the roster derivation is wrong and this is the wrong tree.
+- Pinned by the `summary-accounting` invariant, which deliberately does **NOT**
+  assert board completeness (`emitted_live + emitted_retained == roster_seen`):
+  #25 measured 65.1% of expected `match_end` rows missing across 914 recordings,
+  so that check would sit permanently red. These counters exist to **measure**
+  that shortfall, not to assert it away.
 
 - Accumulators are half-scoped (reset on `ktp_match_start`), slot-scoped (reset on
   connect/disconnect). Assist = 50+ *applied* enemy damage to a victim since their last spawn,

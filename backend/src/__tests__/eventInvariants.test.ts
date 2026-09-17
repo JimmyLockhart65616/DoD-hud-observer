@@ -9,6 +9,7 @@ import {
     capCreditCaps,
     enumSanity,
     summaryRosterNonEmpty,
+    summaryAccounting,
     capBreakConsistency,
     flagsInitReason,
     damageAppliedBound,
@@ -171,6 +172,137 @@ describe('summary-roster (empty match_end / half_end board)', () => {
             summary('round_end', []),
         ];
         expect(summaryRosterNonEmpty(events)).toEqual([]);
+    });
+});
+
+describe('summary accounting (plugin 2.9.2 skip counters) — guarded, forward-looking', () => {
+    // A board of `rows` players with the accounting block the plugin appends.
+    // Defaults describe the clean 12-man case: everyone seen, everyone emitted live.
+    const board = (rows: number, acct: Partial<StreamEvent> = {}, reason = 'match_end'): StreamEvent => ({
+        event: 'player_stats_summary', half: 2, reason,
+        players: Array.from({ length: rows }, (_, i) => ({ user_id: `STEAM_0:0:${i + 1}`, kills: 0, deaths: 0 })),
+        roster_seen: rows, emitted_live: rows, emitted_retained: 0,
+        skip_disconnected: 0, skip_team: 0, skip_buffer: 0,
+        ...acct,
+    });
+    // The same board with no accounting block at all (any pre-2.9.2 capture).
+    const bareBoard = (rows: number, reason = 'match_end'): StreamEvent => {
+        const e = board(rows, {}, reason);
+        for (const f of ['roster_seen', 'emitted_live', 'emitted_retained', 'skip_disconnected', 'skip_team', 'skip_buffer']) {
+            delete e[f];
+        }
+        return e;
+    };
+
+    it('is a no-op on a pre-2.9.2 stream (no summary carries the block)', () => {
+        expect(summaryAccounting([bareBoard(12), bareBoard(12, 'half_end')])).toEqual([]);
+    });
+
+    it('is a no-op on a stream with no summaries at all (the NY1 fixture shape)', () => {
+        expect(summaryAccounting([cap(1, 'allies'), score(1, 5)])).toEqual([]);
+    });
+
+    it('passes on a clean full board', () => {
+        expect(summaryAccounting([board(12)])).toEqual([]);
+    });
+
+    it('passes on the short board #25 measured — a shortfall is data, not a violation', () => {
+        // 12 on the roster, 9 already torn down by the engine at emit time. This
+        // is the open bug the counters exist to MEASURE; asserting completeness
+        // here would sit permanently red on the corpus.
+        expect(summaryAccounting([board(3, {
+            roster_seen: 12, emitted_live: 3, emitted_retained: 0,
+            skip_disconnected: 9, skip_team: 0,
+        })])).toEqual([]);
+    });
+
+    it('passes when a retained row overlaps the skip that produced it', () => {
+        // The trap in the identity: a torn-down player is counted once in
+        // skip_team AND once in emitted_retained. Board is 12; the sum of all
+        // four would be 13 and must not be what is checked.
+        expect(summaryAccounting([board(12, {
+            roster_seen: 12, emitted_live: 11, emitted_retained: 1,
+            skip_team: 1, skip_disconnected: 0,
+        })])).toEqual([]);
+    });
+
+    it('fires when the row count disagrees with emitted_live + emitted_retained', () => {
+        const v = summaryAccounting([board(10, { roster_seen: 12, emitted_live: 12, skip_disconnected: 0 })]);
+        expect(v.map(x => x.invariant)).toEqual(['summary-accounting-rows']);
+        expect(v[0].message).toContain('10 player row(s)');
+    });
+
+    it('counts a retained row toward the board, not against it', () => {
+        // 11 live + 1 retained must be a 12-row board; 11 is the regression.
+        const v = summaryAccounting([board(11, {
+            roster_seen: 12, emitted_live: 11, emitted_retained: 1, skip_team: 1,
+        })]);
+        expect(v.map(x => x.invariant)).toEqual(['summary-accounting-rows']);
+    });
+
+    it('fires when the live loop stops partitioning the roster (skip_buffer 0)', () => {
+        // 12 seen, but only 11 accounted for anywhere — one slot left the loop
+        // through a path that counts nothing.
+        const v = summaryAccounting([board(11, {
+            roster_seen: 12, emitted_live: 11, skip_disconnected: 0, skip_team: 0,
+        })]);
+        expect(v.map(x => x.invariant)).toEqual(['summary-accounting-identity']);
+        expect(v[0].message).toContain('1 slot(s)');
+        // The message has to say emitted_retained is excluded, or the next
+        // person "fixes" the invariant by adding it to the sum.
+        expect(v[0].message).toContain('emitted_retained');
+    });
+
+    it('does not demand the identity when the buffer guard broke the loop early', () => {
+        // skip_buffer set: the loop exited before visiting the rest of the
+        // roster, so 20 unaccounted slots are expected, not a violation.
+        expect(summaryAccounting([board(12, {
+            roster_seen: 32, emitted_live: 12, skip_disconnected: 0, skip_team: 0, skip_buffer: 1,
+        })])).toEqual([]);
+    });
+
+    it('still rejects an overcount under a buffer break — that bound always holds', () => {
+        const v = summaryAccounting([board(12, {
+            roster_seen: 10, emitted_live: 12, skip_disconnected: 1, skip_team: 0, skip_buffer: 1,
+        })]);
+        expect(v.map(x => x.invariant)).toEqual(['summary-accounting-overcount']);
+        expect(v[0].message).toContain('g_player_seen_half');
+    });
+
+    it('reports overcount instead of identity when both would describe the same row', () => {
+        const v = summaryAccounting([board(12, { roster_seen: 10, emitted_live: 12 })]);
+        expect(v.map(x => x.invariant)).toEqual(['summary-accounting-overcount']);
+    });
+
+    it('rejects a negative or non-integer counter without then doing arithmetic on it', () => {
+        const v = summaryAccounting([board(12, { skip_disconnected: -1 })]);
+        expect(v.map(x => x.invariant)).toEqual(['summary-accounting-range']);
+        expect(v[0].message).toContain('skip_disconnected=-1');
+    });
+
+    it('fires when only some summaries carry the block (an emit path that does not account)', () => {
+        const v = summaryAccounting([board(12, {}, 'half_end'), bareBoard(12), bareBoard(12)]);
+        expect(v.map(x => x.invariant)).toEqual(['summary-accounting-incomplete']);
+        expect(v[0].message).toContain('2 player_stats_summary event(s)');
+    });
+
+    it('fires on a half-written block — a partial block cannot be checked arithmetically', () => {
+        const partial = board(12);
+        delete partial.skip_team;
+        const v = summaryAccounting([board(12, {}, 'half_end'), partial]);
+        expect(v.map(x => x.invariant)).toEqual(['summary-accounting-incomplete']);
+        expect(v[0].message).toContain('skip_team');
+    });
+
+    it('checks every board in the stream, not just the last one', () => {
+        const v = summaryAccounting([
+            board(12, {}, 'round_end'),
+            board(12, { roster_seen: 13 }, 'half_end'),
+            board(12, { roster_seen: 14 }),
+        ]);
+        expect(v.map(x => x.invariant)).toEqual(['summary-accounting-identity', 'summary-accounting-identity']);
+        expect(v[0].message).toContain('half_end summary');
+        expect(v[1].message).toContain('match_end summary');
     });
 });
 

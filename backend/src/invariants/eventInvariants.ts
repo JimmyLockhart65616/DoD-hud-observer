@@ -28,6 +28,12 @@
  *     field-emitted-but-clamp-dead regression, but it cannot be validated against
  *     real data until a post-2.5.0 match is archived. Add it then, with the same
  *     validated-on-real-data pedigree as everything else here.
+ *   - "a summary board must carry a row for every player on the half's roster"
+ *     (emitted_live + emitted_retained === roster_seen) — this would be a TRUE
+ *     positive on essentially every archived match_end board (issue #25 measured
+ *     65.1% of expected rows missing across 914 recordings) and would therefore
+ *     sit permanently red. The accounting counters exist to MEASURE that
+ *     shortfall, not to assert it away; see summaryAccounting below.
  */
 
 export type StreamEvent = Record<string, any>;
@@ -224,6 +230,127 @@ export const summaryRosterNonEmpty: Invariant = (events) => {
 };
 
 /**
+ * SUMMARY ACCOUNTING (guarded, forward-looking).
+ *
+ * Plugin 2.9.2 (d01764a) rides six counters on every player_stats_summary so a
+ * short board can be explained from events.jsonl instead of from whoever happened
+ * to be tailing a console when it went out:
+ *
+ *     roster_seen, emitted_live, emitted_retained,
+ *     skip_disconnected, skip_team, skip_buffer
+ *
+ * That is the instrument issue #25 asked for, and an instrument that is wrong is
+ * worse than none — every conclusion drawn from it inherits the error. These
+ * checks are the arithmetic the counters have to satisfy for the corpus
+ * measurement built on them to mean anything.
+ *
+ *   - ROWS: players.length === emitted_live + emitted_retained. This is the one
+ *     that ties the accounting to the board it describes. Exact by construction:
+ *     the live loop's dedupe array is MAX_DEPARTED + MAX_PLAYERS (48) against a
+ *     32-slot ceiling, so its bounds guard can never bind and drop a count, and
+ *     the retained pass increments only for rows it actually appended.
+ *
+ *   - IDENTITY: roster_seen === emitted_live + skip_disconnected + skip_team,
+ *     checked only when skip_buffer === 0. This is deliberately NOT the sum of
+ *     all four — the live loop PARTITIONS the half's roster into those three, and
+ *     emitted_retained OVERLAPS them (a torn-down player is counted once in
+ *     skip_team and again in emitted_retained). The plugin's comment at the emit
+ *     site spells the same thing out, because it is the mistake everyone makes
+ *     first. When skip_buffer is set the live loop broke out early and the
+ *     partition is legitimately incomplete, so only the bound below holds.
+ *
+ *   - OVERCOUNT: emitted_live + skip_disconnected + skip_team <= roster_seen,
+ *     always. Every assignment of g_player_team to a real side is paired with
+ *     g_player_seen_half, so the counted set cannot exceed the roster. The one
+ *     window where it could is ktp_match_start, which clears seen_half but not
+ *     the tracked team — the roster dump in the same function re-marks everyone
+ *     immediately, and no summary reason fires in between. This is the only arm
+ *     that survives a buffer break.
+ *
+ * GUARDED on at least one summary carrying at least one of the six, so it is a
+ * total no-op on every pre-2.9.2 capture — including the NY1 fixture, which
+ * predates player_stats_summary entirely. That guard is also why the pedigree
+ * here differs from the rest of this file: 2.9.2 was not on the fleet when this
+ * was written, so there is no archived stream carrying these fields to validate
+ * against. It is exercised on synthetic streams plus an injection onto the real
+ * NY1 roster in productionFixture.test.ts, the same way summaryRosterNonEmpty is.
+ *
+ * Known limit, deliberate: the RETAINED pass has its own buffer guard that stops
+ * appending without setting skip_buffer, so a board truncated there reports
+ * skip_buffer 0 while still being short. Both identities still hold in that case
+ * (emitted_retained counts appended rows only), so nothing here fires — the loss
+ * is diagnostic, not arithmetic. It is unreachable at league roster sizes: a
+ * one-player board serialises to 439 bytes against BUFFER_SIZE 4096.
+ */
+const SUMMARY_ACCOUNTING_FIELDS = [
+    'roster_seen', 'emitted_live', 'emitted_retained',
+    'skip_disconnected', 'skip_team', 'skip_buffer',
+] as const;
+
+function missingAccountingFields(e: StreamEvent): string[] {
+    return SUMMARY_ACCOUNTING_FIELDS.filter(f => typeof e[f] !== 'number');
+}
+
+export const summaryAccounting: Invariant = (events) => {
+    const summaries = events.filter(e => e.event === 'player_stats_summary');
+    if (!summaries.some(e => missingAccountingFields(e).length < SUMMARY_ACCOUNTING_FIELDS.length)) return [];
+
+    const out: InvariantViolation[] = [];
+    const incomplete = new Map<string, number>();
+
+    for (const e of summaries) {
+        const missing = missingAccountingFields(e);
+        if (missing.length > 0) {
+            // A stream that tags some boards and not others means a summary emit
+            // path exists that does not account for its own skips — silent, and
+            // it lands in the corpus looking like clean data.
+            const key = missing.join(', ');
+            incomplete.set(key, (incomplete.get(key) ?? 0) + 1);
+            continue; // the arithmetic below needs all six
+        }
+
+        const label = `${e.reason} summary (half ${halfOf(e)})`;
+        const bad = SUMMARY_ACCOUNTING_FIELDS.filter(f => !Number.isInteger(e[f]) || e[f] < 0);
+        if (bad.length > 0) {
+            out.push({
+                invariant: 'summary-accounting-range',
+                message: `${label}: ${bad.map(f => `${f}=${JSON.stringify(e[f])}`).join(', ')} — every one of these is a count of player slots and must be a non-negative integer.`,
+            });
+            continue;
+        }
+
+        const rows = Array.isArray(e.players) ? e.players.length : 0;
+        if (rows !== e.emitted_live + e.emitted_retained) {
+            out.push({
+                invariant: 'summary-accounting-rows',
+                message: `${label}: ${rows} player row(s) on the board but emitted_live ${e.emitted_live} + emitted_retained ${e.emitted_retained} = ${e.emitted_live + e.emitted_retained} — the accounting no longer describes the board it rides on, so every skip-reason measurement taken from this stream is unsound.`,
+            });
+        }
+
+        const counted = e.emitted_live + e.skip_disconnected + e.skip_team;
+        if (counted > e.roster_seen) {
+            out.push({
+                invariant: 'summary-accounting-overcount',
+                message: `${label}: emitted_live ${e.emitted_live} + skip_disconnected ${e.skip_disconnected} + skip_team ${e.skip_team} = ${counted} exceeds roster_seen ${e.roster_seen} — the live loop accounted for a slot that was never marked on this half's roster (a g_player_team assignment that does not set g_player_seen_half, e.g. a team carried across the ktp_match_start wipe).`,
+            });
+        } else if (e.skip_buffer === 0 && counted !== e.roster_seen) {
+            out.push({
+                invariant: 'summary-accounting-identity',
+                message: `${label}: roster_seen ${e.roster_seen} != emitted_live ${e.emitted_live} + skip_disconnected ${e.skip_disconnected} + skip_team ${e.skip_team} (= ${counted}) with skip_buffer 0 — the live loop must partition the half's roster, so ${e.roster_seen - counted} slot(s) left it through a path that counts nothing. Note emitted_retained (${e.emitted_retained}) is NOT part of this sum; it overlaps the skips.`,
+            });
+        }
+    }
+
+    for (const [fields, n] of incomplete) {
+        out.push({
+            invariant: 'summary-accounting-incomplete',
+            message: `${n} player_stats_summary event(s) missing ${fields}, in a stream where other summaries carry the accounting block — a summary emit path is not accounting for its own skips, and a short board from it is indistinguishable from a complete one.`,
+        });
+    }
+    return out;
+};
+
+/**
  * CAP-BREAK CONSISTENCY: the kill-on-point break event and the per-player
  * cap_breaks accumulator must move together, half-scoped:
  *   (a) schema: every cap_break event carries reason "kill", a breaker_id, and
@@ -378,7 +505,7 @@ export const damageAppliedBound: Invariant = (events) => {
     return out;
 };
 
-export const INVARIANTS: ReadonlyArray<Invariant> = [capCreditObjScore, capCreditCaps, enumSanity, summaryRosterNonEmpty, capBreakConsistency, flagsInitReason, damageAppliedBound];
+export const INVARIANTS: ReadonlyArray<Invariant> = [capCreditObjScore, capCreditCaps, enumSanity, summaryRosterNonEmpty, summaryAccounting, capBreakConsistency, flagsInitReason, damageAppliedBound];
 
 /** Run every invariant over an emitted event stream and return all violations. */
 export function checkEventStream(events: ReadonlyArray<StreamEvent>): InvariantViolation[] {

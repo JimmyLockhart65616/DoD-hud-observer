@@ -645,6 +645,39 @@ describe('stats fields round-trip (player_score extension + player_stats_summary
         expect(events.map(e => e.event)).toEqual(
             ['ktp_match_start', 'half_end', 'player_stats_summary', 'ktp_match_end']);
     });
+
+    // Plugin 2.9.2 (d01764a) puts the skip accounting on the EVENT rather than in
+    // a server_print precisely so it lands in events.jsonl and issue #25 can be
+    // re-measured over the corpus instead of by whoever is tailing a console when
+    // a board goes out short. That only works if ingest passes the counters
+    // through, and ingest's summary arm reads named stat fields off each row — so
+    // a root-level block that nothing reads is exactly the thing a later cleanup
+    // drops without a test failing anywhere.
+    it('persists the 2.9.2 summary accounting block to events.jsonl unchanged', async () => {
+        const host = 'KTP - Stats Accounting';
+        const matchId = 'KTP-stats-accounting-1';
+        const accounting = {
+            roster_seen: 12, emitted_live: 3, emitted_retained: 1,
+            skip_disconnected: 8, skip_team: 1, skip_buffer: 0,
+        };
+        await post({ event: 'ktp_match_start', match_id: matchId, map: 'dod_anzio', match_type: 1, half: 1 }, host);
+        await post({
+            event: 'player_stats_summary', match_id: matchId, reason: 'match_end',
+            players: [{ user_id: 'STEAM_0:0:15', name: 'Disk', team: 'allies', kills: 1, deaths: 0, obj_score: 0, ...STATS }],
+            ...accounting,
+        }, host);
+        await post({ event: 'ktp_match_end', match_id: matchId }, host);
+
+        const events = fs.readFileSync(path.join(tmpDir, matchId, 'events.jsonl'), 'utf-8')
+            .trim().split('\n').filter(l => l).map(l => JSON.parse(l));
+        const summary = events.find(e => e.event === 'player_stats_summary');
+        expect(summary).toBeDefined();
+        // Field-by-field rather than a subset match: a 0 that arrives as
+        // undefined reads as "no skips" downstream, which is the opposite claim.
+        for (const [field, value] of Object.entries(accounting)) {
+            expect(summary[field]).toBe(value);
+        }
+    });
 });
 
 describe('getServerPlayerCount', () => {

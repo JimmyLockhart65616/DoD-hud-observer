@@ -327,4 +327,93 @@ describe('production fixture replay (NY1 dod_thunder2 12MAN)', () => {
         expect(violations).toHaveLength(1);
         expect(violations[0].message).toContain('12 connected players');
     });
+
+    // The 2.9.2 accounting counters (d01764a) have the same problem as the
+    // summary-roster invariant and one more besides: NY1 predates summaries, and
+    // 2.9.2 was not on the fleet when these were written, so no archived stream
+    // carries the fields at all. Inject them onto NY1's real closing roster so
+    // the arithmetic is exercised against a real 12-man rather than a hand-built
+    // one, in both directions.
+    describe('summary-accounting invariant, injected onto the real closing roster', () => {
+        /** The user_ids connected on a team at the moment ktp_match_end fires. */
+        function closingRoster(): string[] {
+            const roster = new Map<string, string>();
+            for (const e of events as Array<Record<string, any>>) {
+                if (e.event === 'ktp_match_end') break;
+                if (typeof e.user_id !== 'string') continue;
+                if (e.event === 'player_connect' || e.event === 'player_spawn' || e.event === 'player_team_change') {
+                    if (typeof e.team === 'string') roster.set(e.user_id, e.team);
+                } else if (e.event === 'player_disconnect') {
+                    roster.delete(e.user_id);
+                }
+            }
+            return [...roster.entries()].filter(([, t]) => t === 'allies' || t === 'axis').map(([uid]) => uid);
+        }
+
+        /** Splice a 2.9.2-shaped match_end board in where the plugin fires it. */
+        function withBoard(rows: string[], acct: Record<string, number>): Array<Record<string, unknown>> {
+            const endIdx = events.findIndex(e => (e as { event: string }).event === 'ktp_match_end');
+            const summary = {
+                event: 'player_stats_summary', reason: 'match_end', half: 2,
+                players: rows.map(uid => ({ user_id: uid, team: 'allies', kills: 0, deaths: 0 })),
+                ...acct,
+            };
+            return [...events.slice(0, endIdx), summary, ...events.slice(endIdx)];
+        }
+
+        const ids = (): string[] => {
+            const r = closingRoster();
+            expect(r).toHaveLength(12);
+            return r;
+        };
+
+        it('stays silent on a complete board from the real roster', () => {
+            const roster = ids();
+            const stream = withBoard(roster, {
+                roster_seen: 12, emitted_live: 12, emitted_retained: 0,
+                skip_disconnected: 0, skip_team: 0, skip_buffer: 0,
+            });
+            expect(checkEventStream(stream).filter(v => v.invariant.startsWith('summary-accounting'))).toEqual([]);
+        });
+
+        it('stays silent on the 3-of-12 board #25 measured — that shortfall is the finding, not a failure', () => {
+            const roster = ids();
+            const stream = withBoard(roster.slice(0, 3), {
+                roster_seen: 12, emitted_live: 3, emitted_retained: 0,
+                skip_disconnected: 9, skip_team: 0, skip_buffer: 0,
+            });
+            expect(checkEventStream(stream).filter(v => v.invariant.startsWith('summary-accounting'))).toEqual([]);
+        });
+
+        it('catches a counter that no longer describes the board it rides on', () => {
+            const roster = ids();
+            // The board is short but the accounting still claims a full house —
+            // exactly the failure that would make every corpus measurement built
+            // on these counters wrong while looking clean.
+            const stream = withBoard(roster.slice(0, 3), {
+                roster_seen: 12, emitted_live: 12, emitted_retained: 0,
+                skip_disconnected: 0, skip_team: 0, skip_buffer: 0,
+            });
+            const v = checkEventStream(stream).filter(x => x.invariant.startsWith('summary-accounting'));
+            expect(v.map(x => x.invariant)).toEqual(['summary-accounting-rows']);
+        });
+
+        it('catches a roster the live loop stopped partitioning', () => {
+            const roster = ids();
+            const stream = withBoard(roster, {
+                roster_seen: 14, emitted_live: 12, emitted_retained: 0,
+                skip_disconnected: 0, skip_team: 0, skip_buffer: 0,
+            });
+            const v = checkEventStream(stream).filter(x => x.invariant.startsWith('summary-accounting'));
+            expect(v.map(x => x.invariant)).toEqual(['summary-accounting-identity']);
+            expect(v[0].message).toContain('2 slot(s)');
+        });
+
+        it('is a no-op on the same injected board without the 2.9.2 block', () => {
+            // Proves the guard, not just the arithmetic: a pre-2.9.2 board must
+            // reach none of these arms, which is why the fixture itself is clean.
+            const stream = withBoard(ids(), {});
+            expect(checkEventStream(stream).filter(v => v.invariant.startsWith('summary-accounting'))).toEqual([]);
+        });
+    });
 });
