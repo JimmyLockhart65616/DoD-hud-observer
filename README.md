@@ -124,7 +124,7 @@ This project is part of the [KTP League](https://github.com/afraznein) competiti
 
 Source: [`KTPHudObserver.sma`](KTPHudObserver.sma). The compile command is documented in [CLAUDE.md](CLAUDE.md#compiling-the-amxx-plugin) — it uses the `amxxpc` compiler and includes from KTPInfrastructure's latest `ktpamx` artifacts, run inside a disposable 32-bit Linux container.
 
-Expected output is ~14.7 KB with one harmless `client_disconnect` deprecation warning.
+Expected output is ~14.7 KB with no warnings.
 
 ## Tech Stack
 

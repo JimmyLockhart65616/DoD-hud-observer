@@ -17,7 +17,7 @@
 # Exit codes:
 #   0 — clean compile
 #   1 — compile failed
-#   2 — unexpected warning (anything beyond the known client_disconnect deprecation)
+#   2 — any compiler warning (none are allowed; see the warning filter below)
 #   3 — environment problem (missing artifacts, no docker, etc.)
 
 set -euo pipefail
@@ -106,21 +106,24 @@ if [ "$RC" -ne 0 ] || [ ! -s "$STAGE/output/plugins/KTPHudObserver.amxx" ]; then
     exit 1
 fi
 
-# Filter expected warnings. The only known-allowed warning is the
-# client_disconnect deprecation — DODX still fires it and the replacement
-# (client_disconnected) isn't always available across module versions.
+# No warning is expected. This used to allow the client_disconnect deprecation,
+# on the belief that the deprecated forward still fired. In KTPAMXX extension
+# mode it does NOT fire for an ordinary mid-map quit — only client_disconnected
+# does — and hooking it is what truncated every match_end board (#25). So that
+# warning is now a failure like any other: it means the bug is back.
 WARN_TOTAL="$(grep -cE '^.*\(.*\) : warning' "$LOG" || true)"
-WARN_UNEXPECTED="$(grep -E '^.*\(.*\) : warning' "$LOG" \
-    | grep -v 'client_disconnect.*deprecated' \
-    || true)"
+WARN_UNEXPECTED="$(grep -E '^.*\(.*\) : warning' "$LOG" || true)"
 
 SIZE="$(wc -c <"$STAGE/output/plugins/KTPHudObserver.amxx")"
 
 if [ -n "$WARN_UNEXPECTED" ]; then
-    yellow "Unexpected warnings (only client_disconnect deprecation is allowed):"
+    yellow "Unexpected warnings (none are allowed):"
     printf '%s\n' "$WARN_UNEXPECTED"
-    red "FAIL: $WARN_TOTAL warning(s), $(printf '%s\n' "$WARN_UNEXPECTED" | wc -l) unexpected"
+    if printf '%s\n' "$WARN_UNEXPECTED" | grep -q 'client_disconnect'; then
+        red "client_disconnect is deprecated AND never fires on a mid-map quit in extension mode — use client_disconnected (#25)"
+    fi
+    red "FAIL: $WARN_TOTAL warning(s)"
     exit 2
 fi
 
-green "PASS: KTPHudObserver.amxx built clean (${SIZE} bytes, ${WARN_TOTAL} expected warning(s))"
+green "PASS: KTPHudObserver.amxx built clean (${SIZE} bytes, no warnings)"

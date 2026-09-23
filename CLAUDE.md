@@ -813,6 +813,23 @@ every CP in one frame.
   the engine team read returns non-ALLIES/AXIS for everyone, which silently emptied the
   `match_end` board (confirmed on `1783044529-ATL1`). Guarded by the
   `summary-roster-nonempty` event invariant.
+- **Disconnect forward: `client_disconnected`, NEVER the deprecated `client_disconnect`**
+  (issue #25, plugin 2.9.3). In KTPAMXX extension mode an ordinary quit goes
+  `SV_DropClient` → `SV_DropClient_RH`, whose pre-hook fires **only**
+  `client_disconnected`; nothing wraps the game DLL's `ClientDisconnect`, so
+  `client_disconnect` fired only on the changelevel sweep and the crash-reconnect
+  replay. Every mid-map quit therefore posted no `player_disconnect`, was never
+  retained, and fell off every later board via `!is_user_connected`. Players quit
+  during the final intermission, so `match_end` carried ~3 of 12 while `half_end`
+  (nobody quits at halftime) stayed whole. Fleet-measured on S10: **576 of 576** rows
+  missing from 70 `match_end` boards belonged to a player the server logged as
+  `Dropped … from server` before the board, and dodx's own `STATS_FLUSH type=match_end
+  players=N` equalled the board size in 67 of 70; **1** `player_disconnect` was recorded
+  for 591 such drops. The retention fix (#20) was right about the cause — its trigger
+  never ran. **The recording cannot witness this**: `player_disconnect` and retention
+  share the one forward, so "no disconnect in the recording" was never evidence that a
+  player stayed. Use the game server's console log. `plugin-smoke.sh` now fails on the
+  deprecation warning instead of allowing it.
 - `half_end` + a `half_end`-reason summary fire when the plugin sees KTPMatchHandler's
   `KTP_HALF_END` log line (half-1 end only); `ktp_match_end` covers all terminal paths.
 - Summary emission is event-driven only (cap / capout / half end / match end /
@@ -1136,7 +1153,7 @@ Exit codes:
 
 - `0` clean compile
 - `1` compile failed
-- `2` unexpected warning (only the documented `client_disconnect` deprecation is allowed)
+- `2` any compiler warning (none are allowed — the old `client_disconnect` allowance was the #25 bug)
 - `3` environment problem (missing artifacts, no docker)
 
 Use this after every `.sma` edit before deploying. Catches every CI compile failure
@@ -1284,7 +1301,7 @@ docker run --rm --entrypoint sh \
   '
 ```
 
-Expected: 1 warning (`client_disconnect` deprecated — harmless, DODX still fires it).
+Expected: 0 warnings. (The old "1 harmless `client_disconnect` warning" was not harmless — see issue #25 under Stats Events.)
 Expected output size: ~19 KB.
 
 ### Deploying the compiled plugin

@@ -107,7 +107,7 @@ native ktp_is_match_active();
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 #define PLUGIN  "KTP HUD Observer"
-#define VERSION "2.9.2"
+#define VERSION "2.9.3"
 #define AUTHOR  "cadaver"
 
 // Retained official-score producer/schema identity. Consumers MUST require this
@@ -789,13 +789,15 @@ public plugin_init() {
     register_concmd("amx_hud_test_cap", "cmd_test_cap", ADMIN_RCON, "<cp> <new> <old> [sid] [name] — repro cap timing");
 
     // Local repro for #20. The rcon `kick` path is blocked unconditionally in the
-    // KTP-ReHLDS engine (Host_Kick_f), and new_bot exposes no removal command, so
-    // a disconnect cannot be caused from outside on the bot stack. This drives the
-    // same two steps client_disconnect does, in the same order — retain the row,
-    // then zero the slot — so the retention + emit + dedupe path is exercised for
-    // real rather than reasoned about.
+    // KTP-ReHLDS engine (Host_Kick_f), and new_bot exposes no removal command.
+    // This drives the same two steps client_disconnected does, in the same order —
+    // retain the row, then zero the slot — so the retention + emit + dedupe path
+    // is exercised in isolation. It does NOT exercise which forward the engine
+    // delivers, which is where #25 actually lived: for that, drop a bot for real
+    // with reapi's rh_drop_client, which enters the same SV_DropClient hookchain
+    // as a player's own "disconnect".
     //   amx_hud_test_drop <userid>
-    register_concmd("amx_hud_test_drop", "cmd_test_drop", ADMIN_RCON, "<id> — simulate client_disconnect teardown");
+    register_concmd("amx_hud_test_drop", "cmd_test_drop", ADMIN_RCON, "<id> — simulate client_disconnected teardown");
 #endif
 
     // Periodic tasks are scheduled in plugin_cfg (see below) so they get
@@ -1115,9 +1117,11 @@ new g_departed_row[MAX_DEPARTED][512];      // sized to match pbuf in emit_stats
 //
 // #20's retention fix was measured INERT on match_end: of 4,890 rows missing
 // from match_end boards across 914 recordings, 2 had a same-half disconnect.
-// Retention can only recover a row client_disconnect destroyed, so the cause is
-// something else and the emit loop's three skip paths are indistinguishable
-// from outside — the board simply arrives short.
+// That witness shared the fault it was measuring: the player_disconnect it looked
+// for and the retention it inferred were both written by the same forward, which
+// never fired on a real quit (see client_disconnected). The emit loop's three
+// skip paths are indistinguishable from outside — the board simply arrives
+// short — which is how that stayed hidden.
 //
 // So count them and put the counts ON the summary event, where they land in
 // events.jsonl and can be measured over the whole corpus rather than inferred.
@@ -1152,7 +1156,7 @@ stock wipe_all_stat_accumulators() {
 
 // ─── Departed-player retention (issue #20) ──────────────────────────────────
 //
-// emit_stats_summary walks the LIVE roster, and client_disconnect zeroes
+// emit_stats_summary walks the LIVE roster, and client_disconnected zeroes
 // g_player_team[] and every accumulator. So a player who drops takes their half
 // with them, and any summary emitted afterwards skips them via BOTH per-player
 // `continue`s. That is fatal specifically for SUMMARY_MATCH_END, which runs
@@ -1187,7 +1191,7 @@ stock format_summary_row(out[], len, const steamid[], const name_esc[],
         g_player_caps[id], g_player_cap_breaks[id], g_player_best_streak[id]);
 }
 
-// Snapshot a player's summary row immediately before client_disconnect zeroes it.
+// Snapshot a player's summary row immediately before client_disconnected zeroes it.
 // Only while a match is live and only for a real side — a spectator or an
 // unassigned joiner has nothing to contribute to a board.
 stock retain_departed_player(id) {
@@ -2678,7 +2682,23 @@ public client_authorized(id) {
     phase_tick();
 }
 
-public client_disconnect(id) {
+// client_disconnected, NOT the deprecated client_disconnect — and on this stack
+// that is not a style choice (#25). In KTPAMXX extension mode an ordinary quit
+// ("Client sent 'drop'", a timeout, a kick) goes SV_DropClient -> SV_DropClient_RH,
+// whose pre-hook fires ONLY client_disconnected; nothing wraps the game DLL's
+// ClientDisconnect, so client_disconnect never runs. It fired only on the
+// changelevel sweep and the crash-reconnect replay. Everyone who quit mid-map
+// therefore left no player_disconnect, was never retained, and fell out of every
+// later board via !is_user_connected: 576 of 576 rows missing from 70 S10
+// match_end boards belonged to a player the server logged as dropped, against 1
+// player_disconnect recorded for 591 such drops. half_end escaped only because
+// nobody quits during the halftime intermission; everyone quits after the final.
+//
+// client_disconnected fires on every path client_disconnect did (both gated on
+// !disconnecting, so exactly once) plus the drop pre-hook, where the player is
+// still in game — SteamID, name and team are all readable here.
+public client_disconnected(id, bool:drop, message[], maxlen) {
+    #pragma unused drop, message, maxlen
     if (is_user_hltv(id)) return;
 
     new steamid[32];
@@ -3268,7 +3288,7 @@ stock emit_stats_summary(reason, const capout_team[] = "", const capout_by[] = "
     }
 
     // Players who left while the match was live. Their accumulators are already
-    // gone (client_disconnect zeroes them), so this retained row is the only
+    // gone (client_disconnected zeroes them), so this retained row is the only
     // remaining record — see retain_departed_player. Without it a match_end
     // board carries a median of 3 of 12.
     for (new i = 0; i < g_departed_count; i++) {
@@ -4456,7 +4476,7 @@ public cmd_test_cap(id, level, cid) {
     return PLUGIN_HANDLED;
 }
 
-// Mirror of client_disconnect's teardown, minus the actual engine drop. Order is
+// Mirror of client_disconnected's teardown, minus the actual engine drop. Order is
 // load-bearing and is the whole point of the test: retain BEFORE zeroing.
 public cmd_test_drop(id, level, cid) {
     if (!cmd_access(id, level, cid, 2)) return PLUGIN_HANDLED;

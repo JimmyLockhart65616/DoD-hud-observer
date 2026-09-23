@@ -138,8 +138,10 @@ in about ten seconds. Exit codes: `0` clean, `1` compile failed, `2` unexpected
 warning, `3` environment problem (missing artifacts — run
 `cd ../KTPInfrastructure && make build-amxx` once).
 
-Exactly one warning is expected and allowed: the `client_disconnect`
-deprecation. DODX still fires it.
+No warning is allowed. The smoke used to allow the `client_disconnect`
+deprecation on the belief that the forward still fired; in KTPAMXX extension
+mode it never fires for an ordinary mid-map quit, and hooking it truncated every
+`match_end` board (#25). Use `client_disconnected`.
 
 **Fixed-size buffers are load-bearing.** `formatex` truncates silently, so an
 overflowing event serialises as malformed JSON with no error anywhere — the

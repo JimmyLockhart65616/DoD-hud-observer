@@ -27,7 +27,7 @@
       so older modules on the fleet fall through instead of failing to load
 - [ ] Fixed-size buffer arithmetic redone if a field was added to an event
       (`formatex` truncates silently — no error, just malformed JSON)
-- [ ] Compiles with no warnings other than the expected `client_disconnect` one
+- [ ] Compiles with no warnings (`npm run plugin:smoke` fails on any)
 
 ## Notes for the reviewer
 
