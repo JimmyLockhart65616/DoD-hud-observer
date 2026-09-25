@@ -20,6 +20,7 @@ import { className as dodClassName } from '../core/dodClasses';
 import { getWeaponIcon } from '../screen/resources/weaponIcons';
 import CareerPanel from './CareerPanel';
 import MomentsPanel from './MomentsPanel';
+import CueRail from './CueRail';
 import Minimap from './Minimap';
 import useMinimapToggle from './useMinimapToggle';
 
@@ -459,6 +460,8 @@ function Caster() {
             )}
 
             <div className="caster-lower">
+                <CueRail />
+
                 <section className="caster-panel">
                     <h2>Loadouts</h2>
                     <div className="caster-loadout-cols">

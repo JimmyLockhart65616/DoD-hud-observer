@@ -666,4 +666,43 @@
 
 .caster-minimap-dot { stroke: #11131f; stroke-width: 1.5; }
 .caster-minimap-allies { fill: #c8e090; }
+
+/* ── Cue rail — camera-ready cues, newest first ──────────────────── */
+
+.caster-panel-cues { flex: 1 1 420px; }
+
+.caster-cues {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.caster-cue {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.caster-cue-who {
+  flex: 0 0 auto;
+  font-weight: 700;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.caster-cue-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #9aa0c0;
+}
+
+.caster-cue-detail b { color: inherit; }
+
+.caster-tag-run     { background-color: rgba(255, 215, 0, 0.22); color: #ffd700; }
+.caster-tag-threat  { background-color: rgba(255, 140, 60, 0.24); color: #ff9c4d; }
+.caster-tag-capout  { background-color: rgba(120, 210, 140, 0.24); color: #7bdc9a; }
 .caster-minimap-axis   { fill: #ffb8b8; }
