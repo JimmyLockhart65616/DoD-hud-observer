@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useHudStore } from '../core/Socket/Socket';
 import { humanizeFlagName } from '../core/Flags/humanize';
+import { pAlliesFromSnapshot, detectSwing, MOMENTUM_WINDOW_MS, MOMENTUM_COOLDOWN_MS } from './momentum';
 
 /*
  * Cue rail — /caster
@@ -10,7 +11,7 @@ import { humanizeFlagName } from '../core/Flags/humanize';
  * from state this page already holds — no new socket subscription, no
  * backend change (same read-only contract as the rest of /caster).
  *
- * Two of the three cue kinds are LEADING, not recap: they fire before the
+ * Three of the four cue kinds are LEADING, not recap: they fire before the
  * payoff, same as a caster would call it themselves —
  *
  *   RUN          a player's kill_streaks entry reaches 2 — the third kill,
@@ -20,6 +21,11 @@ import { humanizeFlagName } from '../core/Flags/humanize';
  *                sweep the board or leave the other team defending their
  *                last flag. Named by captor_ids, so the cue points the
  *                camera at the actual player mid-capture.
+ *   SWING        flagswing's p_allies (see momentum.js — vendored from
+ *                KTPInfrastructure/scripts/flagswing) has moved past
+ *                MOMENTUM_THRESHOLD within MOMENTUM_WINDOW_MS. No single
+ *                player to name — this is "something is shifting", the cue
+ *                to widen out rather than stay tight on one duel.
  *   CAP-OUT      recap, not leading — stats_board's round_end reason, fired
  *                the instant the board itself would show it. Kept on the
  *                rail (stats_board clears fast, on the very next round) so
@@ -30,6 +36,7 @@ import { humanizeFlagName } from '../core/Flags/humanize';
  */
 
 const CAPOUT_DISPLAY_MS = 15000;
+const SWING_DISPLAY_MS = 15000;
 // A streak this stale is not "building" any more — the round moved on
 // without a kill_streaks reset reaching us (map change, a missed event).
 const RUN_STALE_MS = 45000;
@@ -74,6 +81,15 @@ const Cue = ({ c }) => {
                 <span className="caster-cue-detail">
                     taking <b>{c.flagName}</b> — {c.threat === 'sweep' ? 'would sweep the board' : "would leave the other side one flag from empty"}
                 </span>
+            </div>
+        );
+    }
+    if (c.kind === 'swing') {
+        return (
+            <div className="caster-cue caster-cue-swing">
+                <span className="caster-tag caster-tag-swing">SWING</span>
+                <span className={`caster-cue-who caster-${c.team}`}>{c.team === 'allies' ? 'ALLIES' : 'AXIS'}</span>
+                <span className="caster-cue-detail">momentum moving their way — widen out</span>
             </div>
         );
     }
@@ -167,6 +183,37 @@ const CueRail = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [flags, players]);
 
+    // ── SWING: p_allies moved past threshold inside the trailing window ─────
+    const swingHistory = useRef([]);
+    const lastSwingAt = useRef(0);
+    const half = useHudStore(s => s.half);
+    useEffect(() => {
+        // A half boundary swaps sides and resets flags/lives — the history
+        // would otherwise read a fresh half as a giant swing off the last
+        // half's final state.
+        swingHistory.current = [];
+        lastSwingAt.current = 0;
+    }, [half]);
+    useEffect(() => {
+        const now = Date.now();
+        const p = pAlliesFromSnapshot({ alliesPlayers, axisPlayers, flags });
+        const history = [...swingHistory.current, { t: now, v: p }]
+            .filter(r => now - r.t <= MOMENTUM_WINDOW_MS);
+        swingHistory.current = history;
+
+        if (now - lastSwingAt.current < MOMENTUM_COOLDOWN_MS) return;
+        const swing = detectSwing(history);
+        if (!swing) return;
+        lastSwingAt.current = now;
+        setCues(prev => [{
+            key: `swing-${now}`,
+            kind: 'swing',
+            team: swing.team,
+            firedAt: now,
+        }, ...prev]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [alliesPlayers, axisPlayers, flags]);
+
     // ── CAP-OUT: one shot per stats_board round_end, self-expiring ──────────
     const lastCapoutAt = useRef(null);
     useEffect(() => {
@@ -187,6 +234,7 @@ const CueRail = () => {
         const now = Date.now();
         return cues.filter(c => {
             if (c.kind === 'capout') return now - c.firedAt < CAPOUT_DISPLAY_MS;
+            if (c.kind === 'swing') return now - c.firedAt < SWING_DISPLAY_MS;
             if (c.kind === 'run') return now - c.firedAt < RUN_STALE_MS;
             return true; // cap_threat is dropped by the effect above, not time
         });

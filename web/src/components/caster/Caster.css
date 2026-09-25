@@ -704,5 +704,6 @@
 
 .caster-tag-run     { background-color: rgba(255, 215, 0, 0.22); color: #ffd700; }
 .caster-tag-threat  { background-color: rgba(255, 140, 60, 0.24); color: #ff9c4d; }
+.caster-tag-swing   { background-color: rgba(140, 170, 255, 0.24); color: #9db2ff; }
 .caster-tag-capout  { background-color: rgba(120, 210, 140, 0.24); color: #7bdc9a; }
 .caster-minimap-axis   { fill: #ffb8b8; }
