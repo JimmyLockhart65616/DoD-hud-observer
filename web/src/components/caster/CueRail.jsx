@@ -3,6 +3,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useHudStore } from '../core/Socket/Socket';
 import { humanizeFlagName } from '../core/Flags/humanize';
 import { pAlliesFromSnapshot, detectSwing, MOMENTUM_WINDOW_MS, MOMENTUM_COOLDOWN_MS } from './momentum';
+import {
+    TEAM_NUM, ISOLATION_UNITS, SPAWN_BOOTSTRAP_MS,
+    buildCentroids, buildDepthAxis, rankRearFlags, nearestMateDistance, stepExcursion,
+} from './excursion';
 
 /*
  * Cue rail — /caster
@@ -26,6 +30,15 @@ import { pAlliesFromSnapshot, detectSwing, MOMENTUM_WINDOW_MS, MOMENTUM_COOLDOWN
  *                MOMENTUM_THRESHOLD within MOMENTUM_WINDOW_MS. No single
  *                player to name — this is "something is shifting", the cue
  *                to widen out rather than stay tight on one duel.
+ *   EXCURSION    a player has been alone, past the enemy's rear line, for
+ *                MIN_EXCURSION_SECONDS straight (see excursion.js — geometry
+ *                adapted live from KTPInfrastructure/scripts/excursions.py).
+ *                Needs a spawn-centroid axis learned from the first few
+ *                seconds after this half's `golive`; a half this page
+ *                joined already in progress never gets one, and the trigger
+ *                stays silently unavailable rather than guessing — same
+ *                "unknown, never wrongly clean" rule KTPAntiCheat holds its
+ *                own detectors to.
  *   CAP-OUT      recap, not leading — stats_board's round_end reason, fired
  *                the instant the board itself would show it. Kept on the
  *                rail (stats_board clears fast, on the very next round) so
@@ -81,6 +94,15 @@ const Cue = ({ c }) => {
                 <span className="caster-cue-detail">
                     taking <b>{c.flagName}</b> — {c.threat === 'sweep' ? 'would sweep the board' : "would leave the other side one flag from empty"}
                 </span>
+            </div>
+        );
+    }
+    if (c.kind === 'excursion') {
+        return (
+            <div className="caster-cue caster-cue-excursion">
+                <span className="caster-tag caster-tag-excursion">ALONE DEEP</span>
+                <span className={`caster-cue-who caster-${c.team}`}>{c.name}</span>
+                <span className="caster-cue-detail">solo behind the line, {c.seconds}s and counting</span>
             </div>
         );
     }
@@ -211,6 +233,87 @@ const CueRail = () => {
             team: swing.team,
             firedAt: now,
         }, ...prev]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [alliesPlayers, axisPlayers, flags]);
+
+    // ── EXCURSION: solo past the rear line, no mate within ISOLATION_UNITS ──
+    const matchPhase = useHudStore(s => s.match_phase);
+    const bootstrap = useRef(null);   // {startedAt, samples: {1: [], 2: []}} while learning spawns
+    const axis = useRef(null);        // {rear: {1: {...}, 2: {...}}, depth} once learned, else null all half
+    const excursionState = useRef(new Map()); // user_id -> {since, fired}
+    const prevPhase = useRef(matchPhase);
+
+    useEffect(() => {
+        if (matchPhase === 'golive' && prevPhase.current !== 'golive') {
+            axis.current = null;
+            excursionState.current = new Map();
+            bootstrap.current = { startedAt: Date.now(), samples: { 1: [], 2: [] } };
+        }
+        prevPhase.current = matchPhase;
+    }, [matchPhase]);
+
+    useEffect(() => {
+        const now = Date.now();
+        const roster = [...alliesPlayers, ...axisPlayers]
+            .map(p => ({ ...p, teamNum: TEAM_NUM[p.team] }))
+            .filter(p => p.teamNum);
+
+        // Still learning this half's spawn centroids.
+        if (bootstrap.current) {
+            roster.forEach(p => {
+                if (p.pos) bootstrap.current.samples[p.teamNum].push(p.pos);
+            });
+            if (now - bootstrap.current.startedAt >= SPAWN_BOOTSTRAP_MS) {
+                const centroids = buildCentroids(bootstrap.current.samples);
+                if (centroids) {
+                    const depth = buildDepthAxis(centroids);
+                    const rear = rankRearFlags(flags, depth);
+                    if (rear) axis.current = { depth, rear };
+                    // Else too few flags located yet -- stays unavailable this half.
+                }
+                bootstrap.current = null;
+            }
+            return;
+        }
+
+        if (!axis.current) return; // never learned this half -- trigger silently off
+        const { depth, rear } = axis.current;
+
+        const stillFired = new Set();
+        roster.forEach(p => {
+            if (p.dead || !p.pos) {
+                excursionState.current.delete(p.user_id);
+                return;
+            }
+            const d = depth(p.pos.x, p.pos.y, p.teamNum);
+            const mate = nearestMateDistance(p, roster);
+            const isCandidate = d > rear[p.teamNum].rearLineDepth
+                && (mate === null || mate > ISOLATION_UNITS);
+            const prev = excursionState.current.get(p.user_id) ?? null;
+            const { next, justCrossed } = stepExcursion(prev, isCandidate, now);
+            if (next) excursionState.current.set(p.user_id, next);
+            else excursionState.current.delete(p.user_id);
+            if (next?.fired) stillFired.add(p.user_id);
+            if (justCrossed) {
+                setCues(prevCues => [{
+                    key: `excursion-${p.user_id}-${next.since}`,
+                    kind: 'excursion',
+                    userId: p.user_id,
+                    name: p.name,
+                    team: p.team,
+                    seconds: Math.round((now - next.since) / 1000),
+                    firedAt: now,
+                }, ...prevCues]);
+            }
+        });
+
+        // Drop any excursion cue whose player is no longer isolated -- unlike
+        // capout/swing this is a CONDITION, dismissed the instant it ends,
+        // the same rule cap_threat uses for a flag that stops capping.
+        setCues(prev => {
+            const stale = prev.some(c => c.kind === 'excursion' && !stillFired.has(c.userId));
+            return stale ? prev.filter(c => c.kind !== 'excursion' || stillFired.has(c.userId)) : prev;
+        });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [alliesPlayers, axisPlayers, flags]);
 
