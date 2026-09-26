@@ -50,6 +50,42 @@ const toB64Url = (buf: Buffer): string =>
 const fromB64Url = (s: string): Buffer =>
     Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
 
+/**
+ * Shortest secret we will sign or verify with.
+ *
+ * Arbitrary, but well above anything a human types by hand, which is the
+ * point: the failure this guards is not a brute-force attack on a good
+ * secret, it is a deploy that never set one.
+ */
+const MIN_SECRET_LENGTH = 32;
+
+/** Placeholders that ship in this repo. A live deploy must not run on one. */
+const PLACEHOLDER_SECRETS = new Set([
+    'changeme',
+    'REPLACE_WITH_CASTER_TOKEN_SECRET_SHARED_WITH_KTPLEAGUE_GG',
+    'local-dev-only-not-a-real-secret',
+]);
+
+/**
+ * Whether the configured secret can be trusted to mean anything.
+ *
+ * FAIL CLOSED, and this matters more here than the usual reason. A valid
+ * signature IS the authorization on this service — there is no user list to
+ * fall back on — so a publicly-known secret is not a weak password, it is an
+ * open door that looks shut. Verified in review: with the old `'changeme'`
+ * default, a token anyone could sign for a user who does not exist joined
+ * `caster:mocker` and received live positions (DoD-hud-observer#28).
+ *
+ * An unusable secret therefore refuses every token rather than accepting
+ * every forged one. The caster room simply stays empty until an operator sets
+ * the shared value, which is the safe direction to be wrong in.
+ */
+export function secretIsUsable(secret: string | undefined | null): boolean {
+    if (!secret) return false;
+    if (PLACEHOLDER_SECRETS.has(secret)) return false;
+    return secret.length >= MIN_SECRET_LENGTH;
+}
+
 function sign(body: string): string {
     return toB64Url(crypto.createHmac('sha256', config.caster_auth.session_secret).update(body).digest());
 }
@@ -68,6 +104,9 @@ export interface CasterIdentity {
  * TOKEN FORMAT block: it is the executable copy of that spec.
  */
 export function issueToken(identity: CasterIdentity): string {
+    if (!secretIsUsable(config.caster_auth.session_secret)) {
+        throw new Error('caster_auth.session_secret is unset, a placeholder, or under 32 characters — refusing to issue a token');
+    }
     const body = toB64Url(Buffer.from(JSON.stringify({
         id: identity.id, name: identity.name, exp: Date.now() + TOKEN_TTL_MS,
     })));
@@ -76,6 +115,9 @@ export function issueToken(identity: CasterIdentity): string {
 
 /** The identity a token was issued for, or null if missing/malformed/forged/expired. */
 export function verifyToken(token: string | undefined | null): CasterIdentity | null {
+    // Before anything else: with no usable secret there is no signature worth
+    // checking, and every token — forged or not — is refused.
+    if (!secretIsUsable(config.caster_auth.session_secret)) return null;
     if (!token) return null;
     const parts = token.split('.');
     if (parts.length !== 2) return null;

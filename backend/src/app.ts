@@ -11,6 +11,7 @@ import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './h
 import { pseudonymize, resolvePlayerId, rekeyByToken } from './handler/pseudonym';
 import { buildHqOverview } from './handler/hqBoard';
 import { buildServerList } from './handler/serverList';
+import { secretIsUsable } from './handler/casterAuth';
 import { createSocketServer } from './socket/socket';
 import { HltvSyncService } from './handler/hltvSync';
 import { HltvDelayBuffer, wireStrandedRescue } from './handler/hltvDelayBuffer';
@@ -390,6 +391,6 @@ console.log(`[config] Auth key: ${config.ingest.auth_key === 'changeme' ? '⚠ D
 // Shared with ktpleague.gg, which signs caster tokens with it. A default
 // here means every forged token verifies, so it is called out like the
 // ingest key above rather than left to a config review.
-console.log(`[config] Caster token secret: ${config.caster_auth.session_secret === 'changeme' ? '⚠ DEFAULT (change me!) — caster room is effectively open' : '***set***'}`);
+console.log(`[config] Caster token secret: ${secretIsUsable(config.caster_auth.session_secret) ? '***set***' : '⚠ unset/placeholder/too short — every caster token is REFUSED'}`);
 console.log(`[config] Position gating: ${config.caster_auth.gate_positions ? 'ON — positions are caster-only' : 'off — positions are public, as before'}`);
 console.log(`[config] Matches dir: ${path.resolve(config.storage.matches_dir)}`);

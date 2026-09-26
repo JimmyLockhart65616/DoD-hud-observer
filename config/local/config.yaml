@@ -129,10 +129,14 @@ hltv_connect:
 #
 #   HUD_CASTER_SESSION_SECRET  -> session_secret
 #
-# Left at a dev value locally. In production a default secret means every
-# forged token verifies, so app.ts warns loudly about it at boot.
+# Deliberately EMPTY, and long enough is deliberately 32 characters: an unset,
+# placeholder or short secret refuses every token rather than accepting every
+# forged one (secretIsUsable in handler/casterAuth.ts). So the caster room is
+# closed locally until you set a real value here or in
+# HUD_CASTER_SESSION_SECRET. The cue rail works without it; only live
+# positions are gated.
 caster_auth:
-  session_secret: local-dev-only-not-a-real-secret
+  session_secret: ""
   # Off = positions ride player_state into the public rooms, exactly as they
   # always have. On = they move to the authenticated caster:<host> room, which
   # blanks the minimap for anyone without a token. Flip deliberately, not as a

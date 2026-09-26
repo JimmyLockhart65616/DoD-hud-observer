@@ -160,8 +160,10 @@ hltv_connect:
 # deployment. Rotating it invalidates every outstanding caster token at once,
 # on both sides -- which is the intended blast radius.
 #
-# Leaving this at the 'changeme' default means every forged token verifies and
-# the caster room is effectively public; app.ts warns about it at boot.
+# Leaving this placeholder in place, or setting anything under 32 characters,
+# refuses EVERY caster token -- the room stays empty rather than accepting
+# forged ones (secretIsUsable in handler/casterAuth.ts). app.ts says which
+# state it booted in. Generate with: openssl rand -base64 48
 caster_auth:
   session_secret: REPLACE_WITH_CASTER_TOKEN_SECRET_SHARED_WITH_KTPLEAGUE_GG
   # THE SWITCH. Off (default) is today's behaviour unchanged: positions ride

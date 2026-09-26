@@ -12,7 +12,7 @@
  * drift between the two implementations fails here instead of on air.
  */
 import crypto from 'crypto';
-import { issueToken, verifyToken } from '../handler/casterAuth';
+import { issueToken, secretIsUsable, verifyToken } from '../handler/casterAuth';
 import config from '../config';
 
 const b64url = (buf: Buffer) =>
@@ -93,5 +93,57 @@ describe('issueToken / verifyToken', () => {
         } finally {
             spy.mockRestore();
         }
+    });
+});
+
+/**
+ * The failure this guards is not an attack on a good secret, it is a deploy
+ * that never set one. A valid signature IS the authorization here — there is
+ * no user list to fall back on — so a publicly-known secret is an open room
+ * that reads as a closed one. Verified in review of #28: with the old
+ * 'changeme' default, a token anyone could sign joined caster:mocker and
+ * received live positions.
+ */
+describe('an unusable secret fails closed', () => {
+    const realSecret = config.caster_auth.session_secret;
+    afterEach(() => { config.caster_auth.session_secret = realSecret; });
+
+    const unusable = [
+        ['empty', ''],
+        ["the old 'changeme' default", 'changeme'],
+        ['the online example placeholder', 'REPLACE_WITH_CASTER_TOKEN_SECRET_SHARED_WITH_KTPLEAGUE_GG'],
+        ['the local dev placeholder', 'local-dev-only-not-a-real-secret'],
+        ['under 32 characters', 'short-but-not-a-placeholder'],
+    ] as const;
+
+    it.each(unusable)('%s is not usable', (_label, secret) => {
+        expect(secretIsUsable(secret)).toBe(false);
+    });
+
+    it('a real 32+ character secret is usable', () => {
+        expect(secretIsUsable('x'.repeat(32))).toBe(true);
+    });
+
+    it.each(unusable)('refuses a token forged against %s', (_label, secret) => {
+        // Exactly the attack: the secret is public, so anyone can sign a
+        // well-formed token for a user who does not exist.
+        const forged = mintLikeKeepThePrac(
+            { id: 'not-a-caster', name: 'not-a-caster', exp: Date.now() + 60_000 },
+            secret,
+        );
+        config.caster_auth.session_secret = secret;
+        expect(verifyToken(forged)).toBeNull();
+    });
+
+    it('refuses even a token this process issued, once the secret is unusable', () => {
+        const token = issueToken({ id: 'user-abc', name: 'JaGGoN' });
+        expect(verifyToken(token)).toEqual({ id: 'user-abc', name: 'JaGGoN' });
+        config.caster_auth.session_secret = 'changeme';
+        expect(verifyToken(token)).toBeNull();
+    });
+
+    it('refuses to issue rather than minting something nobody should trust', () => {
+        config.caster_auth.session_secret = '';
+        expect(() => issueToken({ id: 'user-abc', name: 'JaGGoN' })).toThrow(/session_secret/);
     });
 });

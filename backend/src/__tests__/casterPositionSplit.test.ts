@@ -1,6 +1,6 @@
 /**
- * The one thing the 2026-09-25 access-control change actually has to get
- * right: positions leave `player_state` before it reaches the public,
+ * The one thing the position-gating change actually has to get right:
+ * positions leave `player_state` before it reaches the public,
  * unauthenticated `server:${server}` room (the one `/screen` also joins),
  * and go out ONLY on `caster:${server}` as a separate `player_positions`
  * event. Getting this backwards silently re-opens the exact leak the

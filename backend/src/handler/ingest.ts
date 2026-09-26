@@ -597,6 +597,21 @@ export function getCachedServerView(server: string): CachedServerView {
  *   3. Emits to the Socket.IO room for that matchId
  *   4. Returns 200 OK
  */
+/** `player_state.players[]` entries carrying a readable x/y (the plugin sends
+ * exactly (0,0) when it could not read the origin — see Socket.jsx's own
+ * comment on the same convention). Shared by the split below so the public
+ * and caster-only payloads can never disagree about which players had one.
+ *
+ * Note this DROPS an unreadable origin from `player_positions` rather than
+ * forwarding (0,0). The client then leaves that player's marker where it last
+ * was, instead of clearing it the way a literal (0,0) used to. Same
+ * information either way, different stale-vs-absent trade; called out because
+ * it is a behaviour change nobody asked for, not an accident.
+ */
+function readablePosition(p: any): boolean {
+    return typeof p?.x === 'number' && typeof p?.y === 'number' && !(p.x === 0 && p.y === 0);
+}
+
 /**
  * The deferred fire path: applied to each event after the HLTV delay window.
  * Updates the per-server state cache (so late-joiner snapshots reflect what
@@ -604,14 +619,6 @@ export function getCachedServerView(server: string): CachedServerView {
  * socket rooms. Exported so app.ts can wire it as the buffer's onFire
  * callback exactly once at startup, rather than per ingest router.
  */
-/** `player_state.players[]` entries carrying a readable x/y (the plugin sends
- * exactly (0,0) when it could not read the origin — see Socket.jsx's own
- * comment on the same convention). Shared by the split below so the public
- * and caster-only payloads can never disagree about which players had one. */
-function readablePosition(p: any): boolean {
-    return typeof p?.x === 'number' && typeof p?.y === 'number' && !(p.x === 0 && p.y === 0);
-}
-
 export function makeFireToSockets(io: SocketServer) {
     return (server: string, matchId: string | undefined, event: any, enqueuedAt?: number) => {
         // Cache FIRST, with the real ids. The state cache feeds late-joiner

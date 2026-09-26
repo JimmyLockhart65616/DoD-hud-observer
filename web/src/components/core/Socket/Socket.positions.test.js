@@ -1,6 +1,6 @@
 /**
- * Frontend store-machine tests — live position (`pos`), post-2026-09-25
- * access-control change.
+ * Frontend store-machine tests — live position (`pos`), under both sides of
+ * the position-gating switch.
  *
  * BOTH shapes are live, depending on the backend's
  * `caster_auth.gate_positions`. OFF (the default, and the behaviour that

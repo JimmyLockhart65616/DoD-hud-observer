@@ -119,7 +119,12 @@ function loadConfig(): Config {
 
 function loadCasterAuth(file: any): CasterAuthConfig {
     return {
-        session_secret: process.env.HUD_CASTER_SESSION_SECRET ?? file?.session_secret ?? 'changeme',
+        // No default. 'changeme' used to live here, and a deploy that missed
+        // the env var then ran on a secret published in this repo — which,
+        // since a valid signature IS the authorization, is an open caster
+        // room that reads as a closed one. Empty fails closed instead; see
+        // secretIsUsable in handler/casterAuth.ts.
+        session_secret: process.env.HUD_CASTER_SESSION_SECRET ?? file?.session_secret ?? '',
         gate_positions: bool(process.env.HUD_CASTER_GATE_POSITIONS, file?.gate_positions ?? false),
     };
 }
