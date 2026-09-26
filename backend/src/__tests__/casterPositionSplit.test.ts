@@ -9,6 +9,7 @@
 import { Server as SocketServer } from 'socket.io';
 import { createServer } from 'http';
 import { makeFireToSockets } from '../handler/ingest';
+import config from '../config';
 
 function emitsOn(io: SocketServer) {
     const calls: { room: string; event: string; payload: any }[] = [];
@@ -22,8 +23,17 @@ function emitsOn(io: SocketServer) {
 
 describe('makeFireToSockets — player_state position split', () => {
     let io: SocketServer;
-    beforeEach(() => { io = new SocketServer(createServer()); });
-    afterEach(() => { io.close(); });
+    // The split is opt-in (caster_auth.gate_positions). These cases describe
+    // the ON behaviour; the OFF suite at the bottom pins that the default
+    // changes nothing at all.
+    beforeEach(() => {
+        io = new SocketServer(createServer());
+        config.caster_auth.gate_positions = true;
+    });
+    afterEach(() => {
+        io.close();
+        config.caster_auth.gate_positions = false;
+    });
 
     const PLAYER_STATE = {
         event: 'player_state',
@@ -91,5 +101,45 @@ describe('makeFireToSockets — player_state position split', () => {
         const publicCall = calls.find(c => c.room === 'server:server-a');
         expect(publicCall!.event).toBe('kill');
         expect(publicCall!.payload).toHaveProperty('killer_id');
+    });
+});
+
+describe('makeFireToSockets — gate_positions OFF is the untouched status quo', () => {
+    let io: SocketServer;
+    beforeEach(() => {
+        io = new SocketServer(createServer());
+        config.caster_auth.gate_positions = false; // the default
+    });
+    afterEach(() => { io.close(); });
+
+    const PLAYER_STATE = {
+        event: 'player_state',
+        players: [{ user_id: 'STEAM_0:1:1', weapon: 'garand', nades: 2, x: 100, y: -200 }],
+    };
+
+    it('leaves x/y on the public payload, exactly as before the split existed', () => {
+        const calls = emitsOn(io);
+        makeFireToSockets(io)('server-a', undefined, PLAYER_STATE);
+
+        const publicCall = calls.find(c => c.room === 'server:server-a');
+        expect(publicCall!.event).toBe('player_state');
+        expect(publicCall!.payload.players[0]).toEqual(
+            expect.objectContaining({ x: 100, y: -200, weapon: 'garand', nades: 2 }),
+        );
+    });
+
+    it('emits nothing at all to the caster room', () => {
+        const calls = emitsOn(io);
+        makeFireToSockets(io)('server-a', undefined, PLAYER_STATE);
+        expect(calls.some(c => c.room === 'caster:server-a')).toBe(false);
+    });
+
+    it('still reaches every room the old fan-out did', () => {
+        const calls = emitsOn(io);
+        makeFireToSockets(io)('server-a', 'match-1', PLAYER_STATE);
+        const rooms = calls.map(c => c.room);
+        expect(rooms).toEqual(
+            expect.arrayContaining(['match-1', 'server:server-a', 'all', 'hud_socket']),
+        );
     });
 });

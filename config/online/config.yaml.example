@@ -164,3 +164,15 @@ hltv_connect:
 # the caster room is effectively public; app.ts warns about it at boot.
 caster_auth:
   session_secret: REPLACE_WITH_CASTER_TOKEN_SECRET_SHARED_WITH_KTPLEAGUE_GG
+  # THE SWITCH. Off (default) is today's behaviour unchanged: positions ride
+  # player_state into the public rooms and nothing is withheld from anyone.
+  #
+  # On moves them to the authenticated caster:<host> room. That is VISIBLE:
+  # anything reading positions off the public feed stops seeing them, and
+  # /caster's minimap goes blank unless the page was opened with a
+  # ?caster_token= (which ktpleague.gg can put in a link). Agree it before
+  # throwing it, and not mid-broadcast.
+  #
+  # HUD_CASTER_GATE_POSITIONS overrides this, so it can be flipped on the
+  # systemd unit and flipped back without a redeploy.
+  gate_positions: false

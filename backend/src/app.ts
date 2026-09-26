@@ -391,4 +391,5 @@ console.log(`[config] Auth key: ${config.ingest.auth_key === 'changeme' ? '⚠ D
 // here means every forged token verifies, so it is called out like the
 // ingest key above rather than left to a config review.
 console.log(`[config] Caster token secret: ${config.caster_auth.session_secret === 'changeme' ? '⚠ DEFAULT (change me!) — caster room is effectively open' : '***set***'}`);
+console.log(`[config] Position gating: ${config.caster_auth.gate_positions ? 'ON — positions are caster-only' : 'off — positions are public, as before'}`);
 console.log(`[config] Matches dir: ${path.resolve(config.storage.matches_dir)}`);

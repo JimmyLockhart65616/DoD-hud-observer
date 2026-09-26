@@ -2,16 +2,15 @@
  * Frontend store-machine tests — live position (`pos`), post-2026-09-25
  * access-control change.
  *
- * Positions used to arrive as `x`/`y` fields on the public `player_state`
- * snapshot; they now arrive ONLY on a separate `player_positions` event,
- * which the backend sends to nobody but an authenticated caster session
- * (backend/src/handler/ingest.ts's makeFireToSockets). This file pins the
- * frontend half of that: `player_state` must NOT touch `.pos` any more (it
- * would otherwise fight `player_positions` for the field, since the two
- * arrive on independent timers — see the comment in Socket.jsx), and
- * `player_positions` must behave like every other per-tick snapshot here
- * (Socket.nades.test.js's contract: omitted stays, unknown user is dropped,
- * malformed input does not throw).
+ * BOTH shapes are live, depending on the backend's
+ * `caster_auth.gate_positions`. OFF (the default, and the behaviour that
+ * predates any of this) x/y ride the public `player_state` snapshot. ON they
+ * arrive only on `player_positions`, which reaches nobody but an
+ * authenticated caster socket, and `player_state` carries none.
+ *
+ * The frontend has to be correct under both, which is why an ABSENT x/y
+ * leaves `.pos` untouched rather than nulling it — nulling would fight
+ * `player_positions` for the field, 4x/sec, on independent timers.
  *
  * Mechanics mirror Socket.nades.test.js.
  */
@@ -58,26 +57,63 @@ const find = (store, user_id) => {
     return [...allies_players, ...axis_players].find((p) => p.user_id === user_id);
 };
 
-describe('pos defaults to null and stays there with no player_positions event', () => {
+describe('pos with the backend gate OFF (the default): x/y ride player_state', () => {
     test('a fresh spawn has no position', () => {
         const { store, emit } = setup();
         spawn(emit);
         expect(find(store, RIFLE).pos).toBeNull();
     });
 
-    // The load-bearing regression this file exists for: before the split,
-    // player_state carried x/y and set `.pos` itself. If that code path were
-    // ever restored (or partially reverted), a public player_state payload
-    // that happens to include x/y (e.g. an old cached build, a proxy that
-    // didn't strip it) would silently repopulate `.pos` outside the
-    // authenticated channel, and this is the only place that would catch it.
-    test('player_state carrying x/y (as it never should again) is ignored, not applied', () => {
+    test('a snapshot carrying x/y sets the position', () => {
         const { store, emit } = setup();
         spawn(emit);
-        playerState(emit, [{ user_id: RIFLE, weapon: 'garand', nades: 2, health: 100, prone_state: 'standing', x: 500, y: -300 }]);
+        playerState(emit, [{ user_id: RIFLE, weapon: 'garand', nades: 2, x: 500, y: -300 }]);
+
+        expect(find(store, RIFLE).pos).toEqual({ x: 500, y: -300 });
+    });
+
+    test('an exact (0,0) is the plugin saying it could not read the origin, so the marker hides', () => {
+        const { store, emit } = setup();
+        spawn(emit);
+        playerState(emit, [{ user_id: RIFLE, weapon: 'garand', nades: 2, x: 5, y: 5 }]);
+        playerState(emit, [{ user_id: RIFLE, weapon: 'garand', nades: 2, x: 0, y: 0 }]);
 
         expect(find(store, RIFLE).pos).toBeNull();
-        expect(find(store, RIFLE).nades).toBe(2); // the rest of the snapshot still applies normally
+    });
+});
+
+describe('pos with the backend gate ON: player_state carries no x/y at all', () => {
+    // The load-bearing case. With the gate on, every player_state arrives
+    // stripped, 4x/sec, while player_positions maintains `.pos` on its own
+    // timer. If the stripped snapshot nulled `.pos` the two would fight and
+    // an authenticated caster's markers would flicker — invisible in any
+    // test that only drives one of the two events.
+    test('a snapshot with no x/y leaves an existing position alone', () => {
+        const { store, emit } = setup();
+        spawn(emit);
+        playerPositions(emit, [{ user_id: RIFLE, x: 120, y: -45 }]);
+        expect(find(store, RIFLE).pos).toEqual({ x: 120, y: -45 });
+
+        playerState(emit, [{ user_id: RIFLE, weapon: 'garand', nades: 2 }]); // stripped
+        expect(find(store, RIFLE).pos).toEqual({ x: 120, y: -45 });
+    });
+
+    test('interleaving the two events at speed never drops the position', () => {
+        const { store, emit } = setup();
+        spawn(emit);
+        for (let i = 0; i < 5; i++) {
+            playerPositions(emit, [{ user_id: RIFLE, x: i, y: i }]);
+            playerState(emit, [{ user_id: RIFLE, weapon: 'garand', nades: 2 }]);
+        }
+        expect(find(store, RIFLE).pos).toEqual({ x: 4, y: 4 });
+    });
+
+    test('the rest of a stripped snapshot still applies normally', () => {
+        const { store, emit } = setup();
+        spawn(emit);
+        playerState(emit, [{ user_id: RIFLE, weapon: 'garand', nades: 2 }]);
+        expect(find(store, RIFLE).nades).toBe(2);
+        expect(find(store, RIFLE).weapon_active).toBe('garand');
     });
 });
 

@@ -41,6 +41,18 @@ export interface Config {
  */
 export interface CasterAuthConfig {
     session_secret: string;
+    /**
+     * OFF by default, and off is the pre-existing behaviour exactly: positions
+     * ride `player_state` into the public rooms as they always have, and
+     * nothing is withheld from anyone.
+     *
+     * Turning it ON moves them to the authenticated `caster:<host>` room. That
+     * is a VISIBLE change to anything reading positions off the public feed —
+     * `/caster`'s minimap goes blank unless it carries a token — so it is a
+     * deliberate switch someone throws after agreeing it, not a consequence of
+     * deploying this code. Reversible without a redeploy, which is the point.
+     */
+    gate_positions: boolean;
 }
 
 /**
@@ -108,6 +120,7 @@ function loadConfig(): Config {
 function loadCasterAuth(file: any): CasterAuthConfig {
     return {
         session_secret: process.env.HUD_CASTER_SESSION_SECRET ?? file?.session_secret ?? 'changeme',
+        gate_positions: bool(process.env.HUD_CASTER_GATE_POSITIONS, file?.gate_positions ?? false),
     };
 }
 

@@ -133,3 +133,8 @@ hltv_connect:
 # forged token verifies, so app.ts warns loudly about it at boot.
 caster_auth:
   session_secret: local-dev-only-not-a-real-secret
+  # Off = positions ride player_state into the public rooms, exactly as they
+  # always have. On = they move to the authenticated caster:<host> room, which
+  # blanks the minimap for anyone without a token. Flip deliberately, not as a
+  # side effect of deploying.
+  gate_positions: false

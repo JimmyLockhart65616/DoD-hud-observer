@@ -5,6 +5,7 @@ import { MetricsCollector } from './metrics';
 import { HltvDelayBuffer } from './hltvDelayBuffer';
 import { HltvSyncService } from './hltvSync';
 import { pseudonymize } from './pseudonym';
+import config from '../config';
 
 // ─── Per-Server State Cache ──────────────────────────────────────────────────
 // Tracks the latest game state per server so late-joining frontends get a
@@ -622,15 +623,20 @@ export function makeFireToSockets(io: SocketServer) {
         // this line no SteamID reaches a socket client.
         const pseudonymized = pseudonymize(event, server);
 
-        // player_state carries live positions, and this is the ONE field on
-        // the whole public, unauthenticated `server:${server}` room (the room
-        // /screen also joins) that must not go out on it — see
-        // broadcast-director's 2026-09-25 access-control decision. Everything
-        // else in the snapshot (weapon, nades, prone, waves, scoring) is
-        // unchanged and stays public; only x/y move to the caster-only room,
-        // in their own event so a public listener's parser never sees the field
-        // exist at all, rather than seeing it nulled out.
-        if (pseudonymized.event === 'player_state' && Array.isArray(pseudonymized.players)) {
+        // player_state carries live positions, and they are the ONE field on
+        // the public, unauthenticated `server:${server}` room (the room
+        // /screen also joins) worth withholding: they say where everyone is,
+        // live. Moving them is gated on `caster_auth.gate_positions` because
+        // it is a VISIBLE change to every existing reader of that feed — off
+        // (the default) this branch never runs and the fan-out below is
+        // byte-for-byte what it always was.
+        //
+        // On, only x/y move, into their own event on the authenticated room,
+        // so a public listener's parser never sees the field exist at all
+        // rather than seeing it nulled out. Everything else in the snapshot
+        // (weapon, nades, prone, waves, scoring) stays public either way.
+        if (config.caster_auth.gate_positions
+            && pseudonymized.event === 'player_state' && Array.isArray(pseudonymized.players)) {
             const positions = pseudonymized.players
                 .filter(readablePosition)
                 .map((p: any) => ({ user_id: p.user_id, x: p.x, y: p.y }));

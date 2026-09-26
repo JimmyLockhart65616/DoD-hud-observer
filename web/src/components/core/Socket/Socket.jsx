@@ -732,6 +732,15 @@ export function addStatRows(a, b) {
     return out;
 }
 
+/** `{ pos }` when a player_state entry carries readable coordinates, `{}` when
+ * it carries none — an absent x/y must leave an existing `.pos` alone, since
+ * the caster-only `player_positions` event may be the thing maintaining it.
+ * An exact (0,0) is the plugin's "could not read the origin", so it clears. */
+function positionPatch(s) {
+    if (typeof s.x !== 'number' || typeof s.y !== 'number') return {};
+    return { pos: (s.x === 0 && s.y === 0) ? null : { x: s.x, y: s.y } };
+}
+
 function updatePlayer(players, user_id, updater) {
     const idx = players.findIndex(p => p.user_id === user_id);
     if (idx === -1) return players;
@@ -983,14 +992,24 @@ export const SocketStoreComponent = () => {
                     // indistinguishable from empty), so on an older module this
                     // arm simply never fires.
                     nades: typeof s.nades === 'number' && s.nades >= 0 ? s.nades : null,
-                    // `pos` is NOT set here any more — positions moved off the
-                    // public player_state event to the caster-only
-                    // player_positions event (2026-09-25 access-control
-                    // change; see that handler above). Touching `.pos` on
-                    // this handler at all would fight it: the two events
-                    // arrive on independent sockets/timers, and whichever
-                    // fired most recently would win, flickering an
-                    // authenticated caster's positions to null 4x/sec.
+
+                    // Position, when this snapshot carries one. Both shapes
+                    // are live depending on the backend's
+                    // `caster_auth.gate_positions`: OFF (default) x/y ride
+                    // here as they always have; ON they arrive on the
+                    // caster-only `player_positions` event instead and this
+                    // payload has no x/y at all.
+                    //
+                    // So an ABSENT x/y leaves `.pos` untouched rather than
+                    // nulling it. Nulling would fight the other handler —
+                    // the two events arrive on independent timers, and
+                    // whichever fired last would win, flickering an
+                    // authenticated caster's markers 4x/sec.
+                    //
+                    // An EXACT (0,0) is still the plugin saying it could not
+                    // read the origin, not a player at the world centre, and
+                    // is mapped to null so the marker hides.
+                    ...positionPatch(s),
                 };
             });
             setAlliesPlayers(apply);
