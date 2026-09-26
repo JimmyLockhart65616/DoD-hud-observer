@@ -90,9 +90,11 @@ export function createSocketServer(origin: string, recorder: MatchRecorder) {
 
         // Caster-only: join the room that carries live positions
         // ('player_positions', see makeFireToSockets in ingest.ts). Gated on a
-        // session token from /api/caster-auth/login -- `server:${serverName}`
-        // above stays unauthenticated for /screen and everything else, and
-        // never carries positions. No snapshot replay here (unlike
+        // token ktpleague.gg signs for a caster it has already authenticated;
+        // this service has no login and no user list, it only verifies the
+        // signature. `server:${serverName}` above stays unauthenticated for
+        // /screen and everything else, and never carries positions when
+        // caster_auth.gate_positions is on. No snapshot replay here (unlike
         // join_server): the next player_state tick is at most 250ms away at
         // this feed's 4 Hz, which is not worth a second state-cache read for.
         socket.on('join_caster', (payload: { server?: string; token?: string }) => {
