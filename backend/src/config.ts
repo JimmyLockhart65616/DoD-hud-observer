@@ -31,14 +31,19 @@ export interface Config {
 }
 
 /**
- * The one login this app has: named casters, each with their own credential,
- * gating /caster and the position stream it depends on (see
- * backend/src/handler/casterAuth.ts). `password_hash` is `<saltHex>:<hashHex>`
- * from that module's `hashPassword` — never a plaintext password in config.
+ * The one login this app has: Discord OAuth2 + a flat allowlist of Discord
+ * user ids, gating /caster and the position stream it depends on (see
+ * backend/src/handler/casterAuth.ts). `discord_client_id`/`discord_client_secret`
+ * come from an existing KTP Discord application (reused, not registered fresh
+ * for this app — ask afraznein) with `discord_redirect_uri` added to its
+ * OAuth2 redirect allowlist in Discord's developer portal.
  */
 export interface CasterAuthConfig {
     session_secret: string;
-    users: { username: string; password_hash: string }[];
+    discord_client_id: string;
+    discord_client_secret: string;
+    discord_redirect_uri: string;
+    allowed_discord_ids: string[];
 }
 
 /**
@@ -103,19 +108,17 @@ function loadConfig(): Config {
     };
 }
 
-/** Empty user list by default -- with nobody configured, checkPassword refuses everybody, which is the safe default rather than an open gate. */
+/** Empty allowlist by default -- with nobody configured, isAllowedCaster refuses everybody, which is the safe default rather than an open gate. */
 function loadCasterAuth(file: any): CasterAuthConfig {
-    const users: { username: string; password_hash: string }[] = [];
-    if (Array.isArray(file?.users)) {
-        for (const u of file.users) {
-            if (typeof u?.username === 'string' && typeof u?.password_hash === 'string') {
-                users.push({ username: u.username, password_hash: u.password_hash });
-            }
-        }
-    }
+    const allowed = Array.isArray(file?.allowed_discord_ids)
+        ? file.allowed_discord_ids.filter((x: any) => typeof x === 'string')
+        : [];
     return {
         session_secret: process.env.HUD_CASTER_SESSION_SECRET ?? file?.session_secret ?? 'changeme',
-        users,
+        discord_client_id: process.env.HUD_CASTER_DISCORD_CLIENT_ID ?? file?.discord_client_id ?? '',
+        discord_client_secret: process.env.HUD_CASTER_DISCORD_CLIENT_SECRET ?? file?.discord_client_secret ?? '',
+        discord_redirect_uri: process.env.HUD_CASTER_DISCORD_REDIRECT_URI ?? file?.discord_redirect_uri ?? '',
+        allowed_discord_ids: allowed,
     };
 }
 

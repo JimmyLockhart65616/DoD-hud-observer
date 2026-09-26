@@ -9,7 +9,10 @@ import { MatchRecorder } from './handler/matchRecorder';
 import { MetricsCollector } from './handler/metrics';
 import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './handler/ingest';
 import { pseudonymize, resolvePlayerId, rekeyByToken } from './handler/pseudonym';
-import { checkPassword, issueToken } from './handler/casterAuth';
+import {
+    discordAuthorizeUrl, fetchDiscordIdentity, isAllowedCaster,
+    issueOAuthState, issueToken, verifyOAuthState,
+} from './handler/casterAuth';
 import { buildHqOverview } from './handler/hqBoard';
 import { buildServerList } from './handler/serverList';
 import { createSocketServer } from './socket/socket';
@@ -65,21 +68,46 @@ app.set('json spaces', 2);
 app.disable('x-powered-by');
 app.use(cors());
 
-// Caster login. The one authenticated surface in this app -- see
-// backend/src/handler/casterAuth.ts. Deliberately generic on failure (never
-// "unknown username" vs "wrong password") so this endpoint can't be used to
-// enumerate configured caster usernames.
-app.post('/api/caster-auth/login', (req, res) => {
-    const { username, password } = req.body ?? {};
-    if (typeof username !== 'string' || typeof password !== 'string') {
-        res.status(400).json({ error: 'username and password required' });
+// Caster login (Discord OAuth2). The one authenticated surface in this app --
+// see backend/src/handler/casterAuth.ts. `state` carries which server to
+// send the caster back to; it is self-verifying (signed, short TTL), so
+// there is no server-side pending-login store to leak or expire out of sync.
+const FRONTEND_ORIGIN = (config.frontend.origin.split(',')[0] ?? '').trim();
+
+app.get('/api/caster-auth/discord/login', (req, res) => {
+    const serverName = String(req.query.server ?? '');
+    if (!serverName) {
+        res.status(400).json({ error: 'server query parameter required' });
         return;
     }
-    if (!checkPassword(username, password)) {
-        res.status(401).json({ error: 'invalid credentials' });
+    if (!config.caster_auth.discord_client_id) {
+        res.status(503).json({ error: 'Discord login is not configured on this instance' });
         return;
     }
-    res.json({ token: issueToken(username) });
+    res.redirect(discordAuthorizeUrl(issueOAuthState(serverName)));
+});
+
+app.get('/api/caster-auth/discord/callback', async (req, res) => {
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    const state = verifyOAuthState(typeof req.query.state === 'string' ? req.query.state : null);
+    if (!code || !state) {
+        res.status(400).send('Login failed: the request expired or was tampered with. Close this tab and try again from /caster.');
+        return;
+    }
+    let identity;
+    try {
+        identity = await fetchDiscordIdentity(code);
+    } catch (err) {
+        console.error('[caster-auth] Discord identity fetch failed:', (err as Error).message);
+        res.redirect(`${FRONTEND_ORIGIN}/caster?server=${encodeURIComponent(state.server)}&caster_error=discord_failed`);
+        return;
+    }
+    if (!isAllowedCaster(identity.id)) {
+        res.redirect(`${FRONTEND_ORIGIN}/caster?server=${encodeURIComponent(state.server)}&caster_error=not_authorized`);
+        return;
+    }
+    const token = issueToken(identity);
+    res.redirect(`${FRONTEND_ORIGIN}/caster?server=${encodeURIComponent(state.server)}&caster_token=${encodeURIComponent(token)}`);
 });
 
 // Health check
@@ -402,5 +430,6 @@ app.listen(config.api.port, () => {
 
 console.log(`[config] Auth key: ${config.ingest.auth_key === 'changeme' ? '⚠ DEFAULT (change me!)' : '***set***'}`);
 console.log(`[config] Caster session secret: ${config.caster_auth.session_secret === 'changeme' ? '⚠ DEFAULT (change me!)' : '***set***'}`);
-console.log(`[config] Caster users configured: ${config.caster_auth.users.length}`);
+console.log(`[config] Caster Discord app: ${config.caster_auth.discord_client_id ? '***set***' : '⚠ NOT CONFIGURED — /caster login disabled'}`);
+console.log(`[config] Casters allowed: ${config.caster_auth.allowed_discord_ids.length}`);
 console.log(`[config] Matches dir: ${path.resolve(config.storage.matches_dir)}`);

@@ -150,18 +150,31 @@ hltv_connect:
 
 # The one login this app has: /caster and the position stream it depends on.
 # Everything else (/screen, /hq, /watch, /api/*) stays public and
-# unauthenticated as it always has been.
+# unauthenticated as it always has been. Discord OAuth2 rather than a
+# password this app invents -- casters already have Discord accounts for
+# everything else in the league (drew, 2026-09-25).
 #
 # session_secret: a long random value, distinct from ingest.auth_key and the
 # HLTV rcon passwords above -- do NOT commit the real value; set it via
 # HUD_CASTER_SESSION_SECRET on the systemd unit instead, same pattern as
 # ingest.auth_key.
 #
-# users: one entry per caster, named, each with their own credential.
-# `npm run caster:hash-password -- '<password>'` on this box prints the
-# password_hash to paste below -- never a plaintext password here.
+# discord_client_id / discord_client_secret: from an EXISTING KTP Discord
+# application (reused -- ask afraznein which one, e.g. the admin bot's),
+# not a fresh registration for this app. Whoever holds that app's settings
+# in Discord's developer portal must add discord_redirect_uri below to its
+# OAuth2 "Redirects" list, or every login attempt will fail at Discord's end
+# before it ever reaches this backend. Set the secret via
+# HUD_CASTER_DISCORD_CLIENT_SECRET, never committed here.
+#
+# allowed_discord_ids: one entry per authorized caster, their Discord user id
+# (the numeric snowflake, NOT their username -- right-click their name in
+# Discord with Developer Mode on, "Copy User ID"). Empty refuses everyone,
+# the safe default; this is a flat allowlist, not a server-role check.
 caster_auth:
   session_secret: REPLACE_WITH_CASTER_SESSION_SECRET
-  users:
-    - username: REPLACE_WITH_CASTER_USERNAME
-      password_hash: REPLACE_WITH_HASH_FROM_caster:hash-password
+  discord_client_id: REPLACE_WITH_EXISTING_KTP_DISCORD_APP_CLIENT_ID
+  discord_client_secret: REPLACE_WITH_EXISTING_KTP_DISCORD_APP_CLIENT_SECRET
+  discord_redirect_uri: "https://hud.ktpdod.com/api/caster-auth/discord/callback"
+  allowed_discord_ids:
+    - REPLACE_WITH_CASTER_DISCORD_USER_ID

@@ -83,7 +83,7 @@ describe('join_caster', () => {
 
     it('joins the caster room on a valid token, and only that server\'s room', async () => {
         const client = await connect(port);
-        const token = issueToken('coreymarko');
+        const token = issueToken({ id: '123456789', name: 'coreymarko' });
         client.emit('join_caster', { server: 'KTP - Test', token });
         // No caster_auth_error should fire; give the join a moment to land.
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -100,7 +100,7 @@ describe('join_caster', () => {
 
     it('leave_caster actually leaves the room', async () => {
         const client = await connect(port);
-        const token = issueToken('coreymarko');
+        const token = issueToken({ id: '123456789', name: 'coreymarko' });
         client.emit('join_caster', { server: 'KTP - Test', token });
         await new Promise(resolve => setTimeout(resolve, 200));
         client.emit('leave_caster', 'KTP - Test');

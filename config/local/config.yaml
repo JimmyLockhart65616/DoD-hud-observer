@@ -121,18 +121,23 @@ hltv_connect:
 # The one login this app has: /caster and the position stream it depends on.
 # Everything else (/screen, /hq, /watch, /api/*) stays public and unauthenticated
 # as it always has been -- see broadcast-director's 2026-09-25 access-control
-# decision for why /caster specifically needed this.
+# decision for why /caster specifically needed this, and why it's Discord OAuth2
+# (an existing KTP Discord app, reused) rather than a password this app invents.
 #
-# `npm run caster:hash-password -- '<password>'` prints a password_hash to
-# paste below. Never put a plaintext password here.
+#   HUD_CASTER_SESSION_SECRET          -> session_secret
+#   HUD_CASTER_DISCORD_CLIENT_ID       -> discord_client_id
+#   HUD_CASTER_DISCORD_CLIENT_SECRET   -> discord_client_secret
+#   HUD_CASTER_DISCORD_REDIRECT_URI    -> discord_redirect_uri
 #
-#   HUD_CASTER_SESSION_SECRET  -> session_secret
-#
-# Empty by default: with no users configured, every login attempt is refused,
-# which is the safe default rather than an open gate. Add your own local
-# account with `npm run caster:hash-password -- 'your-password'` and paste
-# the result below when you need to exercise the logged-in path on a laptop.
+# Discord login is disabled (the login route answers 503) until
+# discord_client_id is set. allowed_discord_ids empty means everyone is
+# refused even with a working Discord app configured -- the safe default,
+# not an open gate. To exercise the logged-in path on a laptop you need a
+# real (test) Discord application; there is no local-only stand-in.
 caster_auth:
   session_secret: local-dev-only-not-a-real-secret
-  users: []
+  discord_client_id: ""
+  discord_client_secret: ""
+  discord_redirect_uri: "http://localhost:3000/api/caster-auth/discord/callback"
+  allowed_discord_ids: []
 

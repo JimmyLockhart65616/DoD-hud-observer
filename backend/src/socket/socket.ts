@@ -96,15 +96,15 @@ export function createSocketServer(origin: string, recorder: MatchRecorder) {
         // join_server): the next player_state tick is at most 250ms away at
         // this feed's 4 Hz, which is not worth a second state-cache read for.
         socket.on('join_caster', (payload: { server?: string; token?: string }) => {
-            const username = verifyToken(payload?.token);
-            if (!username) {
+            const identity = verifyToken(payload?.token);
+            if (!identity) {
                 socket.emit('caster_auth_error', JSON.stringify({ reason: 'invalid_or_expired_token' }));
                 return;
             }
             const serverName = payload?.server;
             if (!serverName) return;
             socket.join(`caster:${serverName}`);
-            console.log(`[socket] ${socket.id} joined caster room caster:${serverName} as ${username}`);
+            console.log(`[socket] ${socket.id} joined caster room caster:${serverName} as ${identity.name} (${identity.id})`);
         });
 
         socket.on('leave_caster', (serverName: string) => {

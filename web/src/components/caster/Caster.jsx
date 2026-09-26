@@ -357,7 +357,7 @@ function Caster() {
     if (!casterAuth.ready) return null;
 
     if (!casterAuth.loggedIn) {
-        return <CasterLogin onSubmit={casterAuth.login} error={casterAuth.error} pending={casterAuth.pending} />;
+        return <CasterLogin onLogin={casterAuth.login} error={casterAuth.error} />;
     }
 
     return (

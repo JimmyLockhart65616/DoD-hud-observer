@@ -63,45 +63,28 @@
   margin: 0 0 20px;
 }
 
-.caster-login-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 14px;
-  font-size: 12px;
-  color: #9aa0c0;
-}
-
-.caster-login-field input {
-  font-size: 14px;
-  padding: 8px 10px;
-  border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background-color: rgba(0, 0, 0, 0.3);
-  color: #d8dae8;
-}
-
 .caster-login-error {
   color: #ffb8b8;
   font-size: 12.5px;
   margin: -4px 0 14px;
 }
 
-.caster-login button {
+/* Discord's own brand blurple — this button IS the Discord identity, not a
+   generic action, so it borrows their color rather than the page's accent. */
+.caster-login-discord {
   width: 100%;
-  padding: 9px;
+  padding: 10px;
   font-size: 14px;
   font-weight: 700;
   border-radius: 4px;
   border: none;
-  background-color: #4c8dff;
-  color: #0a0b14;
+  background-color: #5865f2;
+  color: #fff;
   cursor: pointer;
 }
 
-.caster-login button:disabled {
-  opacity: 0.6;
-  cursor: default;
+.caster-login-discord:hover {
+  background-color: #4752c4;
 }
 
 .caster-logout {

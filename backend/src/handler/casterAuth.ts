@@ -1,25 +1,33 @@
 import crypto from 'crypto';
+import https from 'https';
 import config from '../config';
 
 /**
- * Caster login: password hashing + signed session tokens.
+ * Caster login: Discord OAuth2 (Authorization Code flow) + signed session
+ * tokens. Casters already have Discord accounts for everything else in this
+ * league — a password this module generated and someone had to relay over
+ * DM was worse UX for zero security benefit, once drew asked why we weren't
+ * just using Discord (2026-09-25).
  *
- * No bcrypt, no jsonwebtoken — Node's own `crypto` already has an
- * OWASP-recommended password KDF (scrypt) and everything a hand-rolled signed
- * token needs (HMAC + timing-safe compare), and the claim set here is fixed
- * (one username, one expiry), so a general JWT library buys nothing but a
- * dependency and a native-addon build step (bcrypt) this repo's deploy
- * doesn't otherwise need. Same "dependency-free where the standard library
- * already does it" call as flagswing.js.
+ * No JWT library for the session token — Node's own `crypto` already has
+ * everything a fixed-claim HMAC-signed token needs. Same "dependency-free
+ * where the standard library already does it" call as flagswing.js.
  *
  * This is the ONLY auth any viewer-facing page in this app has ever had —
  * everything else (`/api/hq`, `/socket.io/`, `/caster`, `/screen`) is
  * documented in app.ts as PUBLIC AND UNAUTHENTICATED by design. Get this
  * module wrong and that stays true for the one surface it isn't supposed to.
+ *
+ * Authorization is a flat allowlist of Discord user ids
+ * (`caster_auth.allowed_discord_ids`), not a Discord server role — the
+ * caster roster is small and operator-managed by hand already (see
+ * config/online/config.yaml.example), and a role-based check would need
+ * this backend to hold a bot token with guild-member-read scope for no
+ * present benefit.
  */
 
-const SCRYPT_KEYLEN = 64;
-const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12h — a cast plus pre/post-show overrun
+const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;   // 12h — a cast plus pre/post-show overrun
+const STATE_TTL_MS = 10 * 60 * 1000;        // the OAuth round trip through Discord, generously
 
 // Manual base64url, not the `'base64url'` Buffer encoding string — that
 // encoding needs a newer Node than this repo's pinned @types/node (^14)
@@ -30,66 +38,19 @@ const toB64Url = (buf: Buffer): string =>
 const fromB64Url = (s: string): Buffer =>
     Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
 
-/** `<saltHex>:<hashHex>`. Put this string in config.yaml's `caster_auth.users`. */
-export function hashPassword(password: string): string {
-    const salt = crypto.randomBytes(16);
-    const hash = crypto.scryptSync(password, salt, SCRYPT_KEYLEN);
-    return `${salt.toString('hex')}:${hash.toString('hex')}`;
-}
-
-/**
- * Constant-time-ish by construction: scrypt runs unconditionally (the caller
- * is expected to pass a real hash even for an unknown username — see
- * DUMMY_HASH below), and the final compare is `timingSafeEqual`. Malformed
- * `stored` (wrong shape, not a fixture of this module) fails closed.
- */
-export function verifyPassword(password: string, stored: string): boolean {
-    const [saltHex, hashHex] = stored.split(':');
-    if (!saltHex || !hashHex) return false;
-    let salt: Buffer, expected: Buffer;
-    try {
-        salt = Buffer.from(saltHex, 'hex');
-        expected = Buffer.from(hashHex, 'hex');
-    } catch {
-        return false;
-    }
-    if (salt.length === 0 || expected.length === 0) return false;
-    const actual = crypto.scryptSync(password, salt, expected.length);
-    return crypto.timingSafeEqual(actual, expected);
-}
-
-// A real hash (of a password nobody will ever type) so a login attempt
-// against a NONEXISTENT username still pays scrypt's cost before failing —
-// otherwise "unknown user" returns near-instantly while "known user, wrong
-// password" takes scrypt's ~50ms, and that gap is an enumeration oracle.
-const DUMMY_HASH = hashPassword(crypto.randomBytes(32).toString('hex'));
-
-export interface CasterUser {
-    username: string;
-    password_hash: string;
-}
-
-export function findUser(username: string): CasterUser | undefined {
-    return config.caster_auth.users.find(u => u.username === username);
-}
-
-/** Always call this, even for a username `findUser` didn't return — see DUMMY_HASH. */
-export function checkPassword(username: string, password: string): boolean {
-    const user = findUser(username);
-    return verifyPassword(password, user?.password_hash ?? DUMMY_HASH) && user !== undefined;
-}
-
 function sign(body: string): string {
     return toB64Url(crypto.createHmac('sha256', config.caster_auth.session_secret).update(body).digest());
 }
 
-export function issueToken(username: string): string {
-    const body = toB64Url(Buffer.from(JSON.stringify({ u: username, exp: Date.now() + TOKEN_TTL_MS })));
+/** Self-contained signed claims: no server-side session store, so a session
+ * token and an OAuth `state` value are the same mechanism with different
+ * payloads. `exp` is required on everything signed here. */
+function signClaims(claims: Record<string, unknown> & { exp: number }): string {
+    const body = toB64Url(Buffer.from(JSON.stringify(claims)));
     return `${body}.${sign(body)}`;
 }
 
-/** The username the token was issued for, or null if missing/malformed/forged/expired. */
-export function verifyToken(token: string | undefined | null): string | null {
+function verifyClaims<T extends { exp: number }>(token: string | undefined | null): T | null {
     if (!token) return null;
     const parts = token.split('.');
     if (parts.length !== 2) return null;
@@ -102,10 +63,123 @@ export function verifyToken(token: string | undefined | null): string | null {
     }
     try {
         const claims = JSON.parse(fromB64Url(body).toString('utf-8'));
-        if (typeof claims.u !== 'string' || typeof claims.exp !== 'number') return null;
-        if (Date.now() > claims.exp) return null;
-        return claims.u;
+        if (typeof claims.exp !== 'number' || Date.now() > claims.exp) return null;
+        return claims as T;
     } catch {
         return null;
     }
+}
+
+// ─── App session token ───────────────────────────────────────────────────
+
+export interface CasterIdentity {
+    id: string;    // Discord user id (snowflake)
+    name: string;  // Discord username, display only
+}
+
+export function issueToken(identity: CasterIdentity): string {
+    return signClaims({ id: identity.id, name: identity.name, exp: Date.now() + TOKEN_TTL_MS });
+}
+
+/** The identity a token was issued for, or null if missing/malformed/forged/expired. */
+export function verifyToken(token: string | undefined | null): CasterIdentity | null {
+    const claims = verifyClaims<{ id: string; name: string; exp: number }>(token);
+    if (!claims || typeof claims.id !== 'string' || typeof claims.name !== 'string') return null;
+    return { id: claims.id, name: claims.name };
+}
+
+export function isAllowedCaster(discordUserId: string): boolean {
+    return config.caster_auth.allowed_discord_ids.includes(discordUserId);
+}
+
+// ─── OAuth state (CSRF) ──────────────────────────────────────────────────
+// No server-side pending-login store: the state value carries what the
+// callback needs (which server to send the caster back to) and is
+// self-authenticating, the same signature scheme as the session token.
+
+export function issueOAuthState(serverName: string): string {
+    return signClaims({
+        server: serverName,
+        nonce: crypto.randomBytes(8).toString('hex'),
+        exp: Date.now() + STATE_TTL_MS,
+    });
+}
+
+export function verifyOAuthState(state: string | undefined | null): { server: string } | null {
+    const claims = verifyClaims<{ server: string; nonce: string; exp: number }>(state);
+    if (!claims || typeof claims.server !== 'string') return null;
+    return { server: claims.server };
+}
+
+// ─── Discord API ─────────────────────────────────────────────────────────
+
+const DISCORD_API = 'discord.com';
+const REQUEST_TIMEOUT_MS = 8000;
+
+function httpsRequest(options: https.RequestOptions, body?: string): Promise<{ status: number; json: any }> {
+    return new Promise((resolve, reject) => {
+        const req = https.request({ ...options, host: DISCORD_API, timeout: REQUEST_TIMEOUT_MS }, (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (c) => chunks.push(c));
+            res.on('end', () => {
+                const raw = Buffer.concat(chunks).toString('utf-8');
+                try {
+                    resolve({ status: res.statusCode ?? 0, json: raw ? JSON.parse(raw) : {} });
+                } catch (err) {
+                    reject(new Error(`Discord API returned non-JSON (status ${res.statusCode}): ${raw.slice(0, 200)}`));
+                }
+            });
+        });
+        req.on('timeout', () => req.destroy(new Error('Discord API request timed out')));
+        req.on('error', reject);
+        if (body) req.write(body);
+        req.end();
+    });
+}
+
+export function discordAuthorizeUrl(state: string): string {
+    const params = new URLSearchParams({
+        client_id: config.caster_auth.discord_client_id,
+        redirect_uri: config.caster_auth.discord_redirect_uri,
+        response_type: 'code',
+        scope: 'identify',
+        state,
+        prompt: 'none',
+    });
+    return `https://discord.com/api/oauth2/authorize?${params.toString()}`;
+}
+
+/** Exchanges an OAuth `code` for the Discord identity of whoever authorized
+ * it. Throws on any transport/shape failure — the caller (the callback
+ * route) turns that into a login failure, never a silent "unauthorized". */
+export async function fetchDiscordIdentity(code: string): Promise<CasterIdentity> {
+    const body = new URLSearchParams({
+        client_id: config.caster_auth.discord_client_id,
+        client_secret: config.caster_auth.discord_client_secret,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: config.caster_auth.discord_redirect_uri,
+    }).toString();
+
+    const tokenRes = await httpsRequest({
+        path: '/api/oauth2/token',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Length': Buffer.byteLength(body),
+        },
+    }, body);
+    if (tokenRes.status !== 200 || typeof tokenRes.json?.access_token !== 'string') {
+        throw new Error(`Discord token exchange failed (status ${tokenRes.status})`);
+    }
+
+    const userRes = await httpsRequest({
+        path: '/api/users/@me',
+        method: 'GET',
+        headers: { Authorization: `Bearer ${tokenRes.json.access_token}` },
+    });
+    if (userRes.status !== 200 || typeof userRes.json?.id !== 'string') {
+        throw new Error(`Discord identity fetch failed (status ${userRes.status})`);
+    }
+    return { id: userRes.json.id, name: String(userRes.json.username ?? userRes.json.id) };
 }
