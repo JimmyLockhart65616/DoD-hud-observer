@@ -160,8 +160,10 @@ hltv_connect:
 # deployment. Rotating it invalidates every outstanding caster token at once,
 # on both sides -- which is the intended blast radius.
 #
-# Leaving this at the 'changeme' default means every forged token verifies and
-# the caster room is effectively public; app.ts warns about it at boot.
+# A weak value -- the 'changeme' default, the placeholder below left as-is, or
+# anything under 32 characters -- makes the backend REFUSE every caster token,
+# so the room stays closed rather than open to anyone who can read this file.
+# app.ts says so at boot. `openssl rand -hex 32` is a good value.
 caster_auth:
   session_secret: REPLACE_WITH_CASTER_TOKEN_SECRET_SHARED_WITH_KTPLEAGUE_GG
   # THE SWITCH. Off (default) is today's behaviour unchanged: positions ride
@@ -170,8 +172,8 @@ caster_auth:
   # On moves them to the authenticated caster:<host> room. That is VISIBLE:
   # anything reading positions off the public feed stops seeing them, and
   # /caster's minimap goes blank unless the page was opened with a
-  # ?caster_token= (which ktpleague.gg can put in a link). Agree it before
-  # throwing it, and not mid-broadcast.
+  # #caster_token= fragment (which ktpleague.gg can put in a link). Agree it
+  # before throwing it, and not mid-broadcast.
   #
   # HUD_CASTER_GATE_POSITIONS overrides this, so it can be flipped on the
   # systemd unit and flipped back without a redeploy.

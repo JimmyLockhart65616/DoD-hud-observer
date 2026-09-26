@@ -12,7 +12,10 @@
  * drift between the two implementations fails here instead of on air.
  */
 import crypto from 'crypto';
-import { issueToken, verifyToken } from '../handler/casterAuth';
+import fs from 'fs';
+import path from 'path';
+import yaml from 'js-yaml';
+import { isWeakSecret, issueToken, verifyToken } from '../handler/casterAuth';
 import config from '../config';
 
 const b64url = (buf: Buffer) =>
@@ -59,7 +62,9 @@ describe('issueToken / verifyToken', () => {
     it('rejects a token signed with a different secret', () => {
         const token = issueToken({ id: 'user-abc', name: 'JaGGoN' });
         const original = config.caster_auth.session_secret;
-        config.caster_auth.session_secret = 'a-different-secret-entirely';
+        // Long enough to count as strong, so this fails on the SIGNATURE and
+        // not on the weak-secret refusal below.
+        config.caster_auth.session_secret = 'a-different-secret-entirely-and-long-enough';
         try {
             expect(verifyToken(token)).toBeNull();
         } finally {
@@ -93,5 +98,61 @@ describe('issueToken / verifyToken', () => {
         } finally {
             spy.mockRestore();
         }
+    });
+});
+
+/**
+ * A secret an attacker can read or guess makes a signature worthless, so
+ * verification must refuse everything under one rather than trust it. These
+ * are exactly the values a deploy is most likely to be left holding: the
+ * code's own default, and the example file's placeholder copied unedited.
+ */
+describe('weak secrets fail closed', () => {
+    function withSecret(secret: string, fn: () => void) {
+        const original = config.caster_auth.session_secret;
+        config.caster_auth.session_secret = secret;
+        try { fn(); } finally { config.caster_auth.session_secret = original; }
+    }
+
+    // Read from the file itself, so renaming the placeholder cannot quietly
+    // turn it into a working secret.
+    const example = yaml.load(fs.readFileSync(
+        path.resolve(__dirname, '../../../config/online/config.yaml.example'), 'utf-8')) as any;
+    const placeholder: string = example.caster_auth.session_secret;
+
+    it.each([
+        ['the built-in default', 'changeme'],
+        ['the example config placeholder', placeholder],
+        ['a short secret', 'only-twenty-chars-xx'],
+    ])('refuses even a correctly signed token under %s', (_label, secret) => {
+        withSecret(secret, () => {
+            const token = mintLikeKeepThePrac(
+                { id: 'user-abc', name: 'JaGGoN', exp: Date.now() + 60_000 }, secret);
+            expect(verifyToken(token)).toBeNull();
+        });
+    });
+
+    it('treats a long random secret as strong', () => {
+        expect(isWeakSecret(crypto.randomBytes(32).toString('hex'))).toBe(false);
+    });
+});
+
+/**
+ * No revocation exists short of rotating the secret, so the claimed lifetime
+ * is bounded here regardless of what the minting side put in `exp`.
+ */
+describe('token lifetime ceiling', () => {
+    const secret = () => config.caster_auth.session_secret;
+
+    it('accepts a token at the normal 12h lifetime', () => {
+        const token = mintLikeKeepThePrac(
+            { id: 'user-abc', name: 'JaGGoN', exp: Date.now() + 12 * 60 * 60 * 1000 }, secret());
+        expect(verifyToken(token)).toEqual({ id: 'user-abc', name: 'JaGGoN' });
+    });
+
+    it('rejects a validly signed token that claims to live for years', () => {
+        const token = mintLikeKeepThePrac(
+            { id: 'user-abc', name: 'JaGGoN', exp: Date.now() + 10 * 365 * 24 * 60 * 60 * 1000 }, secret());
+        expect(verifyToken(token)).toBeNull();
     });
 });

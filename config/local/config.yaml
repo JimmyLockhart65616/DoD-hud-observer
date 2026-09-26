@@ -129,8 +129,10 @@ hltv_connect:
 #
 #   HUD_CASTER_SESSION_SECRET  -> session_secret
 #
-# Left at a dev value locally. In production a default secret means every
-# forged token verifies, so app.ts warns loudly about it at boot.
+# Left at a dev value locally (exactly 32 characters, so it counts as strong
+# for tests). A weak secret -- the 'changeme' default, the example file's
+# placeholder, or under 32 characters -- makes the backend refuse every token,
+# and app.ts says so at boot.
 caster_auth:
   session_secret: local-dev-only-not-a-real-secret
   # Off = positions ride player_state into the public rooms, exactly as they
