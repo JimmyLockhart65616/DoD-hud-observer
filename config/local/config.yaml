@@ -118,3 +118,21 @@ hltv_connect:
   host: ""
   ports: {}
 
+# The one login this app has: /caster and the position stream it depends on.
+# Everything else (/screen, /hq, /watch, /api/*) stays public and unauthenticated
+# as it always has been -- see broadcast-director's 2026-09-25 access-control
+# decision for why /caster specifically needed this.
+#
+# `npm run caster:hash-password -- '<password>'` prints a password_hash to
+# paste below. Never put a plaintext password here.
+#
+#   HUD_CASTER_SESSION_SECRET  -> session_secret
+#
+# Empty by default: with no users configured, every login attempt is refused,
+# which is the safe default rather than an open gate. Add your own local
+# account with `npm run caster:hash-password -- 'your-password'` and paste
+# the result below when you need to exercise the logged-in path on a laptop.
+caster_auth:
+  session_secret: local-dev-only-not-a-real-secret
+  users: []
+

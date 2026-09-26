@@ -18,7 +18,8 @@
     "plugin:smoke": "bash scripts/plugin-smoke.sh",
     "proxy:smoke": "bash scripts/proxy-smoke.sh",
     "bench:ingest": "ts-node --script-mode scripts/bench-ingest.ts",
-    "assets:weapons": "ts-node --script-mode scripts/convert-weapon-sprites.ts"
+    "assets:weapons": "ts-node --script-mode scripts/convert-weapon-sprites.ts",
+    "caster:hash-password": "ts-node --script-mode scripts/hash-caster-password.ts"
   },
   "repository": {
     "type": "git",

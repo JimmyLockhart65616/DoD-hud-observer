@@ -34,6 +34,86 @@
   font-size: 16px;
 }
 
+/* ── Login gate ───────────────────────────────────────────────────── */
+
+.caster-login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.caster-login {
+  width: 100%;
+  max-width: 320px;
+  background-color: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  border-top: 2px solid rgba(255, 255, 255, 0.12);
+  padding: 28px 26px;
+}
+
+.caster-login h1 {
+  font-size: 18px;
+  margin: 0 0 6px;
+}
+
+.caster-login-note {
+  color: #8990b5;
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 0 0 20px;
+}
+
+.caster-login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: #9aa0c0;
+}
+
+.caster-login-field input {
+  font-size: 14px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background-color: rgba(0, 0, 0, 0.3);
+  color: #d8dae8;
+}
+
+.caster-login-error {
+  color: #ffb8b8;
+  font-size: 12.5px;
+  margin: -4px 0 14px;
+}
+
+.caster-login button {
+  width: 100%;
+  padding: 9px;
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: 4px;
+  border: none;
+  background-color: #4c8dff;
+  color: #0a0b14;
+  cursor: pointer;
+}
+
+.caster-login button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.caster-logout {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #9aa0c0;
+  border-radius: 3px;
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
 /* ── Header: score, clock, half, server ──────────────────────────── */
 
 .caster-header {

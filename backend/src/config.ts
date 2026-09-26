@@ -27,6 +27,18 @@ export interface Config {
     hltv_sync: HltvSyncConfig;
     hltv_connect: HltvConnectConfig;
     stats_db: StatsDbConfig;
+    caster_auth: CasterAuthConfig;
+}
+
+/**
+ * The one login this app has: named casters, each with their own credential,
+ * gating /caster and the position stream it depends on (see
+ * backend/src/handler/casterAuth.ts). `password_hash` is `<saltHex>:<hashHex>`
+ * from that module's `hashPassword` — never a plaintext password in config.
+ */
+export interface CasterAuthConfig {
+    session_secret: string;
+    users: { username: string; password_hash: string }[];
 }
 
 /**
@@ -87,6 +99,23 @@ function loadConfig(): Config {
         hltv_sync: loadHltvSync(file.hltv_sync),
         hltv_connect: loadHltvConnect(file.hltv_connect),
         stats_db: loadStatsDb(file.stats_db),
+        caster_auth: loadCasterAuth(file.caster_auth),
+    };
+}
+
+/** Empty user list by default -- with nobody configured, checkPassword refuses everybody, which is the safe default rather than an open gate. */
+function loadCasterAuth(file: any): CasterAuthConfig {
+    const users: { username: string; password_hash: string }[] = [];
+    if (Array.isArray(file?.users)) {
+        for (const u of file.users) {
+            if (typeof u?.username === 'string' && typeof u?.password_hash === 'string') {
+                users.push({ username: u.username, password_hash: u.password_hash });
+            }
+        }
+    }
+    return {
+        session_secret: process.env.HUD_CASTER_SESSION_SECRET ?? file?.session_secret ?? 'changeme',
+        users,
     };
 }
 

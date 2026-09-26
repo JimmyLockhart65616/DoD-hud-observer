@@ -9,6 +9,7 @@ import { MatchRecorder } from './handler/matchRecorder';
 import { MetricsCollector } from './handler/metrics';
 import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './handler/ingest';
 import { pseudonymize, resolvePlayerId, rekeyByToken } from './handler/pseudonym';
+import { checkPassword, issueToken } from './handler/casterAuth';
 import { buildHqOverview } from './handler/hqBoard';
 import { buildServerList } from './handler/serverList';
 import { createSocketServer } from './socket/socket';
@@ -63,6 +64,23 @@ app.use(express.json({ limit: '1mb' }));
 app.set('json spaces', 2);
 app.disable('x-powered-by');
 app.use(cors());
+
+// Caster login. The one authenticated surface in this app -- see
+// backend/src/handler/casterAuth.ts. Deliberately generic on failure (never
+// "unknown username" vs "wrong password") so this endpoint can't be used to
+// enumerate configured caster usernames.
+app.post('/api/caster-auth/login', (req, res) => {
+    const { username, password } = req.body ?? {};
+    if (typeof username !== 'string' || typeof password !== 'string') {
+        res.status(400).json({ error: 'username and password required' });
+        return;
+    }
+    if (!checkPassword(username, password)) {
+        res.status(401).json({ error: 'invalid credentials' });
+        return;
+    }
+    res.json({ token: issueToken(username) });
+});
 
 // Health check
 app.get('/health', (_req, res) => {
@@ -383,4 +401,6 @@ app.listen(config.api.port, () => {
 });
 
 console.log(`[config] Auth key: ${config.ingest.auth_key === 'changeme' ? '⚠ DEFAULT (change me!)' : '***set***'}`);
+console.log(`[config] Caster session secret: ${config.caster_auth.session_secret === 'changeme' ? '⚠ DEFAULT (change me!)' : '***set***'}`);
+console.log(`[config] Caster users configured: ${config.caster_auth.users.length}`);
 console.log(`[config] Matches dir: ${path.resolve(config.storage.matches_dir)}`);

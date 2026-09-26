@@ -17,6 +17,21 @@ const matchIdParam = urlParams.get('match');
 const serverParam = urlParams.get('server');
 const isReplay = urlParams.get('replay') === 'true';
 
+// Caster-only room (live positions, see backend/src/handler/ingest.ts's
+// player_state split). Set post-login by Caster.jsx — nothing else in this
+// file knows about auth, so this stays a plain value the connect handler
+// below re-sends on every (re)connect, the same way join_server/join_match
+// already do for their own params.
+let casterSession = null; // { server, token } | null
+
+/** Called by Caster.jsx once logged in, and with (null, null) on logout. */
+export function setCasterSession(serverName, token) {
+    casterSession = serverName && token ? { server: serverName, token } : null;
+    if (casterSession && socket.connected) {
+        socket.emit('join_caster', casterSession);
+    }
+}
+
 socket.on('connect', () => {
     if (isReplay) {
         // Replay mode — don't join any live room, events come from Replay component
@@ -34,6 +49,11 @@ socket.on('connect', () => {
         // Legacy fallback — join the old broadcast room
         socket.emit('hud_socket');
         console.log('[socket] No match/server param, joined legacy hud_socket room');
+    }
+    // Independent of the branch above: a caster session survives a
+    // reconnect same as join_server does, by re-sending on every connect.
+    if (casterSession) {
+        socket.emit('join_caster', casterSession);
     }
 });
 
@@ -951,17 +971,33 @@ export const SocketStoreComponent = () => {
                     // indistinguishable from empty), so on an older module this
                     // arm simply never fires.
                     nades: typeof s.nades === 'number' && s.nades >= 0 ? s.nades : null,
-
-                    // Minimap position. An EXACT (0,0) is the plugin saying it
-                    // could not read the origin, not a player standing on the
-                    // world centre — mapped to null so the marker is hidden
-                    // rather than parking every unreadable player in one spot.
-                    // A real coordinate is never exactly 0 on both axes on any
-                    // DoD map, and the plugin sends integers.
-                    pos: (typeof s.x === 'number' && typeof s.y === 'number' && !(s.x === 0 && s.y === 0))
-                        ? { x: s.x, y: s.y }
-                        : null,
+                    // `pos` is NOT set here any more — positions moved off the
+                    // public player_state event to the caster-only
+                    // player_positions event (2026-09-25 access-control
+                    // change; see that handler above). Touching `.pos` on
+                    // this handler at all would fight it: the two events
+                    // arrive on independent sockets/timers, and whichever
+                    // fired most recently would win, flickering an
+                    // authenticated caster's positions to null 4x/sec.
                 };
+            });
+            setAlliesPlayers(apply);
+            setAxisPlayers(apply);
+        });
+
+        // Caster-only positions (see setCasterSession above) — a SEPARATE event
+        // from player_state now, not a field on it. Never arrives at all unless
+        // this session authenticated and joined `caster:${server}`; every other
+        // consumer of this store (every page but /caster) simply never sees
+        // `.pos` set, the same as before positions existed on the wire at all.
+        gameEvents.on('player_positions', (raw) => {
+            const e = JSON.parse(raw);
+            if (!Array.isArray(e.players)) return;
+            const byId = {};
+            e.players.forEach(p => { byId[p.user_id] = p; });
+            const apply = (prev) => prev.map(pl => {
+                const s = byId[pl.user_id];
+                return s ? { ...pl, pos: { x: s.x, y: s.y } } : pl;
             });
             setAlliesPlayers(apply);
             setAxisPlayers(apply);

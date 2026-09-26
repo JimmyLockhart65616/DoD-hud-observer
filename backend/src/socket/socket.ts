@@ -3,6 +3,7 @@ import { createServer } from 'http';
 import { MatchRecorder } from '../handler/matchRecorder';
 import { getServerSnapshot } from '../handler/ingest';
 import { pseudonymize } from '../handler/pseudonym';
+import { verifyToken } from '../handler/casterAuth';
 
 /**
  * Creates a Socket.IO server with match-based room routing.
@@ -85,6 +86,30 @@ export function createSocketServer(origin: string, recorder: MatchRecorder) {
         socket.on('leave_server', (serverName: string) => {
             socket.leave(`server:${serverName}`);
             console.log(`[socket] ${socket.id} left server room server:${serverName}`);
+        });
+
+        // Caster-only: join the room that carries live positions
+        // ('player_positions', see makeFireToSockets in ingest.ts). Gated on a
+        // session token from /api/caster-auth/login -- `server:${serverName}`
+        // above stays unauthenticated for /screen and everything else, and
+        // never carries positions. No snapshot replay here (unlike
+        // join_server): the next player_state tick is at most 250ms away at
+        // this feed's 4 Hz, which is not worth a second state-cache read for.
+        socket.on('join_caster', (payload: { server?: string; token?: string }) => {
+            const username = verifyToken(payload?.token);
+            if (!username) {
+                socket.emit('caster_auth_error', JSON.stringify({ reason: 'invalid_or_expired_token' }));
+                return;
+            }
+            const serverName = payload?.server;
+            if (!serverName) return;
+            socket.join(`caster:${serverName}`);
+            console.log(`[socket] ${socket.id} joined caster room caster:${serverName} as ${username}`);
+        });
+
+        socket.on('leave_caster', (serverName: string) => {
+            socket.leave(`caster:${serverName}`);
+            console.log(`[socket] ${socket.id} left caster room caster:${serverName}`);
         });
 
         // Legacy: frontend emits 'hud_socket' to join — bridge to default match

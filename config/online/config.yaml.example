@@ -147,3 +147,21 @@ hltv_connect:
     "KTP - Chicago 2":     27041
     "KTP - Chicago 3":     27042
     "KTP - Chicago 4":     27043
+
+# The one login this app has: /caster and the position stream it depends on.
+# Everything else (/screen, /hq, /watch, /api/*) stays public and
+# unauthenticated as it always has been.
+#
+# session_secret: a long random value, distinct from ingest.auth_key and the
+# HLTV rcon passwords above -- do NOT commit the real value; set it via
+# HUD_CASTER_SESSION_SECRET on the systemd unit instead, same pattern as
+# ingest.auth_key.
+#
+# users: one entry per caster, named, each with their own credential.
+# `npm run caster:hash-password -- '<password>'` on this box prints the
+# password_hash to paste below -- never a plaintext password here.
+caster_auth:
+  session_secret: REPLACE_WITH_CASTER_SESSION_SECRET
+  users:
+    - username: REPLACE_WITH_CASTER_USERNAME
+      password_hash: REPLACE_WITH_HASH_FROM_caster:hash-password
