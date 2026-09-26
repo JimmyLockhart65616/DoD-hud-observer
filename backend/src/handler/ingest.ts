@@ -5,6 +5,7 @@ import { MetricsCollector } from './metrics';
 import { HltvDelayBuffer } from './hltvDelayBuffer';
 import { HltvSyncService } from './hltvSync';
 import { pseudonymize } from './pseudonym';
+import config from '../config';
 
 // ─── Per-Server State Cache ──────────────────────────────────────────────────
 // Tracks the latest game state per server so late-joining frontends get a
@@ -603,6 +604,14 @@ export function getCachedServerView(server: string): CachedServerView {
  * socket rooms. Exported so app.ts can wire it as the buffer's onFire
  * callback exactly once at startup, rather than per ingest router.
  */
+/** `player_state.players[]` entries carrying a readable x/y (the plugin sends
+ * exactly (0,0) when it could not read the origin — see Socket.jsx's own
+ * comment on the same convention). Shared by the split below so the public
+ * and caster-only payloads can never disagree about which players had one. */
+function readablePosition(p: any): boolean {
+    return typeof p?.x === 'number' && typeof p?.y === 'number' && !(p.x === 0 && p.y === 0);
+}
+
 export function makeFireToSockets(io: SocketServer) {
     return (server: string, matchId: string | undefined, event: any, enqueuedAt?: number) => {
         // Cache FIRST, with the real ids. The state cache feeds late-joiner
@@ -611,10 +620,47 @@ export function makeFireToSockets(io: SocketServer) {
         updateServerState(server, event, enqueuedAt);
 
         // ...and publish the pseudonymized copy. This is the boundary: past
-        // this line no SteamID reaches a socket client. Stringified once rather
-        // than per room — four identical JSON.stringify calls of a 12-player
-        // player_state at 4 Hz x 24 servers is real work for no reason.
-        const payload = JSON.stringify(pseudonymize(event, server));
+        // this line no SteamID reaches a socket client.
+        const pseudonymized = pseudonymize(event, server);
+
+        // player_state carries live positions, and they are the ONE field on
+        // the public, unauthenticated `server:${server}` room (the room
+        // /screen also joins) worth withholding: they say where everyone is,
+        // live. Moving them is gated on `caster_auth.gate_positions` because
+        // it is a VISIBLE change to every existing reader of that feed — off
+        // (the default) this branch never runs and the fan-out below is
+        // byte-for-byte what it always was.
+        //
+        // On, only x/y move, into their own event on the authenticated room,
+        // so a public listener's parser never sees the field exist at all
+        // rather than seeing it nulled out. Everything else in the snapshot
+        // (weapon, nades, prone, waves, scoring) stays public either way.
+        if (config.caster_auth.gate_positions
+            && pseudonymized.event === 'player_state' && Array.isArray(pseudonymized.players)) {
+            const positions = pseudonymized.players
+                .filter(readablePosition)
+                .map((p: any) => ({ user_id: p.user_id, x: p.x, y: p.y }));
+            const publicPlayers = pseudonymized.players.map((p: any) => {
+                const { x, y, ...rest } = p;
+                return rest;
+            });
+            const publicPayload = JSON.stringify({ ...pseudonymized, players: publicPlayers });
+            if (matchId) io.to(matchId).emit('player_state', publicPayload);
+            io.to(`server:${server}`).emit('player_state', publicPayload);
+            io.to('all').emit('player_state', publicPayload);
+            io.to('hud_socket').emit('player_state', publicPayload);
+
+            if (positions.length > 0) {
+                const casterPayload = JSON.stringify({ event: 'player_positions', players: positions });
+                io.to(`caster:${server}`).emit('player_positions', casterPayload);
+            }
+            return;
+        }
+
+        // Stringified once rather than per room — four identical
+        // JSON.stringify calls of a 12-player event at 4 Hz x 24 servers is
+        // real work for no reason.
+        const payload = JSON.stringify(pseudonymized);
         if (matchId) io.to(matchId).emit(event.event, payload);
         io.to(`server:${server}`).emit(event.event, payload);
         io.to('all').emit(event.event, payload);

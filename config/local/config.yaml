@@ -118,3 +118,23 @@ hltv_connect:
   host: ""
   ports: {}
 
+# Shared HMAC secret for caster tokens. ktpleague.gg (keep-the-prac) knows who
+# is logged in -- it runs Supabase Auth with the Discord provider -- so IT
+# decides who may cast and mints a signed token; this backend only verifies
+# the signature before letting a socket join the position-carrying
+# `caster:<host>` room. Both sides must hold the SAME value.
+#
+# There is no login, no OAuth and no user list here on purpose: a second
+# account system for the same people is what drew pushed back on (2026-09-25).
+#
+#   HUD_CASTER_SESSION_SECRET  -> session_secret
+#
+# Left at a dev value locally. In production a default secret means every
+# forged token verifies, so app.ts warns loudly about it at boot.
+caster_auth:
+  session_secret: local-dev-only-not-a-real-secret
+  # Off = positions ride player_state into the public rooms, exactly as they
+  # always have. On = they move to the authenticated caster:<host> room, which
+  # blanks the minimap for anyone without a token. Flip deliberately, not as a
+  # side effect of deploying.
+  gate_positions: false

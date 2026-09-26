@@ -64,6 +64,10 @@ app.set('json spaces', 2);
 app.disable('x-powered-by');
 app.use(cors());
 
+// NO caster-login route here on purpose. ktpleague.gg decides who may cast
+// (it already knows who is logged in) and mints the token; this backend only
+// verifies the signature on join_caster. See handler/casterAuth.ts.
+
 // Health check
 app.get('/health', (_req, res) => {
     res.json({ status: 'ok', active_matches: recorder.getActiveMatchIds().length });
@@ -383,4 +387,9 @@ app.listen(config.api.port, () => {
 });
 
 console.log(`[config] Auth key: ${config.ingest.auth_key === 'changeme' ? '⚠ DEFAULT (change me!)' : '***set***'}`);
+// Shared with ktpleague.gg, which signs caster tokens with it. A default
+// here means every forged token verifies, so it is called out like the
+// ingest key above rather than left to a config review.
+console.log(`[config] Caster token secret: ${config.caster_auth.session_secret === 'changeme' ? '⚠ DEFAULT (change me!) — caster room is effectively open' : '***set***'}`);
+console.log(`[config] Position gating: ${config.caster_auth.gate_positions ? 'ON — positions are caster-only' : 'off — positions are public, as before'}`);
 console.log(`[config] Matches dir: ${path.resolve(config.storage.matches_dir)}`);

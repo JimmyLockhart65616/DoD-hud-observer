@@ -17,6 +17,33 @@ const matchIdParam = urlParams.get('match');
 const serverParam = urlParams.get('server');
 const isReplay = urlParams.get('replay') === 'true';
 
+// Caster-only room: live player positions, and nothing else, now travel
+// there rather than on the public `server:<host>` room /screen also joins
+// (see backend/src/handler/ingest.ts's player_state split). Joining needs a
+// token, and THIS APP NEVER MINTS ONE — ktpleague.gg does, for a caster it
+// has already authenticated, signed with the shared secret this backend
+// verifies. There is deliberately no login here.
+//
+// `?caster_token=` is how that token arrives: the website links into this
+// page with one appended, so the minimap (the only consumer of positions
+// here) keeps working for an authorized caster without this app growing an
+// account system. No token, no positions — the page renders fine without
+// them, the minimap simply has no markers to draw.
+const casterTokenParam = urlParams.get('caster_token');
+
+let casterSession = serverParam && casterTokenParam
+    ? { server: serverParam, token: casterTokenParam }
+    : null;
+
+/** Set or clear the caster session at runtime (a page that obtains a token
+ * some other way than the URL). Re-sent on every reconnect, below. */
+export function setCasterSession(serverName, token) {
+    casterSession = serverName && token ? { server: serverName, token } : null;
+    if (casterSession && socket.connected) {
+        socket.emit('join_caster', casterSession);
+    }
+}
+
 socket.on('connect', () => {
     if (isReplay) {
         // Replay mode — don't join any live room, events come from Replay component
@@ -34,6 +61,11 @@ socket.on('connect', () => {
         // Legacy fallback — join the old broadcast room
         socket.emit('hud_socket');
         console.log('[socket] No match/server param, joined legacy hud_socket room');
+    }
+    // Independent of the branch above: a caster session survives a
+    // reconnect same as join_server does, by re-sending on every connect.
+    if (casterSession) {
+        socket.emit('join_caster', casterSession);
     }
 });
 
@@ -700,6 +732,15 @@ export function addStatRows(a, b) {
     return out;
 }
 
+/** `{ pos }` when a player_state entry carries readable coordinates, `{}` when
+ * it carries none — an absent x/y must leave an existing `.pos` alone, since
+ * the caster-only `player_positions` event may be the thing maintaining it.
+ * An exact (0,0) is the plugin's "could not read the origin", so it clears. */
+function positionPatch(s) {
+    if (typeof s.x !== 'number' || typeof s.y !== 'number') return {};
+    return { pos: (s.x === 0 && s.y === 0) ? null : { x: s.x, y: s.y } };
+}
+
 function updatePlayer(players, user_id, updater) {
     const idx = players.findIndex(p => p.user_id === user_id);
     if (idx === -1) return players;
@@ -952,16 +993,42 @@ export const SocketStoreComponent = () => {
                     // arm simply never fires.
                     nades: typeof s.nades === 'number' && s.nades >= 0 ? s.nades : null,
 
-                    // Minimap position. An EXACT (0,0) is the plugin saying it
-                    // could not read the origin, not a player standing on the
-                    // world centre — mapped to null so the marker is hidden
-                    // rather than parking every unreadable player in one spot.
-                    // A real coordinate is never exactly 0 on both axes on any
-                    // DoD map, and the plugin sends integers.
-                    pos: (typeof s.x === 'number' && typeof s.y === 'number' && !(s.x === 0 && s.y === 0))
-                        ? { x: s.x, y: s.y }
-                        : null,
+                    // Position, when this snapshot carries one. Both shapes
+                    // are live depending on the backend's
+                    // `caster_auth.gate_positions`: OFF (default) x/y ride
+                    // here as they always have; ON they arrive on the
+                    // caster-only `player_positions` event instead and this
+                    // payload has no x/y at all.
+                    //
+                    // So an ABSENT x/y leaves `.pos` untouched rather than
+                    // nulling it. Nulling would fight the other handler —
+                    // the two events arrive on independent timers, and
+                    // whichever fired last would win, flickering an
+                    // authenticated caster's markers 4x/sec.
+                    //
+                    // An EXACT (0,0) is still the plugin saying it could not
+                    // read the origin, not a player at the world centre, and
+                    // is mapped to null so the marker hides.
+                    ...positionPatch(s),
                 };
+            });
+            setAlliesPlayers(apply);
+            setAxisPlayers(apply);
+        });
+
+        // Caster-only positions (see setCasterSession above) — a SEPARATE event
+        // from player_state now, not a field on it. Never arrives at all unless
+        // this session authenticated and joined `caster:${server}`; every other
+        // consumer of this store (every page but /caster) simply never sees
+        // `.pos` set, the same as before positions existed on the wire at all.
+        gameEvents.on('player_positions', (raw) => {
+            const e = JSON.parse(raw);
+            if (!Array.isArray(e.players)) return;
+            const byId = {};
+            e.players.forEach(p => { byId[p.user_id] = p; });
+            const apply = (prev) => prev.map(pl => {
+                const s = byId[pl.user_id];
+                return s ? { ...pl, pos: { x: s.x, y: s.y } } : pl;
             });
             setAlliesPlayers(apply);
             setAxisPlayers(apply);

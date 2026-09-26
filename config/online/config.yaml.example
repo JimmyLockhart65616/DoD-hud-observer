@@ -147,3 +147,32 @@ hltv_connect:
     "KTP - Chicago 2":     27041
     "KTP - Chicago 3":     27042
     "KTP - Chicago 4":     27043
+
+# Shared HMAC secret for caster tokens. ktpleague.gg (keep-the-prac) decides
+# who may cast -- it already knows who is logged in (Supabase Auth, Discord
+# provider) -- and mints a signed token for that user. This backend only
+# verifies the signature before letting a socket join the `caster:<host>`
+# room, which is the only place live player positions go.
+#
+# BOTH SIDES MUST HOLD THE SAME VALUE. Generate one long random string, put it
+# here (or better, in HUD_CASTER_SESSION_SECRET on the systemd unit, same
+# pattern as ingest.auth_key) and give the identical value to keep-the-prac's
+# deployment. Rotating it invalidates every outstanding caster token at once,
+# on both sides -- which is the intended blast radius.
+#
+# Leaving this at the 'changeme' default means every forged token verifies and
+# the caster room is effectively public; app.ts warns about it at boot.
+caster_auth:
+  session_secret: REPLACE_WITH_CASTER_TOKEN_SECRET_SHARED_WITH_KTPLEAGUE_GG
+  # THE SWITCH. Off (default) is today's behaviour unchanged: positions ride
+  # player_state into the public rooms and nothing is withheld from anyone.
+  #
+  # On moves them to the authenticated caster:<host> room. That is VISIBLE:
+  # anything reading positions off the public feed stops seeing them, and
+  # /caster's minimap goes blank unless the page was opened with a
+  # ?caster_token= (which ktpleague.gg can put in a link). Agree it before
+  # throwing it, and not mid-broadcast.
+  #
+  # HUD_CASTER_GATE_POSITIONS overrides this, so it can be flipped on the
+  # systemd unit and flipped back without a redeploy.
+  gate_positions: false

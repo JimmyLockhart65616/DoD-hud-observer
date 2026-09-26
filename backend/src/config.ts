@@ -27,6 +27,32 @@ export interface Config {
     hltv_sync: HltvSyncConfig;
     hltv_connect: HltvConnectConfig;
     stats_db: StatsDbConfig;
+    caster_auth: CasterAuthConfig;
+}
+
+/**
+ * Shared HMAC secret for caster tokens. ktpleague.gg mints them for its own
+ * authorized, logged-in users; this backend only verifies the signature
+ * before letting a socket join the position-carrying `caster:<host>` room
+ * (see backend/src/handler/casterAuth.ts). Both sides must hold the SAME
+ * value, and rotating it invalidates every outstanding token at once.
+ *
+ * No user list, no OAuth credentials: this app does not decide who may cast.
+ */
+export interface CasterAuthConfig {
+    session_secret: string;
+    /**
+     * OFF by default, and off is the pre-existing behaviour exactly: positions
+     * ride `player_state` into the public rooms as they always have, and
+     * nothing is withheld from anyone.
+     *
+     * Turning it ON moves them to the authenticated `caster:<host>` room. That
+     * is a VISIBLE change to anything reading positions off the public feed —
+     * `/caster`'s minimap goes blank unless it carries a token — so it is a
+     * deliberate switch someone throws after agreeing it, not a consequence of
+     * deploying this code. Reversible without a redeploy, which is the point.
+     */
+    gate_positions: boolean;
 }
 
 /**
@@ -87,6 +113,14 @@ function loadConfig(): Config {
         hltv_sync: loadHltvSync(file.hltv_sync),
         hltv_connect: loadHltvConnect(file.hltv_connect),
         stats_db: loadStatsDb(file.stats_db),
+        caster_auth: loadCasterAuth(file.caster_auth),
+    };
+}
+
+function loadCasterAuth(file: any): CasterAuthConfig {
+    return {
+        session_secret: process.env.HUD_CASTER_SESSION_SECRET ?? file?.session_secret ?? 'changeme',
+        gate_positions: bool(process.env.HUD_CASTER_GATE_POSITIONS, file?.gate_positions ?? false),
     };
 }
 
