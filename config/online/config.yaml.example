@@ -148,33 +148,19 @@ hltv_connect:
     "KTP - Chicago 3":     27042
     "KTP - Chicago 4":     27043
 
-# The one login this app has: /caster and the position stream it depends on.
-# Everything else (/screen, /hq, /watch, /api/*) stays public and
-# unauthenticated as it always has been. Discord OAuth2 rather than a
-# password this app invents -- casters already have Discord accounts for
-# everything else in the league (drew, 2026-09-25).
+# Shared HMAC secret for caster tokens. ktpleague.gg (keep-the-prac) decides
+# who may cast -- it already knows who is logged in (Supabase Auth, Discord
+# provider) -- and mints a signed token for that user. This backend only
+# verifies the signature before letting a socket join the `caster:<host>`
+# room, which is the only place live player positions go.
 #
-# session_secret: a long random value, distinct from ingest.auth_key and the
-# HLTV rcon passwords above -- do NOT commit the real value; set it via
-# HUD_CASTER_SESSION_SECRET on the systemd unit instead, same pattern as
-# ingest.auth_key.
+# BOTH SIDES MUST HOLD THE SAME VALUE. Generate one long random string, put it
+# here (or better, in HUD_CASTER_SESSION_SECRET on the systemd unit, same
+# pattern as ingest.auth_key) and give the identical value to keep-the-prac's
+# deployment. Rotating it invalidates every outstanding caster token at once,
+# on both sides -- which is the intended blast radius.
 #
-# discord_client_id / discord_client_secret: from an EXISTING KTP Discord
-# application (reused -- ask afraznein which one, e.g. the admin bot's),
-# not a fresh registration for this app. Whoever holds that app's settings
-# in Discord's developer portal must add discord_redirect_uri below to its
-# OAuth2 "Redirects" list, or every login attempt will fail at Discord's end
-# before it ever reaches this backend. Set the secret via
-# HUD_CASTER_DISCORD_CLIENT_SECRET, never committed here.
-#
-# allowed_discord_ids: one entry per authorized caster, their Discord user id
-# (the numeric snowflake, NOT their username -- right-click their name in
-# Discord with Developer Mode on, "Copy User ID"). Empty refuses everyone,
-# the safe default; this is a flat allowlist, not a server-role check.
+# Leaving this at the 'changeme' default means every forged token verifies and
+# the caster room is effectively public; app.ts warns about it at boot.
 caster_auth:
-  session_secret: REPLACE_WITH_CASTER_SESSION_SECRET
-  discord_client_id: REPLACE_WITH_EXISTING_KTP_DISCORD_APP_CLIENT_ID
-  discord_client_secret: REPLACE_WITH_EXISTING_KTP_DISCORD_APP_CLIENT_SECRET
-  discord_redirect_uri: "https://hud.ktpdod.com/api/caster-auth/discord/callback"
-  allowed_discord_ids:
-    - REPLACE_WITH_CASTER_DISCORD_USER_ID
+  session_secret: REPLACE_WITH_CASTER_TOKEN_SECRET_SHARED_WITH_KTPLEAGUE_GG

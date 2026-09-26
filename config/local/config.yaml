@@ -118,26 +118,18 @@ hltv_connect:
   host: ""
   ports: {}
 
-# The one login this app has: /caster and the position stream it depends on.
-# Everything else (/screen, /hq, /watch, /api/*) stays public and unauthenticated
-# as it always has been -- see broadcast-director's 2026-09-25 access-control
-# decision for why /caster specifically needed this, and why it's Discord OAuth2
-# (an existing KTP Discord app, reused) rather than a password this app invents.
+# Shared HMAC secret for caster tokens. ktpleague.gg (keep-the-prac) knows who
+# is logged in -- it runs Supabase Auth with the Discord provider -- so IT
+# decides who may cast and mints a signed token; this backend only verifies
+# the signature before letting a socket join the position-carrying
+# `caster:<host>` room. Both sides must hold the SAME value.
 #
-#   HUD_CASTER_SESSION_SECRET          -> session_secret
-#   HUD_CASTER_DISCORD_CLIENT_ID       -> discord_client_id
-#   HUD_CASTER_DISCORD_CLIENT_SECRET   -> discord_client_secret
-#   HUD_CASTER_DISCORD_REDIRECT_URI    -> discord_redirect_uri
+# There is no login, no OAuth and no user list here on purpose: a second
+# account system for the same people is what drew pushed back on (2026-09-25).
 #
-# Discord login is disabled (the login route answers 503) until
-# discord_client_id is set. allowed_discord_ids empty means everyone is
-# refused even with a working Discord app configured -- the safe default,
-# not an open gate. To exercise the logged-in path on a laptop you need a
-# real (test) Discord application; there is no local-only stand-in.
+#   HUD_CASTER_SESSION_SECRET  -> session_secret
+#
+# Left at a dev value locally. In production a default secret means every
+# forged token verifies, so app.ts warns loudly about it at boot.
 caster_auth:
   session_secret: local-dev-only-not-a-real-secret
-  discord_client_id: ""
-  discord_client_secret: ""
-  discord_redirect_uri: "http://localhost:3000/api/caster-auth/discord/callback"
-  allowed_discord_ids: []
-

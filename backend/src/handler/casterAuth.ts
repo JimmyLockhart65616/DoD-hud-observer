@@ -1,33 +1,45 @@
 import crypto from 'crypto';
-import https from 'https';
 import config from '../config';
 
 /**
- * Caster login: Discord OAuth2 (Authorization Code flow) + signed session
- * tokens. Casters already have Discord accounts for everything else in this
- * league — a password this module generated and someone had to relay over
- * DM was worse UX for zero security benefit, once drew asked why we weren't
- * just using Discord (2026-09-25).
+ * Caster tokens: verification only. This backend does NOT decide who may
+ * cast, and has no login UI, no OAuth flow and no user list of its own.
  *
- * No JWT library for the session token — Node's own `crypto` already has
- * everything a fixed-claim HMAC-signed token needs. Same "dependency-free
- * where the standard library already does it" call as flagswing.js.
+ * ktpleague.gg (keep-the-prac) already knows who is logged in — it runs
+ * Supabase Auth with the Discord provider, and resolves the session
+ * server-side on every request. Building a second login here meant a second
+ * account system for the same people, which is what drew pushed back on
+ * (2026-09-25). So the split is:
  *
- * This is the ONLY auth any viewer-facing page in this app has ever had —
- * everything else (`/api/hq`, `/socket.io/`, `/caster`, `/screen`) is
- * documented in app.ts as PUBLIC AND UNAUTHENTICATED by design. Get this
- * module wrong and that stays true for the one surface it isn't supposed to.
+ *   keep-the-prac   decides WHO. It authorizes one of its own logged-in
+ *                   users and mints a short-lived token with the scheme
+ *                   below, signed with the SHARED `caster_auth.session_secret`.
+ *   this backend    verifies the signature, and nothing else. A valid
+ *                   signature IS the authorization.
  *
- * Authorization is a flat allowlist of Discord user ids
- * (`caster_auth.allowed_discord_ids`), not a Discord server role — the
- * caster roster is small and operator-managed by hand already (see
- * config/online/config.yaml.example), and a role-based check would need
- * this backend to hold a bot token with guild-member-read scope for no
- * present benefit.
+ * The shared secret is the whole coupling: no cross-service call at join
+ * time, no Supabase client here, no knowledge of who the casters are.
+ * Rotating it invalidates every outstanding token on both sides at once,
+ * which is the intended blast radius.
+ *
+ * What this gates: the `caster:<host>` socket room, the only place live
+ * player positions go (see makeFireToSockets in ingest.ts). Everything else
+ * this app serves — `/api/hq`, `/socket.io/`, `/caster`, `/screen` — is
+ * PUBLIC AND UNAUTHENTICATED by design, as app.ts documents.
+ *
+ * No JWT library: the claim set is fixed and Node's own `crypto` has HMAC
+ * and a timing-safe compare. Same "dependency-free where the standard
+ * library already does it" call as flagswing.js. A minting implementation on
+ * the other side must match this exactly — see TOKEN FORMAT below.
+ *
+ * TOKEN FORMAT
+ *   `<body>.<sig>` where
+ *     body = base64url(JSON.stringify({ id, name, exp }))   exp = epoch ms
+ *     sig  = base64url(HMAC-SHA256(session_secret, body))
+ *   base64url here is standard base64 with `+`->`-`, `/`->`_`, `=` stripped.
  */
 
-const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;   // 12h — a cast plus pre/post-show overrun
-const STATE_TTL_MS = 10 * 60 * 1000;        // the OAuth round trip through Discord, generously
+const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12h — a cast plus pre/post-show overrun
 
 // Manual base64url, not the `'base64url'` Buffer encoding string — that
 // encoding needs a newer Node than this repo's pinned @types/node (^14)
@@ -42,15 +54,28 @@ function sign(body: string): string {
     return toB64Url(crypto.createHmac('sha256', config.caster_auth.session_secret).update(body).digest());
 }
 
-/** Self-contained signed claims: no server-side session store, so a session
- * token and an OAuth `state` value are the same mechanism with different
- * payloads. `exp` is required on everything signed here. */
-function signClaims(claims: Record<string, unknown> & { exp: number }): string {
-    const body = toB64Url(Buffer.from(JSON.stringify(claims)));
+export interface CasterIdentity {
+    id: string;    // whoever the minting side calls this caster (keep-the-prac's user id)
+    name: string;  // display only, for logs
+}
+
+/**
+ * Mints a token with the format above.
+ *
+ * Production tokens come from keep-the-prac, not from here — this exists so
+ * the tests can produce a valid token, and so an operator can hand-issue one
+ * for a smoke test without standing the website up. Keep it in sync with the
+ * TOKEN FORMAT block: it is the executable copy of that spec.
+ */
+export function issueToken(identity: CasterIdentity): string {
+    const body = toB64Url(Buffer.from(JSON.stringify({
+        id: identity.id, name: identity.name, exp: Date.now() + TOKEN_TTL_MS,
+    })));
     return `${body}.${sign(body)}`;
 }
 
-function verifyClaims<T extends { exp: number }>(token: string | undefined | null): T | null {
+/** The identity a token was issued for, or null if missing/malformed/forged/expired. */
+export function verifyToken(token: string | undefined | null): CasterIdentity | null {
     if (!token) return null;
     const parts = token.split('.');
     if (parts.length !== 2) return null;
@@ -63,123 +88,10 @@ function verifyClaims<T extends { exp: number }>(token: string | undefined | nul
     }
     try {
         const claims = JSON.parse(fromB64Url(body).toString('utf-8'));
+        if (typeof claims.id !== 'string' || typeof claims.name !== 'string') return null;
         if (typeof claims.exp !== 'number' || Date.now() > claims.exp) return null;
-        return claims as T;
+        return { id: claims.id, name: claims.name };
     } catch {
         return null;
     }
-}
-
-// ─── App session token ───────────────────────────────────────────────────
-
-export interface CasterIdentity {
-    id: string;    // Discord user id (snowflake)
-    name: string;  // Discord username, display only
-}
-
-export function issueToken(identity: CasterIdentity): string {
-    return signClaims({ id: identity.id, name: identity.name, exp: Date.now() + TOKEN_TTL_MS });
-}
-
-/** The identity a token was issued for, or null if missing/malformed/forged/expired. */
-export function verifyToken(token: string | undefined | null): CasterIdentity | null {
-    const claims = verifyClaims<{ id: string; name: string; exp: number }>(token);
-    if (!claims || typeof claims.id !== 'string' || typeof claims.name !== 'string') return null;
-    return { id: claims.id, name: claims.name };
-}
-
-export function isAllowedCaster(discordUserId: string): boolean {
-    return config.caster_auth.allowed_discord_ids.includes(discordUserId);
-}
-
-// ─── OAuth state (CSRF) ──────────────────────────────────────────────────
-// No server-side pending-login store: the state value carries what the
-// callback needs (which server to send the caster back to) and is
-// self-authenticating, the same signature scheme as the session token.
-
-export function issueOAuthState(serverName: string): string {
-    return signClaims({
-        server: serverName,
-        nonce: crypto.randomBytes(8).toString('hex'),
-        exp: Date.now() + STATE_TTL_MS,
-    });
-}
-
-export function verifyOAuthState(state: string | undefined | null): { server: string } | null {
-    const claims = verifyClaims<{ server: string; nonce: string; exp: number }>(state);
-    if (!claims || typeof claims.server !== 'string') return null;
-    return { server: claims.server };
-}
-
-// ─── Discord API ─────────────────────────────────────────────────────────
-
-const DISCORD_API = 'discord.com';
-const REQUEST_TIMEOUT_MS = 8000;
-
-function httpsRequest(options: https.RequestOptions, body?: string): Promise<{ status: number; json: any }> {
-    return new Promise((resolve, reject) => {
-        const req = https.request({ ...options, host: DISCORD_API, timeout: REQUEST_TIMEOUT_MS }, (res) => {
-            const chunks: Buffer[] = [];
-            res.on('data', (c) => chunks.push(c));
-            res.on('end', () => {
-                const raw = Buffer.concat(chunks).toString('utf-8');
-                try {
-                    resolve({ status: res.statusCode ?? 0, json: raw ? JSON.parse(raw) : {} });
-                } catch (err) {
-                    reject(new Error(`Discord API returned non-JSON (status ${res.statusCode}): ${raw.slice(0, 200)}`));
-                }
-            });
-        });
-        req.on('timeout', () => req.destroy(new Error('Discord API request timed out')));
-        req.on('error', reject);
-        if (body) req.write(body);
-        req.end();
-    });
-}
-
-export function discordAuthorizeUrl(state: string): string {
-    const params = new URLSearchParams({
-        client_id: config.caster_auth.discord_client_id,
-        redirect_uri: config.caster_auth.discord_redirect_uri,
-        response_type: 'code',
-        scope: 'identify',
-        state,
-        prompt: 'none',
-    });
-    return `https://discord.com/api/oauth2/authorize?${params.toString()}`;
-}
-
-/** Exchanges an OAuth `code` for the Discord identity of whoever authorized
- * it. Throws on any transport/shape failure — the caller (the callback
- * route) turns that into a login failure, never a silent "unauthorized". */
-export async function fetchDiscordIdentity(code: string): Promise<CasterIdentity> {
-    const body = new URLSearchParams({
-        client_id: config.caster_auth.discord_client_id,
-        client_secret: config.caster_auth.discord_client_secret,
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: config.caster_auth.discord_redirect_uri,
-    }).toString();
-
-    const tokenRes = await httpsRequest({
-        path: '/api/oauth2/token',
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Content-Length': Buffer.byteLength(body),
-        },
-    }, body);
-    if (tokenRes.status !== 200 || typeof tokenRes.json?.access_token !== 'string') {
-        throw new Error(`Discord token exchange failed (status ${tokenRes.status})`);
-    }
-
-    const userRes = await httpsRequest({
-        path: '/api/users/@me',
-        method: 'GET',
-        headers: { Authorization: `Bearer ${tokenRes.json.access_token}` },
-    });
-    if (userRes.status !== 200 || typeof userRes.json?.id !== 'string') {
-        throw new Error(`Discord identity fetch failed (status ${userRes.status})`);
-    }
-    return { id: userRes.json.id, name: String(userRes.json.username ?? userRes.json.id) };
 }

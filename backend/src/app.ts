@@ -9,10 +9,6 @@ import { MatchRecorder } from './handler/matchRecorder';
 import { MetricsCollector } from './handler/metrics';
 import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './handler/ingest';
 import { pseudonymize, resolvePlayerId, rekeyByToken } from './handler/pseudonym';
-import {
-    discordAuthorizeUrl, fetchDiscordIdentity, isAllowedCaster,
-    issueOAuthState, issueToken, verifyOAuthState,
-} from './handler/casterAuth';
 import { buildHqOverview } from './handler/hqBoard';
 import { buildServerList } from './handler/serverList';
 import { createSocketServer } from './socket/socket';
@@ -68,47 +64,9 @@ app.set('json spaces', 2);
 app.disable('x-powered-by');
 app.use(cors());
 
-// Caster login (Discord OAuth2). The one authenticated surface in this app --
-// see backend/src/handler/casterAuth.ts. `state` carries which server to
-// send the caster back to; it is self-verifying (signed, short TTL), so
-// there is no server-side pending-login store to leak or expire out of sync.
-const FRONTEND_ORIGIN = (config.frontend.origin.split(',')[0] ?? '').trim();
-
-app.get('/api/caster-auth/discord/login', (req, res) => {
-    const serverName = String(req.query.server ?? '');
-    if (!serverName) {
-        res.status(400).json({ error: 'server query parameter required' });
-        return;
-    }
-    if (!config.caster_auth.discord_client_id) {
-        res.status(503).json({ error: 'Discord login is not configured on this instance' });
-        return;
-    }
-    res.redirect(discordAuthorizeUrl(issueOAuthState(serverName)));
-});
-
-app.get('/api/caster-auth/discord/callback', async (req, res) => {
-    const code = typeof req.query.code === 'string' ? req.query.code : '';
-    const state = verifyOAuthState(typeof req.query.state === 'string' ? req.query.state : null);
-    if (!code || !state) {
-        res.status(400).send('Login failed: the request expired or was tampered with. Close this tab and try again from /caster.');
-        return;
-    }
-    let identity;
-    try {
-        identity = await fetchDiscordIdentity(code);
-    } catch (err) {
-        console.error('[caster-auth] Discord identity fetch failed:', (err as Error).message);
-        res.redirect(`${FRONTEND_ORIGIN}/caster?server=${encodeURIComponent(state.server)}&caster_error=discord_failed`);
-        return;
-    }
-    if (!isAllowedCaster(identity.id)) {
-        res.redirect(`${FRONTEND_ORIGIN}/caster?server=${encodeURIComponent(state.server)}&caster_error=not_authorized`);
-        return;
-    }
-    const token = issueToken(identity);
-    res.redirect(`${FRONTEND_ORIGIN}/caster?server=${encodeURIComponent(state.server)}&caster_token=${encodeURIComponent(token)}`);
-});
+// NO caster-login route here on purpose. ktpleague.gg decides who may cast
+// (it already knows who is logged in) and mints the token; this backend only
+// verifies the signature on join_caster. See handler/casterAuth.ts.
 
 // Health check
 app.get('/health', (_req, res) => {
@@ -429,7 +387,8 @@ app.listen(config.api.port, () => {
 });
 
 console.log(`[config] Auth key: ${config.ingest.auth_key === 'changeme' ? '⚠ DEFAULT (change me!)' : '***set***'}`);
-console.log(`[config] Caster session secret: ${config.caster_auth.session_secret === 'changeme' ? '⚠ DEFAULT (change me!)' : '***set***'}`);
-console.log(`[config] Caster Discord app: ${config.caster_auth.discord_client_id ? '***set***' : '⚠ NOT CONFIGURED — /caster login disabled'}`);
-console.log(`[config] Casters allowed: ${config.caster_auth.allowed_discord_ids.length}`);
+// Shared with ktpleague.gg, which signs caster tokens with it. A default
+// here means every forged token verifies, so it is called out like the
+// ingest key above rather than left to a config review.
+console.log(`[config] Caster token secret: ${config.caster_auth.session_secret === 'changeme' ? '⚠ DEFAULT (change me!) — caster room is effectively open' : '***set***'}`);
 console.log(`[config] Matches dir: ${path.resolve(config.storage.matches_dir)}`);

@@ -17,14 +17,26 @@ const matchIdParam = urlParams.get('match');
 const serverParam = urlParams.get('server');
 const isReplay = urlParams.get('replay') === 'true';
 
-// Caster-only room (live positions, see backend/src/handler/ingest.ts's
-// player_state split). Set post-login by Caster.jsx — nothing else in this
-// file knows about auth, so this stays a plain value the connect handler
-// below re-sends on every (re)connect, the same way join_server/join_match
-// already do for their own params.
-let casterSession = null; // { server, token } | null
+// Caster-only room: live player positions, and nothing else, now travel
+// there rather than on the public `server:<host>` room /screen also joins
+// (see backend/src/handler/ingest.ts's player_state split). Joining needs a
+// token, and THIS APP NEVER MINTS ONE — ktpleague.gg does, for a caster it
+// has already authenticated, signed with the shared secret this backend
+// verifies. There is deliberately no login here.
+//
+// `?caster_token=` is how that token arrives: the website links into this
+// page with one appended, so the minimap (the only consumer of positions
+// here) keeps working for an authorized caster without this app growing an
+// account system. No token, no positions — the page renders fine without
+// them, the minimap simply has no markers to draw.
+const casterTokenParam = urlParams.get('caster_token');
 
-/** Called by Caster.jsx once logged in, and with (null, null) on logout. */
+let casterSession = serverParam && casterTokenParam
+    ? { server: serverParam, token: casterTokenParam }
+    : null;
+
+/** Set or clear the caster session at runtime (a page that obtains a token
+ * some other way than the URL). Re-sent on every reconnect, below. */
 export function setCasterSession(serverName, token) {
     casterSession = serverName && token ? { server: serverName, token } : null;
     if (casterSession && socket.connected) {

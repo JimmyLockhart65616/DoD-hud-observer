@@ -34,69 +34,6 @@
   font-size: 16px;
 }
 
-/* ── Login gate ───────────────────────────────────────────────────── */
-
-.caster-login-page {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.caster-login {
-  width: 100%;
-  max-width: 320px;
-  background-color: rgba(255, 255, 255, 0.03);
-  border-radius: 6px;
-  border-top: 2px solid rgba(255, 255, 255, 0.12);
-  padding: 28px 26px;
-}
-
-.caster-login h1 {
-  font-size: 18px;
-  margin: 0 0 6px;
-}
-
-.caster-login-note {
-  color: #8990b5;
-  font-size: 12.5px;
-  line-height: 1.5;
-  margin: 0 0 20px;
-}
-
-.caster-login-error {
-  color: #ffb8b8;
-  font-size: 12.5px;
-  margin: -4px 0 14px;
-}
-
-/* Discord's own brand blurple — this button IS the Discord identity, not a
-   generic action, so it borrows their color rather than the page's accent. */
-.caster-login-discord {
-  width: 100%;
-  padding: 10px;
-  font-size: 14px;
-  font-weight: 700;
-  border-radius: 4px;
-  border: none;
-  background-color: #5865f2;
-  color: #fff;
-  cursor: pointer;
-}
-
-.caster-login-discord:hover {
-  background-color: #4752c4;
-}
-
-.caster-logout {
-  background: none;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: #9aa0c0;
-  border-radius: 3px;
-  font-size: 11px;
-  padding: 3px 8px;
-  cursor: pointer;
-}
-
 /* ── Header: score, clock, half, server ──────────────────────────── */
 
 .caster-header {
@@ -730,44 +667,4 @@
 .caster-minimap-dot { stroke: #11131f; stroke-width: 1.5; }
 .caster-minimap-allies { fill: #c8e090; }
 
-/* ── Cue rail — camera-ready cues, newest first ──────────────────── */
-
-.caster-panel-cues { flex: 1 1 420px; }
-
-.caster-cues {
-  max-height: 420px;
-  overflow-y: auto;
-}
-
-.caster-cue {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-  font-size: 13px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.caster-cue-who {
-  flex: 0 0 auto;
-  font-weight: 700;
-  max-width: 40%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.caster-cue-detail {
-  flex: 1 1 auto;
-  min-width: 0;
-  color: #9aa0c0;
-}
-
-.caster-cue-detail b { color: inherit; }
-
-.caster-tag-run     { background-color: rgba(255, 215, 0, 0.22); color: #ffd700; }
-.caster-tag-threat  { background-color: rgba(255, 140, 60, 0.24); color: #ff9c4d; }
-.caster-tag-swing   { background-color: rgba(140, 170, 255, 0.24); color: #9db2ff; }
-.caster-tag-excursion { background-color: rgba(220, 120, 200, 0.24); color: #e58fd0; }
-.caster-tag-capout  { background-color: rgba(120, 210, 140, 0.24); color: #7bdc9a; }
 .caster-minimap-axis   { fill: #ffb8b8; }

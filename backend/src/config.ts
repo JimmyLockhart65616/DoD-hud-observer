@@ -31,19 +31,16 @@ export interface Config {
 }
 
 /**
- * The one login this app has: Discord OAuth2 + a flat allowlist of Discord
- * user ids, gating /caster and the position stream it depends on (see
- * backend/src/handler/casterAuth.ts). `discord_client_id`/`discord_client_secret`
- * come from an existing KTP Discord application (reused, not registered fresh
- * for this app — ask afraznein) with `discord_redirect_uri` added to its
- * OAuth2 redirect allowlist in Discord's developer portal.
+ * Shared HMAC secret for caster tokens. ktpleague.gg mints them for its own
+ * authorized, logged-in users; this backend only verifies the signature
+ * before letting a socket join the position-carrying `caster:<host>` room
+ * (see backend/src/handler/casterAuth.ts). Both sides must hold the SAME
+ * value, and rotating it invalidates every outstanding token at once.
+ *
+ * No user list, no OAuth credentials: this app does not decide who may cast.
  */
 export interface CasterAuthConfig {
     session_secret: string;
-    discord_client_id: string;
-    discord_client_secret: string;
-    discord_redirect_uri: string;
-    allowed_discord_ids: string[];
 }
 
 /**
@@ -108,17 +105,9 @@ function loadConfig(): Config {
     };
 }
 
-/** Empty allowlist by default -- with nobody configured, isAllowedCaster refuses everybody, which is the safe default rather than an open gate. */
 function loadCasterAuth(file: any): CasterAuthConfig {
-    const allowed = Array.isArray(file?.allowed_discord_ids)
-        ? file.allowed_discord_ids.filter((x: any) => typeof x === 'string')
-        : [];
     return {
         session_secret: process.env.HUD_CASTER_SESSION_SECRET ?? file?.session_secret ?? 'changeme',
-        discord_client_id: process.env.HUD_CASTER_DISCORD_CLIENT_ID ?? file?.discord_client_id ?? '',
-        discord_client_secret: process.env.HUD_CASTER_DISCORD_CLIENT_SECRET ?? file?.discord_client_secret ?? '',
-        discord_redirect_uri: process.env.HUD_CASTER_DISCORD_REDIRECT_URI ?? file?.discord_redirect_uri ?? '',
-        allowed_discord_ids: allowed,
     };
 }
 

@@ -20,9 +20,6 @@ import { className as dodClassName } from '../core/dodClasses';
 import { getWeaponIcon } from '../screen/resources/weaponIcons';
 import CareerPanel from './CareerPanel';
 import MomentsPanel from './MomentsPanel';
-import CueRail from './CueRail';
-import CasterLogin from './CasterLogin';
-import useCasterAuth from './useCasterAuth';
 import Minimap from './Minimap';
 import useMinimapToggle from './useMinimapToggle';
 
@@ -251,13 +248,6 @@ function Caster() {
     const urlParams = new URLSearchParams(window.location.search);
     const serverName = urlParams.get('server');
 
-    // Gates the WHOLE page, not just the position-carrying panels — see
-    // broadcast-director's 2026-09-25 access-control decision. The actual
-    // enforcement (positions never reaching an unauthenticated socket) is
-    // server-side and does not depend on this; this is what keeps a random
-    // visitor from reading the rest of the page too.
-    const casterAuth = useCasterAuth(serverName);
-
     const { enabled: minimapOn, toggle: toggleMinimap, pinned: minimapPinned } = useMinimapToggle();
     const alliesPlayers = useHudStore(s => s.allies_players);
     const axisPlayers = useHudStore(s => s.axis_players);
@@ -351,15 +341,6 @@ function Caster() {
         );
     }
 
-    // Not ready yet = localStorage hasn't been checked for an existing
-    // session — render nothing rather than flash the login form for
-    // returning caster who's actually already got a valid token.
-    if (!casterAuth.ready) return null;
-
-    if (!casterAuth.loggedIn) {
-        return <CasterLogin onLogin={casterAuth.login} error={casterAuth.error} />;
-    }
-
     return (
         <div className="caster-page">
             <SocketStoreComponent />
@@ -415,7 +396,6 @@ function Caster() {
                     <span className="caster-delay" title="This page is synced to the HLTV broadcast, matching the stream — not the live server.">
                         broadcast-synced
                     </span>
-                    <button className="caster-logout" onClick={casterAuth.logout}>Log out</button>
                 </div>
             </header>
 
@@ -479,8 +459,6 @@ function Caster() {
             )}
 
             <div className="caster-lower">
-                <CueRail />
-
                 <section className="caster-panel">
                     <h2>Loadouts</h2>
                     <div className="caster-loadout-cols">

@@ -1,35 +1,63 @@
 /**
- * Signed tokens + the Discord identity/allowlist boundary for the one
- * authenticated surface this app has (`/caster`). A bug here either locks
- * every caster out mid-match or lets a forged/expired session or OAuth
- * state through — there is no manual QA step that would catch the second
- * one, so it's tested here instead. The actual Discord API round trip
- * (`fetchDiscordIdentity`) is NOT unit tested — it is a thin wrapper over a
- * live HTTPS call to discord.com that only an integration/manual check
- * against a real Discord app can exercise meaningfully.
+ * Caster token verification — the whole of this backend's involvement in who
+ * may cast. ktpleague.gg decides and mints; this side only checks the
+ * signature before letting a socket into the position-carrying room, so a
+ * forged or expired token slipping through here is the entire failure mode,
+ * and nothing about it is visible in normal operation.
+ *
+ * The round-trip tests double as the executable spec for the minting side:
+ * keep-the-prac signs with this exact scheme and shared secret (see the
+ * TOKEN FORMAT block in handler/casterAuth.ts). `mintLikeKeepThePrac` below
+ * reimplements it from that spec rather than calling `issueToken`, so a
+ * drift between the two implementations fails here instead of on air.
  */
-import {
-    issueToken, verifyToken, isAllowedCaster,
-    issueOAuthState, verifyOAuthState, discordAuthorizeUrl,
-} from '../handler/casterAuth';
+import crypto from 'crypto';
+import { issueToken, verifyToken } from '../handler/casterAuth';
 import config from '../config';
+
+const b64url = (buf: Buffer) =>
+    buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+/** An independent implementation of the documented format, as the website would do it. */
+function mintLikeKeepThePrac(claims: { id: string; name: string; exp: number }, secret: string): string {
+    const body = b64url(Buffer.from(JSON.stringify(claims)));
+    const sig = b64url(crypto.createHmac('sha256', secret).update(body).digest());
+    return `${body}.${sig}`;
+}
 
 describe('issueToken / verifyToken', () => {
     it('round-trips the identity that issued it', () => {
-        const token = issueToken({ id: '123456789', name: 'coreymarko' });
-        expect(verifyToken(token)).toEqual({ id: '123456789', name: 'coreymarko' });
+        const token = issueToken({ id: 'user-abc', name: 'JaGGoN' });
+        expect(verifyToken(token)).toEqual({ id: 'user-abc', name: 'JaGGoN' });
+    });
+
+    it('accepts a token minted independently from the documented format', () => {
+        const token = mintLikeKeepThePrac(
+            { id: 'user-abc', name: 'JaGGoN', exp: Date.now() + 60_000 },
+            config.caster_auth.session_secret,
+        );
+        expect(verifyToken(token)).toEqual({ id: 'user-abc', name: 'JaGGoN' });
+    });
+
+    it('rejects a token minted with a DIFFERENT secret (the two sides drifted)', () => {
+        const token = mintLikeKeepThePrac(
+            { id: 'user-abc', name: 'JaGGoN', exp: Date.now() + 60_000 },
+            'not-the-shared-secret',
+        );
+        expect(verifyToken(token)).toBeNull();
     });
 
     it('rejects a token with a tampered payload', () => {
-        const token = issueToken({ id: '123456789', name: 'coreymarko' });
+        const token = issueToken({ id: 'user-abc', name: 'JaGGoN' });
         const [, sig] = token.split('.');
-        const forgedBody = Buffer.from(JSON.stringify({ id: '999999999', name: 'admin', exp: Date.now() + 1e9 }))
-            .toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        const forgedBody = b64url(Buffer.from(JSON.stringify({
+            id: 'someone-else', name: 'admin', exp: Date.now() + 1e9,
+        })));
         expect(verifyToken(`${forgedBody}.${sig}`)).toBeNull();
     });
 
     it('rejects a token signed with a different secret', () => {
-        const token = issueToken({ id: '123456789', name: 'coreymarko' });
+        const token = issueToken({ id: 'user-abc', name: 'JaGGoN' });
         const original = config.caster_auth.session_secret;
         config.caster_auth.session_secret = 'a-different-secret-entirely';
         try {
@@ -37,6 +65,14 @@ describe('issueToken / verifyToken', () => {
         } finally {
             config.caster_auth.session_secret = original;
         }
+    });
+
+    it('rejects a claim set missing id or name rather than passing a partial identity', () => {
+        const secret = config.caster_auth.session_secret;
+        const noName = mintLikeKeepThePrac({ id: 'user-abc', exp: Date.now() + 60_000 } as any, secret);
+        const noId = mintLikeKeepThePrac({ name: 'JaGGoN', exp: Date.now() + 60_000 } as any, secret);
+        expect(verifyToken(noName)).toBeNull();
+        expect(verifyToken(noId)).toBeNull();
     });
 
     it('rejects garbage input without throwing', () => {
@@ -51,87 +87,11 @@ describe('issueToken / verifyToken', () => {
         const start = Date.parse('2026-01-01T00:00:00Z');
         const spy = jest.spyOn(Date, 'now').mockReturnValue(start);
         try {
-            const token = issueToken({ id: '123456789', name: 'coreymarko' });
+            const token = issueToken({ id: 'user-abc', name: 'JaGGoN' });
             spy.mockReturnValue(start + 24 * 60 * 60 * 1000); // 24h later, past the 12h TTL
             expect(verifyToken(token)).toBeNull();
         } finally {
             spy.mockRestore();
-        }
-    });
-});
-
-describe('isAllowedCaster', () => {
-    const ORIGINAL = config.caster_auth.allowed_discord_ids;
-    beforeEach(() => { config.caster_auth.allowed_discord_ids = ['123456789']; });
-    afterAll(() => { config.caster_auth.allowed_discord_ids = ORIGINAL; });
-
-    it('allows an id on the list', () => {
-        expect(isAllowedCaster('123456789')).toBe(true);
-    });
-
-    it('refuses an id not on the list', () => {
-        expect(isAllowedCaster('000000000')).toBe(false);
-    });
-
-    it('refuses everyone when the list is empty (safe default, not an open gate)', () => {
-        config.caster_auth.allowed_discord_ids = [];
-        expect(isAllowedCaster('123456789')).toBe(false);
-    });
-});
-
-describe('issueOAuthState / verifyOAuthState', () => {
-    it('round-trips the server name it was issued for', () => {
-        const state = issueOAuthState('KTP - Atlanta 1');
-        expect(verifyOAuthState(state)).toEqual({ server: 'KTP - Atlanta 1' });
-    });
-
-    it('two states for the same server are still distinct values (nonce)', () => {
-        const a = issueOAuthState('KTP - Atlanta 1');
-        const b = issueOAuthState('KTP - Atlanta 1');
-        expect(a).not.toBe(b);
-    });
-
-    it('rejects a tampered state', () => {
-        const state = issueOAuthState('KTP - Atlanta 1');
-        const [, sig] = state.split('.');
-        const forgedBody = Buffer.from(JSON.stringify({ server: 'KTP - Other', nonce: 'x', exp: Date.now() + 1e9 }))
-            .toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-        expect(verifyOAuthState(`${forgedBody}.${sig}`)).toBeNull();
-    });
-
-    it('rejects an expired state (the OAuth round trip took too long, or it is being replayed)', () => {
-        const start = Date.parse('2026-01-01T00:00:00Z');
-        const spy = jest.spyOn(Date, 'now').mockReturnValue(start);
-        try {
-            const state = issueOAuthState('KTP - Atlanta 1');
-            spy.mockReturnValue(start + 60 * 60 * 1000); // 1h later, past the 10min TTL
-            expect(verifyOAuthState(state)).toBeNull();
-        } finally {
-            spy.mockRestore();
-        }
-    });
-
-    it('rejects garbage input without throwing', () => {
-        expect(verifyOAuthState(null)).toBeNull();
-        expect(verifyOAuthState('not-a-state')).toBeNull();
-    });
-});
-
-describe('discordAuthorizeUrl', () => {
-    it('carries the configured client id, redirect uri, and the given state', () => {
-        const original = { ...config.caster_auth };
-        config.caster_auth.discord_client_id = 'test-client-id';
-        config.caster_auth.discord_redirect_uri = 'https://hud.ktpdod.com/api/caster-auth/discord/callback';
-        try {
-            const url = new URL(discordAuthorizeUrl('some-signed-state'));
-            expect(url.origin + url.pathname).toBe('https://discord.com/api/oauth2/authorize');
-            expect(url.searchParams.get('client_id')).toBe('test-client-id');
-            expect(url.searchParams.get('redirect_uri')).toBe('https://hud.ktpdod.com/api/caster-auth/discord/callback');
-            expect(url.searchParams.get('state')).toBe('some-signed-state');
-            expect(url.searchParams.get('response_type')).toBe('code');
-            expect(url.searchParams.get('scope')).toBe('identify');
-        } finally {
-            Object.assign(config.caster_auth, original);
         }
     });
 });
