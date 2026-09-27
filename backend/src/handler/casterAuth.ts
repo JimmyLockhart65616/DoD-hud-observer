@@ -37,9 +37,42 @@ import config from '../config';
  *     body = base64url(JSON.stringify({ id, name, exp }))   exp = epoch ms
  *     sig  = base64url(HMAC-SHA256(session_secret, body))
  *   base64url here is standard base64 with `+`->`-`, `/`->`_`, `=` stripped.
+ *   `exp` must be in the future and at most MAX_TOKEN_LIFETIME_MS (13h) ahead;
+ *   a token claiming longer is refused, however it was signed.
+ *
+ * LINK FORMAT (how the website hands a token to /caster)
+ *   https://hud.ktpdod.com/caster?server=<X-Server-Hostname>#caster_token=<token>
+ *   The token goes in the FRAGMENT, which the browser never sends to a server;
+ *   see the intake comment in web/src/components/core/Socket/Socket.jsx.
  */
 
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12h — a cast plus pre/post-show overrun
+
+// The longest lifetime a token may CLAIM, however it was minted. There is no
+// revocation short of rotating the shared secret, so without this ceiling a
+// minting bug or a hand-issued smoke-test token with a far-future `exp` stays
+// valid until the next rotation. The hour of slack over TOKEN_TTL_MS absorbs
+// clock skew between this host and keep-the-prac's.
+const MAX_TOKEN_LIFETIME_MS = TOKEN_TTL_MS + 60 * 60 * 1000;
+
+const MIN_SECRET_LENGTH = 32;
+
+/**
+ * A secret this backend must not trust: the built-in `changeme` default, the
+ * example config's `REPLACE_WITH_…` placeholder, or anything short enough to
+ * guess. Every one of those is a string an attacker can read or try, so a
+ * token "signed" with it proves nothing.
+ *
+ * verifyToken FAILS CLOSED on a weak secret: it refuses every token, so the
+ * caster room stays empty rather than open. With positions gated, that blanks
+ * the minimap for casters, which is visible and fixable; the alternative is a
+ * position stream that looks private and is not.
+ */
+export function isWeakSecret(secret: string): boolean {
+    return secret === 'changeme'
+        || secret.startsWith('REPLACE_WITH_')
+        || secret.length < MIN_SECRET_LENGTH;
+}
 
 // Manual base64url, not the `'base64url'` Buffer encoding string — that
 // encoding needs a newer Node than this repo's pinned @types/node (^14)
@@ -49,42 +82,6 @@ const toB64Url = (buf: Buffer): string =>
     buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const fromB64Url = (s: string): Buffer =>
     Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
-
-/**
- * Shortest secret we will sign or verify with.
- *
- * Arbitrary, but well above anything a human types by hand, which is the
- * point: the failure this guards is not a brute-force attack on a good
- * secret, it is a deploy that never set one.
- */
-const MIN_SECRET_LENGTH = 32;
-
-/** Placeholders that ship in this repo. A live deploy must not run on one. */
-const PLACEHOLDER_SECRETS = new Set([
-    'changeme',
-    'REPLACE_WITH_CASTER_TOKEN_SECRET_SHARED_WITH_KTPLEAGUE_GG',
-    'local-dev-only-not-a-real-secret',
-]);
-
-/**
- * Whether the configured secret can be trusted to mean anything.
- *
- * FAIL CLOSED, and this matters more here than the usual reason. A valid
- * signature IS the authorization on this service — there is no user list to
- * fall back on — so a publicly-known secret is not a weak password, it is an
- * open door that looks shut. Verified in review: with the old `'changeme'`
- * default, a token anyone could sign for a user who does not exist joined
- * `caster:mocker` and received live positions (DoD-hud-observer#28).
- *
- * An unusable secret therefore refuses every token rather than accepting
- * every forged one. The caster room simply stays empty until an operator sets
- * the shared value, which is the safe direction to be wrong in.
- */
-export function secretIsUsable(secret: string | undefined | null): boolean {
-    if (!secret) return false;
-    if (PLACEHOLDER_SECRETS.has(secret)) return false;
-    return secret.length >= MIN_SECRET_LENGTH;
-}
 
 function sign(body: string): string {
     return toB64Url(crypto.createHmac('sha256', config.caster_auth.session_secret).update(body).digest());
@@ -104,21 +101,17 @@ export interface CasterIdentity {
  * TOKEN FORMAT block: it is the executable copy of that spec.
  */
 export function issueToken(identity: CasterIdentity): string {
-    if (!secretIsUsable(config.caster_auth.session_secret)) {
-        throw new Error('caster_auth.session_secret is unset, a placeholder, or under 32 characters — refusing to issue a token');
-    }
     const body = toB64Url(Buffer.from(JSON.stringify({
         id: identity.id, name: identity.name, exp: Date.now() + TOKEN_TTL_MS,
     })));
     return `${body}.${sign(body)}`;
 }
 
-/** The identity a token was issued for, or null if missing/malformed/forged/expired. */
+/** The identity a token was issued for, or null if missing/malformed/forged/expired,
+ * if it claims a lifetime past MAX_TOKEN_LIFETIME_MS, or if the secret is weak. */
 export function verifyToken(token: string | undefined | null): CasterIdentity | null {
-    // Before anything else: with no usable secret there is no signature worth
-    // checking, and every token — forged or not — is refused.
-    if (!secretIsUsable(config.caster_auth.session_secret)) return null;
     if (!token) return null;
+    if (isWeakSecret(config.caster_auth.session_secret)) return null;
     const parts = token.split('.');
     if (parts.length !== 2) return null;
     const [body, sig] = parts;
@@ -132,6 +125,7 @@ export function verifyToken(token: string | undefined | null): CasterIdentity | 
         const claims = JSON.parse(fromB64Url(body).toString('utf-8'));
         if (typeof claims.id !== 'string' || typeof claims.name !== 'string') return null;
         if (typeof claims.exp !== 'number' || Date.now() > claims.exp) return null;
+        if (claims.exp - Date.now() > MAX_TOKEN_LIFETIME_MS) return null;
         return { id: claims.id, name: claims.name };
     } catch {
         return null;

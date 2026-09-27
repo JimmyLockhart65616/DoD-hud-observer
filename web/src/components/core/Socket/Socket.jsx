@@ -24,25 +24,75 @@ const isReplay = urlParams.get('replay') === 'true';
 // has already authenticated, signed with the shared secret this backend
 // verifies. There is deliberately no login here.
 //
-// `?caster_token=` is how that token arrives: the website links into this
-// page with one appended, so the minimap (the only consumer of positions
+// `#caster_token=` is how that token arrives: the website links into this
+// page with one attached, so the minimap (the only consumer of positions
 // here) keeps working for an authorized caster without this app growing an
 // account system. No token, no positions — the page renders fine without
 // them, the minimap simply has no markers to draw.
-const casterTokenParam = urlParams.get('caster_token');
+//
+// A FRAGMENT, not a query parameter: a fragment never leaves the browser, so
+// the token stays out of the server's access log and out of the Referer of
+// every request the page makes. As a query parameter, one page view against
+// the local stack wrote it into 10 nginx log lines: the request line, then the
+// referer of the bundle, each socket.io poll and each /api call.
+// `?caster_token=` is still accepted so an older link keeps working. Either way
+// it is stripped from the address bar once read, so it doesn't sit in history
+// or ride along when someone shares the link; sessionStorage keeps it for a
+// reload of this tab only.
+export const CASTER_TOKEN_KEY = 'hud.caster_token';
 
-let casterSession = serverParam && casterTokenParam
-    ? { server: serverParam, token: casterTokenParam }
+function takeCasterToken() {
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const query = new URLSearchParams(window.location.search);
+    const fromUrl = hash.get('caster_token') || query.get('caster_token');
+    if (!fromUrl) {
+        try { return window.sessionStorage.getItem(CASTER_TOKEN_KEY); } catch (e) { return null; }
+    }
+    hash.delete('caster_token');
+    query.delete('caster_token');
+    const q = query.toString();
+    const h = hash.toString();
+    try {
+        window.history.replaceState(window.history.state, '',
+            `${window.location.pathname}${q ? `?${q}` : ''}${h ? `#${h}` : ''}`);
+    } catch (e) { /* the token still works for this page load */ }
+    try { window.sessionStorage.setItem(CASTER_TOKEN_KEY, fromUrl); } catch (e) { /* storage blocked */ }
+    return fromUrl;
+}
+
+const casterToken = takeCasterToken();
+
+let casterSession = serverParam && casterToken
+    ? { server: serverParam, token: casterToken }
     : null;
 
 /** Set or clear the caster session at runtime (a page that obtains a token
- * some other way than the URL). Re-sent on every reconnect, below. */
+ * some other way than the URL). Re-sent on every reconnect, below. Clearing
+ * it, or switching server, leaves the old room: the module-level socket
+ * outlives any page state, so without the leave the positions keep coming. */
 export function setCasterSession(serverName, token) {
+    const prev = casterSession;
     casterSession = serverName && token ? { server: serverName, token } : null;
-    if (casterSession && socket.connected) {
-        socket.emit('join_caster', casterSession);
+    if (!socket.connected) return;
+    if (prev && (!casterSession || prev.server !== casterSession.server)) {
+        socket.emit('leave_caster', prev.server);
     }
+    if (casterSession) socket.emit('join_caster', casterSession);
 }
+
+// A refused token (expired, or signed with a secret this backend doesn't
+// hold) must not be replayed on every reconnect, and must not leave the
+// minimap frozen: with positions gated, player_state carries no x/y and
+// leaves `.pos` alone, so the last markers would otherwise stay up looking
+// live. Registered on the socket itself, NOT on gameEvents:
+// SocketStoreComponent's cleanup calls gameEvents.removeAllListeners().
+socket.on('caster_auth_error', () => {
+    casterSession = null;
+    try { window.sessionStorage.removeItem(CASTER_TOKEN_KEY); } catch (e) { /* nothing to clear */ }
+    const clear = (players) => players.map(p => (p.pos ? { ...p, pos: null } : p));
+    useHudStore.getState().setAlliesPlayers(clear);
+    useHudStore.getState().setAxisPlayers(clear);
+});
 
 socket.on('connect', () => {
     if (isReplay) {
