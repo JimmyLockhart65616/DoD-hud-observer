@@ -13,7 +13,6 @@ module.exports = {
     roots: ['<rootDir>/src'],
     testMatch: ['**/__tests__/**/*.test.ts'],
     moduleFileExtensions: ['ts', 'js'],
-    setupFiles: ['<rootDir>/jest.env.js'],
     globals: {
         'ts-jest': {
             tsconfig: '<rootDir>/tsconfig.json',

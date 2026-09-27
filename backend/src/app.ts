@@ -9,9 +9,9 @@ import { MatchRecorder } from './handler/matchRecorder';
 import { MetricsCollector } from './handler/metrics';
 import { createIngestRouter, getServerPlayerCount, makeFireToSockets } from './handler/ingest';
 import { pseudonymize, resolvePlayerId, rekeyByToken } from './handler/pseudonym';
+import { isWeakSecret } from './handler/casterAuth';
 import { buildHqOverview } from './handler/hqBoard';
 import { buildServerList } from './handler/serverList';
-import { secretIsUsable } from './handler/casterAuth';
 import { createSocketServer } from './socket/socket';
 import { HltvSyncService } from './handler/hltvSync';
 import { HltvDelayBuffer, wireStrandedRescue } from './handler/hltvDelayBuffer';
@@ -388,9 +388,10 @@ app.listen(config.api.port, () => {
 });
 
 console.log(`[config] Auth key: ${config.ingest.auth_key === 'changeme' ? '⚠ DEFAULT (change me!)' : '***set***'}`);
-// Shared with ktpleague.gg, which signs caster tokens with it. A default
-// here means every forged token verifies, so it is called out like the
-// ingest key above rather than left to a config review.
-console.log(`[config] Caster token secret: ${secretIsUsable(config.caster_auth.session_secret) ? '***set***' : '⚠ unset/placeholder/too short — every caster token is REFUSED'}`);
+// Shared with ktpleague.gg, which signs caster tokens with it. A weak value
+// (default, example placeholder, or short) makes verifyToken refuse EVERY
+// token, so it is called out like the ingest key above rather than left to a
+// config review. Same predicate as verification, so the two cannot disagree.
+console.log(`[config] Caster token secret: ${isWeakSecret(config.caster_auth.session_secret) ? '⚠ WEAK (default, placeholder, or < 32 chars) — every caster token is refused' : '***set***'}`);
 console.log(`[config] Position gating: ${config.caster_auth.gate_positions ? 'ON — positions are caster-only' : 'off — positions are public, as before'}`);
 console.log(`[config] Matches dir: ${path.resolve(config.storage.matches_dir)}`);

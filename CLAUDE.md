@@ -1118,11 +1118,24 @@ verifies the signature. A valid signature **is** the authorization.
   `HUD_CASTER_TOKEN_SECRET` on keep-the-prac. **Same value or nothing works.**
   Set it via `HUD_CASTER_SESSION_SECRET` on the systemd unit, same pattern as
   `ingest.auth_key`.
-- **Unset, placeholder or under 32 characters refuses EVERY token**
-  (`secretIsUsable`). There is deliberately no default: `'changeme'` used to
-  be one, and since a valid signature is the whole authorization, a secret
-  published in this repo was an open room that read as a closed one. The boot
-  log says which state it is in.
+- **A WEAK secret refuses EVERY token** (`isWeakSecret`): the `changeme`
+  default, the example config's `REPLACE_WITH_` placeholder, or anything under
+  32 characters. Since a valid signature is the whole authorization, a secret
+  published in this repo was an open room that read as a closed one — a token
+  forged from the example file got live positions. The predicate reads the
+  placeholder out of `config.yaml.example` itself, so renaming it there cannot
+  quietly turn it into a working secret. The boot log says which state it is
+  in, using the same predicate so the two cannot disagree.
+- **A token's claimed lifetime is capped at 13h** (`MAX_TOKEN_LIFETIME_MS`, the
+  12h TTL plus an hour of clock skew). Rotating the secret is the only
+  revocation, so without the ceiling a minting bug or a hand-issued smoke-test
+  token with a far-future `exp` stays valid until the next rotation.
+- **The token travels in the URL FRAGMENT**, `#caster_token=`, never the query
+  string: a fragment is not sent to a server, so it cannot land in an access
+  log or a Referer. Measured at ten nginx log lines from a single `/caster`
+  page view of the query-string form. `?caster_token=` still works for
+  compatibility. Intake is in `Socket.jsx`, which strips it from the address
+  bar and keeps it in sessionStorage.
 - `socket.on('join_caster', { server, token })` is the only door to
   `caster:<host>`. Everything else this app serves is PUBLIC AND
   UNAUTHENTICATED by design — see the header in `app.ts`. Note the public
