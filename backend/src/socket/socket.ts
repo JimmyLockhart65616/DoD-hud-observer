@@ -3,6 +3,7 @@ import { createServer } from 'http';
 import { MatchRecorder } from '../handler/matchRecorder';
 import { getServerSnapshot } from '../handler/ingest';
 import { pseudonymize } from '../handler/pseudonym';
+import { verifyToken } from '../handler/casterAuth';
 
 /**
  * Creates a Socket.IO server with match-based room routing.
@@ -85,6 +86,32 @@ export function createSocketServer(origin: string, recorder: MatchRecorder) {
         socket.on('leave_server', (serverName: string) => {
             socket.leave(`server:${serverName}`);
             console.log(`[socket] ${socket.id} left server room server:${serverName}`);
+        });
+
+        // Caster-only: join the room that carries live positions
+        // ('player_positions', see makeFireToSockets in ingest.ts). Gated on a
+        // token ktpleague.gg signs for a caster it has already authenticated;
+        // this service has no login and no user list, it only verifies the
+        // signature. `server:${serverName}` above stays unauthenticated for
+        // /screen and everything else, and never carries positions when
+        // caster_auth.gate_positions is on. No snapshot replay here (unlike
+        // join_server): the next player_state tick is at most 250ms away at
+        // this feed's 4 Hz, which is not worth a second state-cache read for.
+        socket.on('join_caster', (payload: { server?: string; token?: string }) => {
+            const identity = verifyToken(payload?.token);
+            if (!identity) {
+                socket.emit('caster_auth_error', JSON.stringify({ reason: 'invalid_or_expired_token' }));
+                return;
+            }
+            const serverName = payload?.server;
+            if (!serverName) return;
+            socket.join(`caster:${serverName}`);
+            console.log(`[socket] ${socket.id} joined caster room caster:${serverName} as ${identity.name} (${identity.id})`);
+        });
+
+        socket.on('leave_caster', (serverName: string) => {
+            socket.leave(`caster:${serverName}`);
+            console.log(`[socket] ${socket.id} left caster room caster:${serverName}`);
         });
 
         // Legacy: frontend emits 'hud_socket' to join — bridge to default match

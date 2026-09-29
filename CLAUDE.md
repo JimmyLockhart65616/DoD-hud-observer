@@ -1089,11 +1089,59 @@ panel, **no background image**.
   mirroring `teamNames.js`. A URL-pinned value renders with **no button**, since
   a control that silently loses to the URL on reload is worse than none.
 
+- **Positions may be gated off `player_state`.** `caster_auth.gate_positions`
+  (off by default) moves `x`/`y` out of the public `server:<host>` fan-out and
+  into a separate `player_positions` event on the authenticated
+  `caster:<host>` room. With it ON the minimap is blank unless the page was
+  opened with `?caster_token=<token>`; `Socket.jsx` handles both shapes and
+  its store contract is pinned by `Socket.positions.test.js`. See the caster
+  token section below.
+
 **Plugin 2.8.0** adds `x`/`y` to each `player_state` row and to `flags_init`.
 The `player_state` buffer reserve moved **576 → 608** (`pbuf` 192 → 224) and
 `flags_init`'s `tmp` went **128 → 192** — the flag row worst-cases at 135 bytes
 with the pair, and `formatex` truncates silently, so the symptom would have been
 a malformed snapshot and a stale flag bar with no error anywhere.
+
+## Caster tokens and the `caster:<host>` room
+
+This backend has **no login, no OAuth and no user list**, and is not gaining
+one: a second account system for the same people was rejected. ktpleague.gg
+already authenticates these users (Supabase Auth, Discord provider), so it
+decides who may cast and mints a short-lived HMAC token; this side only
+verifies the signature. A valid signature **is** the authorization.
+
+- `handler/casterAuth.ts` carries the TOKEN FORMAT block. It is the spec the
+  other side implements, and each repo's tests re-implement the OTHER's half
+  so a drift fails in CI rather than mid-broadcast.
+- The shared secret is `caster_auth.session_secret` here and
+  `HUD_CASTER_TOKEN_SECRET` on keep-the-prac. **Same value or nothing works.**
+  Set it via `HUD_CASTER_SESSION_SECRET` on the systemd unit, same pattern as
+  `ingest.auth_key`.
+- **A WEAK secret refuses EVERY token** (`isWeakSecret`): the `changeme`
+  default, the example config's `REPLACE_WITH_` placeholder, or anything under
+  32 characters. Since a valid signature is the whole authorization, a secret
+  published in this repo was an open room that read as a closed one — a token
+  forged from the example file got live positions. The predicate reads the
+  placeholder out of `config.yaml.example` itself, so renaming it there cannot
+  quietly turn it into a working secret. The boot log says which state it is
+  in, using the same predicate so the two cannot disagree.
+- **A token's claimed lifetime is capped at 13h** (`MAX_TOKEN_LIFETIME_MS`, the
+  12h TTL plus an hour of clock skew). Rotating the secret is the only
+  revocation, so without the ceiling a minting bug or a hand-issued smoke-test
+  token with a far-future `exp` stays valid until the next rotation.
+- **The token travels in the URL FRAGMENT**, `#caster_token=`, never the query
+  string: a fragment is not sent to a server, so it cannot land in an access
+  log or a Referer. Measured at ten nginx log lines from a single `/caster`
+  page view of the query-string form. `?caster_token=` still works for
+  compatibility. Intake is in `Socket.jsx`, which strips it from the address
+  bar and keeps it in sessionStorage.
+- `socket.on('join_caster', { server, token })` is the only door to
+  `caster:<host>`. Everything else this app serves is PUBLIC AND
+  UNAUTHENTICATED by design — see the header in `app.ts`. Note the public
+  HLTV `steam://connect` links on `/watch` already show every position at the
+  same 60s delay, so this is a publishing-policy boundary, not an
+  anti-ghosting guarantee.
 
 The mocker now carries real `dod_anzio` coordinates (read from production
 `ktp_flag_positions`), so the transform is exercisable without a game server.
