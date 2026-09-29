@@ -134,7 +134,8 @@ proxied (direct IP-restricted POST from game servers).
 - **Prod**: `https://hud.ktpdod.com` on :443 (nginx already runs on the data
   box; we add a vhost — `deploy/nginx/hud.ktpdod.com.conf`). The frontend bundle
   is built against this origin (`deploy/deploy.sh`); `frontend.origin` in the
-  online config must equal it.
+  online config must include it. It is a comma-separated list: ktpleague.gg's
+  cue rail also reads the Socket.IO feed cross-origin (see *Caster tokens*).
 - **Local docker**: `https://localhost` on :443 (:80 redirect) → nginx inside the
   `data` container (`data-server/nginx-hud.conf`, supervisord `[program:nginx]`).
   Zero setup: the frontend is **origin-relative** (no baked hostname — same image
@@ -1093,7 +1094,7 @@ panel, **no background image**.
   (off by default) moves `x`/`y` out of the public `server:<host>` fan-out and
   into a separate `player_positions` event on the authenticated
   `caster:<host>` room. With it ON the minimap is blank unless the page was
-  opened with `?caster_token=<token>`; `Socket.jsx` handles both shapes and
+  opened with a `#caster_token=<token>` fragment; `Socket.jsx` handles both shapes and
   its store contract is pinned by `Socket.positions.test.js`. See the caster
   token section below.
 
@@ -1102,6 +1103,9 @@ The `player_state` buffer reserve moved **576 → 608** (`pbuf` 192 → 224) and
 `flags_init`'s `tmp` went **128 → 192** — the flag row worst-cases at 135 bytes
 with the pair, and `formatex` truncates silently, so the symptom would have been
 a malformed snapshot and a stale flag bar with no error anywhere.
+
+The mocker now carries real `dod_anzio` coordinates (read from production
+`ktp_flag_positions`), so the transform is exercisable without a game server.
 
 ## Caster tokens and the `caster:<host>` room
 
@@ -1122,10 +1126,12 @@ verifies the signature. A valid signature **is** the authorization.
   default, the example config's `REPLACE_WITH_` placeholder, or anything under
   32 characters. Since a valid signature is the whole authorization, a secret
   published in this repo was an open room that read as a closed one — a token
-  forged from the example file got live positions. The predicate reads the
-  placeholder out of `config.yaml.example` itself, so renaming it there cannot
-  quietly turn it into a working secret. The boot log says which state it is
-  in, using the same predicate so the two cannot disagree.
+  forged from the example file got live positions. At runtime the predicate
+  matches the placeholder by its `REPLACE_WITH_` prefix; it is
+  `casterAuth.test.ts` that reads the placeholder out of `config.yaml.example`
+  and asserts it is weak, so renaming it to something the predicate misses
+  fails CI instead of quietly becoming a working secret. The boot log says
+  which state it is in, using the same predicate so the two cannot disagree.
 - **A token's claimed lifetime is capped at 13h** (`MAX_TOKEN_LIFETIME_MS`, the
   12h TTL plus an hour of clock skew). Rotating the secret is the only
   revocation, so without the ceiling a minting bug or a hand-issued smoke-test
@@ -1142,9 +1148,13 @@ verifies the signature. A valid signature **is** the authorization.
   HLTV `steam://connect` links on `/watch` already show every position at the
   same 60s delay, so this is a publishing-policy boundary, not an
   anti-ghosting guarantee.
-
-The mocker now carries real `dod_anzio` coordinates (read from production
-`ktp_flag_positions`), so the transform is exercisable without a game server.
+- **ktpleague.gg's cue rail connects to this Socket.IO server from its own
+  origin**, in the browser, and joins `caster:<host>` with a token that goes
+  straight into the `join_caster` payload (never a URL). The server answers
+  with credentialed CORS (`credentials: true`), under which a wildcard is
+  invalid, so `https://ktpleague.gg` must be listed explicitly in
+  `frontend.origin`. Without it the rail sits on "connecting…" with nothing in
+  its UI to say why.
 
 ---
 
