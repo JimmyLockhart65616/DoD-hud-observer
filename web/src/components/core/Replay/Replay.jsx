@@ -11,8 +11,10 @@ const API_URL = process.env.REACT_APP_API_URL || '';
  * the shared gameEvents bus. SocketStoreComponent listens to gameEvents,
  * so all game-state logic works identically for live and replay.
  *
- * Uses the `tick` field on each event for timing. Events are sorted by tick,
- * then scheduled relative to the first event's tick value.
+ * Timing comes from `plugin_sent_at` (epoch ms), and events play in the order
+ * the file recorded them. Neither is interchangeable with `tick`: `tick` is
+ * `get_gametime()`, which resets at the halftime changelevel, so ordering a
+ * two-half match by it interleaves the halves.
  */
 function Replay({ matchId }) {
     const [events, setEvents] = useState(null);
@@ -37,8 +39,9 @@ function Replay({ matchId }) {
                 return r.json();
             })
             .then(data => {
-                const sorted = (data.events || []).sort((a, b) => (a.tick || 0) - (b.tick || 0));
-                setEvents(sorted);
+                // Append-only arrival order already is the play order; sorting by any
+                // per-half clock interleaves the halves.
+                setEvents(data.events || []);
                 setLoading(false);
             })
             .catch(err => {
@@ -61,14 +64,15 @@ function Replay({ matchId }) {
         clearTimers();
 
         const startFrom = progress;
-        const baseTick = events[0].tick || 0;
-        const startTick = events[startFrom]?.tick || 0;
+        const clock = monotonicClock(events);
+        const baseAt = clock[0];
+        const startAt = clock[startFrom] ?? baseAt;
         startTimeRef.current = Date.now();
 
         // Schedule each remaining event
         for (let i = startFrom; i < events.length; i++) {
             const evt = events[i];
-            const delaySeconds = (evt.tick || 0) - startTick;
+            const delaySeconds = (clock[i] - startAt) / 1000;
             const delayMs = (delaySeconds / speedRef.current) * 1000;
 
             const idx = i;
@@ -84,7 +88,7 @@ function Replay({ matchId }) {
         // Elapsed-time ticker for the progress bar
         tickIntervalRef.current = setInterval(() => {
             const elapsedMs = Date.now() - startTimeRef.current;
-            const replayElapsed = startTick - baseTick + (elapsedMs / 1000) * speedRef.current;
+            const replayElapsed = (startAt - baseAt) / 1000 + (elapsedMs / 1000) * speedRef.current;
             setElapsed(replayElapsed);
         }, 250);
 
@@ -120,7 +124,8 @@ function Replay({ matchId }) {
     if (error) return <div className="replay-bar">Replay error: {error}</div>;
     if (!events || events.length === 0) return <div className="replay-bar">No events to replay.</div>;
 
-    const totalDuration = (events[events.length - 1].tick || 0) - (events[0].tick || 0);
+    const span = monotonicClock(events);
+    const totalDuration = (span[span.length - 1] - span[0]) / 1000;
     const pct = totalDuration > 0 ? Math.min(100, (elapsed / totalDuration) * 100) : 0;
 
     return (
@@ -150,6 +155,20 @@ function Replay({ matchId }) {
             </span>
         </div>
     );
+}
+
+// `plugin_sent_at` is near-monotonic, not monotonic: a handful of events per match
+// arrive stamped below their predecessor. Carrying the running maximum keeps the
+// schedule in file order instead of letting one stamp pull an event forward.
+export function monotonicClock(events) {
+    const out = [];
+    let high = events[0]?.plugin_sent_at ?? 0;
+    for (const e of events) {
+        const at = e.plugin_sent_at ?? high;
+        if (at > high) high = at;
+        out.push(high);
+    }
+    return out;
 }
 
 function formatTime(seconds) {
