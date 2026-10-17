@@ -118,7 +118,8 @@ At match end the HUD freezes on the final state until the next match starts or t
 
 Not yet built — tracked for a later release:
 
-- **Match replay** — play back a completed match from its recorded `events.jsonl`. The `?replay=true` query parameter is reserved for this and currently has no effect.
+- **Demo-synchronised replay** — align a replay to an HLTV demo's playhead. Replay itself is **already built**: `?match=<id>&replay=true` loads a match from its recorded `events.jsonl` and plays it through the same event bus as the live view. What is not built is *synchronisation* — the replay runs on its own clock with no seek, so a caster must start it on a cue. The `timeleft` field on `half_start` and `time_sync` is the natural anchor, since a demo renders the same clock on screen.
+  - Note two limits of a replay today. `player_state` and `weapon_active` are socket-only and are never written to disk, so a replay has no player cards, wave pills or scoring-tick panel. And one demo file covers one half while a match's `events.jsonl` covers both, so a per-half filter would have to be passed in.
 - **HLTV sync via HLAE** — align the overlay's event timeline with a demo playing in HLTV / Half-Life Advanced Effects, so the HUD matches a rewatched demo frame-for-frame.
 - **Observed-player card** — a bottom-center card showing whichever player the caster is currently spectating. The HUD plugin can't yet tell which player the HLTV client has focused on, so this is shelved until we have a signal to drive it.
 
