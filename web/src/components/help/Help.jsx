@@ -181,10 +181,17 @@ class Help extends React.Component {
                             <p>Not yet built — tracked for a later release:</p>
                             <ul>
                                 <li>
-                                    <strong>Match replay</strong> — play back a completed match
-                                    from its recorded <code>events.jsonl</code>. The
-                                    <code> ?replay=true</code> query parameter is reserved for this
-                                    and currently has no effect.
+                                    <strong>Demo-synchronised replay</strong> — align a replay to
+                                    an HLTV demo's playhead. Replay itself is already built:
+                                    <code> {'?match=<id>&replay=true'}</code> loads a match from
+                                    its recorded <code>events.jsonl</code> and plays it through the
+                                    same event bus as the live view. It runs on its own clock with
+                                    no seek, so a caster must start it on a cue. Player cards fill
+                                    in from the recorded roster, spawn, damage and kill events, but
+                                    show each player's spawn weapon and no grenade count; the wave
+                                    pills and the scoring-tick panel stay empty, because
+                                    <code> player_state</code> and <code>weapon_active</code> are
+                                    never written to disk.
                                 </li>
                                 <li>
                                     <strong>HLTV sync via HLAE</strong> — align the overlay's event

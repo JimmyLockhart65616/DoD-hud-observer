@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import gameEvents from '../gameEvents';
 
 import './Replay.css';
@@ -11,10 +11,13 @@ const API_URL = process.env.REACT_APP_API_URL || '';
  * the shared gameEvents bus. SocketStoreComponent listens to gameEvents,
  * so all game-state logic works identically for live and replay.
  *
- * Timing comes from `plugin_sent_at` (epoch ms), and events play in the order
- * the file recorded them. Neither is interchangeable with `tick`: `tick` is
- * `get_gametime()`, which resets at the halftime changelevel, so ordering a
- * two-half match by it interleaves the halves.
+ * Events play in the order the file recorded them: HTTP arrival order, which
+ * crosses the halftime changelevel exactly once. Neither clock on an event can
+ * drive the schedule alone. `tick` is `get_gametime()` and resets at that
+ * changelevel, so ordering a two-half match by it interleaves the halves.
+ * `plugin_sent_at` is epoch ms but stamped from `get_systime()`, so it only
+ * moves in whole seconds. replayClock() below paces by tick within a map and
+ * uses the wall stamp only to find and place each map.
  */
 function Replay({ matchId }) {
     const [events, setEvents] = useState(null);
@@ -30,6 +33,10 @@ function Replay({ matchId }) {
     const tickIntervalRef = useRef(null);
     const speedRef = useRef(speed);
     speedRef.current = speed;
+
+    // Computed once per fetched list, not per render: play() schedules from it
+    // and the progress bar reads it four times a second.
+    const clock = useMemo(() => (events ? replayClock(events) : []), [events]);
 
     // Fetch events on mount
     useEffect(() => {
@@ -64,7 +71,6 @@ function Replay({ matchId }) {
         clearTimers();
 
         const startFrom = progress;
-        const clock = monotonicClock(events);
         const baseAt = clock[0];
         const startAt = clock[startFrom] ?? baseAt;
         startTimeRef.current = Date.now();
@@ -93,7 +99,7 @@ function Replay({ matchId }) {
         }, 250);
 
         setPlaying(true);
-    }, [events, progress, clearTimers]);
+    }, [events, clock, progress, clearTimers]);
 
     const pause = useCallback(() => {
         clearTimers();
@@ -124,8 +130,7 @@ function Replay({ matchId }) {
     if (error) return <div className="replay-bar">Replay error: {error}</div>;
     if (!events || events.length === 0) return <div className="replay-bar">No events to replay.</div>;
 
-    const span = monotonicClock(events);
-    const totalDuration = (span[span.length - 1] - span[0]) / 1000;
+    const totalDuration = (clock[clock.length - 1] - clock[0]) / 1000;
     const pct = totalDuration > 0 ? Math.min(100, (elapsed / totalDuration) * 100) : 0;
 
     return (
@@ -157,18 +162,45 @@ function Replay({ matchId }) {
     );
 }
 
-// `plugin_sent_at` is near-monotonic, not monotonic: a handful of events per match
-// arrive stamped below their predecessor. Carrying the running maximum keeps the
-// schedule in file order instead of letting one stamp pull an event forward.
-export function monotonicClock(events) {
+// `tick` and `plugin_sent_at` are stamped in the same post_event() call, so within
+// one map their difference is constant to within plugin_sent_at's one-second floor
+// (measured: under 1 s of drift across a half on three recorded matches). The
+// halftime changelevel moves it by the length of the map that just ended. So pace
+// by `tick` inside a map, and use the wall stamp only to find where a new map
+// starts and to place it. A late row from an earlier map (the old map's final
+// player_disconnect rows arrive interleaved with the new map's first rows) is
+// held at the current instant, not replayed at its old tick.
+const NEW_MAP_MS = 30000; // same threshold as hltvDelayBuffer's TICK_RESET_THRESHOLD_S
+
+export function replayClock(events) {
     const out = [];
-    let high = events[0]?.plugin_sent_at ?? 0;
+    const maps = [];
+    let high = null;
     for (const e of events) {
-        const at = e.plugin_sent_at ?? high;
-        if (at > high) high = at;
+        const wall = e.plugin_sent_at;
+        const tick = e.tick;
+        if (typeof wall === 'number' && typeof tick === 'number') {
+            const offset = wall - tick * 1000;
+            let m = null;
+            for (let j = maps.length - 1; j >= 0; j--) {
+                if (Math.abs(maps[j].offset - offset) < NEW_MAP_MS) { m = maps[j]; break; }
+            }
+            if (!m) {
+                m = { offset, firstTick: tick, maxTick: tick, startAt: Math.max(high ?? wall, wall) };
+                maps.push(m);
+            }
+            if (m === maps[maps.length - 1]) {
+                if (tick > m.maxTick) m.maxTick = tick;
+                const at = m.startAt + (m.maxTick - m.firstTick) * 1000;
+                if (high === null || at > high) high = at;
+            }
+        } else if (typeof wall === 'number' && (high === null || wall > high)) {
+            high = wall;
+        }
         out.push(high);
     }
-    return out;
+    const first = out.find(v => v !== null) ?? 0;
+    return out.map(v => (v === null ? first : v));
 }
 
 function formatTime(seconds) {
