@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import gameEvents from '../gameEvents';
 
 import './Replay.css';
@@ -11,8 +11,13 @@ const API_URL = process.env.REACT_APP_API_URL || '';
  * the shared gameEvents bus. SocketStoreComponent listens to gameEvents,
  * so all game-state logic works identically for live and replay.
  *
- * Uses the `tick` field on each event for timing. Events are sorted by tick,
- * then scheduled relative to the first event's tick value.
+ * Events play in the order the file recorded them: HTTP arrival order, which
+ * crosses the halftime changelevel exactly once. Neither clock on an event can
+ * drive the schedule alone. `tick` is `get_gametime()` and resets at that
+ * changelevel, so ordering a two-half match by it interleaves the halves.
+ * `plugin_sent_at` is epoch ms but stamped from `get_systime()`, so it only
+ * moves in whole seconds. replayClock() below paces by tick within a map and
+ * uses the wall stamp only to find and place each map.
  */
 function Replay({ matchId }) {
     const [events, setEvents] = useState(null);
@@ -29,6 +34,10 @@ function Replay({ matchId }) {
     const speedRef = useRef(speed);
     speedRef.current = speed;
 
+    // Computed once per fetched list, not per render: play() schedules from it
+    // and the progress bar reads it four times a second.
+    const clock = useMemo(() => (events ? replayClock(events) : []), [events]);
+
     // Fetch events on mount
     useEffect(() => {
         fetch(`${API_URL}/api/matches/${encodeURIComponent(matchId)}/events`)
@@ -37,8 +46,9 @@ function Replay({ matchId }) {
                 return r.json();
             })
             .then(data => {
-                const sorted = (data.events || []).sort((a, b) => (a.tick || 0) - (b.tick || 0));
-                setEvents(sorted);
+                // Append-only arrival order already is the play order; sorting by any
+                // per-half clock interleaves the halves.
+                setEvents(data.events || []);
                 setLoading(false);
             })
             .catch(err => {
@@ -61,14 +71,14 @@ function Replay({ matchId }) {
         clearTimers();
 
         const startFrom = progress;
-        const baseTick = events[0].tick || 0;
-        const startTick = events[startFrom]?.tick || 0;
+        const baseAt = clock[0];
+        const startAt = clock[startFrom] ?? baseAt;
         startTimeRef.current = Date.now();
 
         // Schedule each remaining event
         for (let i = startFrom; i < events.length; i++) {
             const evt = events[i];
-            const delaySeconds = (evt.tick || 0) - startTick;
+            const delaySeconds = (clock[i] - startAt) / 1000;
             const delayMs = (delaySeconds / speedRef.current) * 1000;
 
             const idx = i;
@@ -84,12 +94,12 @@ function Replay({ matchId }) {
         // Elapsed-time ticker for the progress bar
         tickIntervalRef.current = setInterval(() => {
             const elapsedMs = Date.now() - startTimeRef.current;
-            const replayElapsed = startTick - baseTick + (elapsedMs / 1000) * speedRef.current;
+            const replayElapsed = (startAt - baseAt) / 1000 + (elapsedMs / 1000) * speedRef.current;
             setElapsed(replayElapsed);
         }, 250);
 
         setPlaying(true);
-    }, [events, progress, clearTimers]);
+    }, [events, clock, progress, clearTimers]);
 
     const pause = useCallback(() => {
         clearTimers();
@@ -120,7 +130,7 @@ function Replay({ matchId }) {
     if (error) return <div className="replay-bar">Replay error: {error}</div>;
     if (!events || events.length === 0) return <div className="replay-bar">No events to replay.</div>;
 
-    const totalDuration = (events[events.length - 1].tick || 0) - (events[0].tick || 0);
+    const totalDuration = (clock[clock.length - 1] - clock[0]) / 1000;
     const pct = totalDuration > 0 ? Math.min(100, (elapsed / totalDuration) * 100) : 0;
 
     return (
@@ -150,6 +160,47 @@ function Replay({ matchId }) {
             </span>
         </div>
     );
+}
+
+// `tick` and `plugin_sent_at` are stamped in the same post_event() call, so within
+// one map their difference is constant to within plugin_sent_at's one-second floor
+// (measured: under 1 s of drift across a half on three recorded matches). The
+// halftime changelevel moves it by the length of the map that just ended. So pace
+// by `tick` inside a map, and use the wall stamp only to find where a new map
+// starts and to place it. A late row from an earlier map (the old map's final
+// player_disconnect rows arrive interleaved with the new map's first rows) is
+// held at the current instant, not replayed at its old tick.
+const NEW_MAP_MS = 30000; // same threshold as hltvDelayBuffer's TICK_RESET_THRESHOLD_S
+
+export function replayClock(events) {
+    const out = [];
+    const maps = [];
+    let high = null;
+    for (const e of events) {
+        const wall = e.plugin_sent_at;
+        const tick = e.tick;
+        if (typeof wall === 'number' && typeof tick === 'number') {
+            const offset = wall - tick * 1000;
+            let m = null;
+            for (let j = maps.length - 1; j >= 0; j--) {
+                if (Math.abs(maps[j].offset - offset) < NEW_MAP_MS) { m = maps[j]; break; }
+            }
+            if (!m) {
+                m = { offset, firstTick: tick, maxTick: tick, startAt: Math.max(high ?? wall, wall) };
+                maps.push(m);
+            }
+            if (m === maps[maps.length - 1]) {
+                if (tick > m.maxTick) m.maxTick = tick;
+                const at = m.startAt + (m.maxTick - m.firstTick) * 1000;
+                if (high === null || at > high) high = at;
+            }
+        } else if (typeof wall === 'number' && (high === null || wall > high)) {
+            high = wall;
+        }
+        out.push(high);
+    }
+    const first = out.find(v => v !== null) ?? 0;
+    return out.map(v => (v === null ? first : v));
 }
 
 function formatTime(seconds) {
