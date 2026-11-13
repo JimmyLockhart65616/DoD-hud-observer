@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import socketio from 'socket.io-client';
 import create from 'zustand';
 import gameEvents from '../gameEvents';
+import { hudNow, hudAfter } from '../clock/hudClock';
 
 // Origin-relative: when REACT_APP_SOCKET_URL is unset (the single-origin proxy
 // deployments — local docker at https://localhost, prod at https://hud.ktpdod.com),
@@ -202,6 +203,13 @@ let lastRoundEndByHalf = {};   // { [half]: { [user_id]: statRow } }
 // event arrives first.
 let boundaryHandledForHalf = null;
 
+// The half whose half_start last anchored the clock. The plugin sends
+// half_start from inside ktp_match_start as two separate POSTs, so they arrive
+// in either order. When half_start lands first, ktp_match_start's resetMatch
+// used to null that anchor, and the clock sat frozen until the next time_sync,
+// up to 30s into the half (both orders are in the prod fixtures).
+let timeleftHalf = null;
+
 // Record a completed half's contribution. A 'summary' source (authoritative
 // plugin stats) overrides an earlier 'snapshot' (store-derived fallback) for
 // the same half; a 'snapshot' never overrides a 'summary'.
@@ -276,7 +284,7 @@ function handleHalfBoundary(newHalf) {
             // snapshot; the shorter fallback TTL dismisses it.
             setStatsBoard({
                 reason: 'half_end', fallback: true,
-                players: carrySnapshot, addedAt: Date.now(),
+                players: carrySnapshot, addedAt: hudNow(),
             });
         }
     } else if (stats_board?.reason === 'round_end') {
@@ -460,7 +468,7 @@ export const useHudStore = create(set => ({
     setAlliesScore: (n) => set({ allies_score: n }),
     setAxisScore:   (n) => set({ axis_score: n }),
     setHalf:        (n) => set({ half: n }),
-    setTimeleft:    (seconds) => set({ timeleft: seconds, timeleft_at: Date.now() }),
+    setTimeleft:    (seconds) => set({ timeleft: seconds, timeleft_at: hudNow() }),
     setMatchPhase:  (phase, mode) => set({ match_phase: phase, match_mode: mode ?? '' }),
 
     // `waves` is the optional team-level block on player_state. A side missing
@@ -468,7 +476,7 @@ export const useHudStore = create(set => ({
     // a countdown that keeps ticking after everyone has respawned is worse than
     // no countdown.
     setWaves: (waves) => set(state => {
-        const now = Date.now();
+        const now = hudNow();
 
         const side = (key, s) => {
             if (!s || typeof s.in !== 'number') {
@@ -519,7 +527,7 @@ export const useHudStore = create(set => ({
 
         return {
             scoring_in:     s.in,
-            scoring_at:     Date.now(),
+            scoring_at:     hudNow(),
             scoring_every:  every,
             scoring_allies: paired ? s.allies : null,
             scoring_axis:   paired ? s.axis   : null,
@@ -560,7 +568,7 @@ export const useHudStore = create(set => ({
 
         if (kill.kill_type === 'normal') {
             const killerStreak = streaks[kill.killer_id];
-            const now = kill.addedAt ?? Date.now();
+            const now = kill.addedAt ?? hudNow();
 
             if (victimStreak >= SHUTDOWN_MIN_STREAK) {
                 const prev = shutdowns[kill.killer_id] || { count: 0, best: 0 };
@@ -603,7 +611,7 @@ export const useHudStore = create(set => ({
             streak: streaks[kill.killer_id] || 0,
             victim_streak: victimStreak,
             id: ++killSeq,
-            addedAt: Date.now(),
+            addedAt: hudNow(),
         };
         return {
             chain_run: state.chain_run,
@@ -628,7 +636,7 @@ export const useHudStore = create(set => ({
     // else here — they clear a defender but are nobody's work.
     addCapSetups: (owner) => set(state => {
         if (owner !== 'allies' && owner !== 'axis') return {};
-        const cutoff = Date.now() - CAP_SETUP_WINDOW_MS;
+        const cutoff = hudNow() - CAP_SETUP_WINDOW_MS;
         const setups = { ...state.derived.cap_setups };
         let touched = false;
 
@@ -650,7 +658,7 @@ export const useHudStore = create(set => ({
         flag_feed: [...state.flag_feed.slice(-2), {
             ...entry,
             id: ++flagEventSeq,
-            addedAt: Date.now(),
+            addedAt: hudNow(),
         }],
     })),
 
@@ -717,6 +725,32 @@ export const useHudStore = create(set => ({
         ...(half === 1 ? { allies_score: 0, axis_score: 0 } : {}),
     })),
 }));
+
+// The store's DATA as it stood at load (actions excluded). Every value is plain
+// JSON, so a deep copy is a faithful fresh state.
+const INITIAL_HUD_DATA = JSON.stringify(Object.fromEntries(
+    Object.entries(useHudStore.getState()).filter(([, v]) => typeof v !== 'function')));
+
+/**
+ * Put the HUD back to a never-seen-an-event state: the store AND this module's
+ * boundary/carry globals. A replay seeking backwards re-feeds from the first
+ * event, and resetMatch is not enough for that — it keeps `half`, the stats
+ * board and the phase, and the half-1 boundary that resets the carry globals is
+ * a no-op when half 1 was already the last boundary handled. Recorded files
+ * don't reliably open with a ktp_match_start either.
+ *
+ * The React-key counters are left alone; they only need to keep increasing.
+ */
+export function resetHudState() {
+    useHudStore.setState(JSON.parse(INITIAL_HUD_DATA));
+    Object.keys(playerDirectory).forEach(k => { delete playerDirectory[k]; });
+    boundaryBoardShown = false;
+    halfRows = {};
+    halfSource = {};
+    lastRoundEndByHalf = {};
+    boundaryHandledForHalf = null;
+    timeleftHalf = null;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -971,7 +1005,7 @@ export const SocketStoreComponent = () => {
             const healthUpdate = () => ({
                 health: Math.max(0, e.victim_health),
                 last_damage: e.damage,
-                last_damage_at: Date.now(),
+                last_damage_at: hudNow(),
                 last_damage_id: id,
             });
             setAlliesPlayers(prev => updatePlayer(prev, e.victim_id, healthUpdate));
@@ -990,7 +1024,7 @@ export const SocketStoreComponent = () => {
                 // receipt ≈ the broadcast instant the player went prone — making the
                 // shame timer broadcast-relative. e.timestamp would inflate it by the
                 // full delay plus any server↔browser clock skew (clocks not NTP-locked).
-                prone_since: e.state !== 'standing' ? Date.now() : null,
+                prone_since: e.state !== 'standing' ? hudNow() : null,
             });
             setAlliesPlayers(prev => updatePlayer(prev, e.user_id, proneUpdate));
             setAxisPlayers(prev => updatePlayer(prev, e.user_id, proneUpdate));
@@ -1131,7 +1165,7 @@ export const SocketStoreComponent = () => {
                 team: sender?.team ?? 'unknown',
                 team_only: e.team_only,
                 message: e.message,
-                timestamp: Date.now(),
+                timestamp: hudNow(),
             });
         });
 
@@ -1184,7 +1218,7 @@ export const SocketStoreComponent = () => {
                 // Authoritative — overrides any store-snapshot fold for this half.
                 recordHalf(rows.map(r => statRow(r)), useHudStore.getState().half, 'summary');
                 useHudStore.getState().setStatsBoard({
-                    reason: 'half_end', players: rows.map(r => statRow(r)), addedAt: Date.now(),
+                    reason: 'half_end', players: rows.map(r => statRow(r)), addedAt: hudNow(),
                 });
             } else if (e.reason === 'match_end') {
                 // Full-match totals: recorded prior halves (carrySoFar) + this
@@ -1206,7 +1240,7 @@ export const SocketStoreComponent = () => {
                         : r;
                 });
                 useHudStore.getState().setStatsBoard({
-                    reason: 'match_end', players: Object.values(merged), addedAt: Date.now(),
+                    reason: 'match_end', players: Object.values(merged), addedAt: hudNow(),
                 });
             } else if (e.reason === 'round_end' || e.reason === 'manual') {
                 // round_end fires on a full capout — the cumulative capout board.
@@ -1221,7 +1255,7 @@ export const SocketStoreComponent = () => {
                     lastRoundEndByHalf[useHudStore.getState().half] = snap;
                 }
                 useHudStore.getState().setStatsBoard({
-                    reason: e.reason, players: boardRows, addedAt: Date.now(),
+                    reason: e.reason, players: boardRows, addedAt: hudNow(),
                     capout_team: e.capout_team ?? null, capout_by: e.capout_by ?? null,
                 });
             }
@@ -1244,9 +1278,9 @@ export const SocketStoreComponent = () => {
             recordHalf(players, half, 'snapshot');
             // The two POSTs (half_end + summary) can arrive in either order —
             // never clobber an authoritative board that just landed.
-            if (stats_board?.reason === 'half_end' && Date.now() - stats_board.addedAt < 5000) return;
+            if (stats_board?.reason === 'half_end' && hudNow() - stats_board.addedAt < 5000) return;
             boundaryBoardShown = true;
-            setStatsBoard({ reason: 'half_end', players, addedAt: Date.now() });
+            setStatsBoard({ reason: 'half_end', players, addedAt: hudNow() });
         });
 
         gameEvents.on('team_score', (raw) => {
@@ -1280,7 +1314,7 @@ export const SocketStoreComponent = () => {
             setRoundState({ round_end: true, round_freeze: false, round_start: false });
 
             // Revive all players 5s after round end (for scoreboard display)
-            setTimeout(() => {
+            hudAfter(() => {
                 const { allies_players, axis_players } = getState();
                 const revive = players => players.map(p => ({
                     ...p, dead: false, health: 100, prone_state: 'standing', prone_since: null,
@@ -1296,7 +1330,10 @@ export const SocketStoreComponent = () => {
             handleHalfBoundary(e.half);
             setHalf(e.half);
             resetHalf();
-            if (e.timeleft != null) setTimeleft(e.timeleft);
+            if (e.timeleft != null) {
+                setTimeleft(e.timeleft);
+                timeleftHalf = e.half ?? null;
+            }
             setRoundState({ round_end: false, round_freeze: false, round_start: false });
         });
 
@@ -1308,7 +1345,13 @@ export const SocketStoreComponent = () => {
             const e = typeof raw === 'string' ? JSON.parse(raw) : (raw ?? {});
             // Boundary bookkeeping runs BEFORE resetMatch wipes stats.
             handleHalfBoundary(e.half);
+            // Keep the clock if this half's half_start already anchored it.
+            const { timeleft, timeleft_at } = getState();
+            const keepClock = e.half != null && timeleftHalf === e.half && timeleft != null;
+            // Consumed: a later match's ktp_match_start must not keep this anchor.
+            timeleftHalf = null;
             resetMatch(e.half);
+            if (keepClock) useHudStore.setState({ timeleft, timeleft_at });
             if (e.half != null) setHalf(e.half);
         });
 
@@ -1348,7 +1391,7 @@ export const SocketStoreComponent = () => {
                 // and isn't broadcast-relative. Re-anchor on receipt so the shame
                 // timer restarts from ~0 on reload (bounded, acceptable) rather than
                 // showing an inflated elapsed.
-                prone_since:      (e.prone_state && e.prone_state !== 'standing') ? Date.now() : null,
+                prone_since:      (e.prone_state && e.prone_state !== 'standing') ? hudNow() : null,
                 disconnected:     false,
             };
 

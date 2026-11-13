@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { getWeaponIcon } from '../../screen/resources/weaponIcons';
 import { IconTarget, IconSkull, IconFlag, IconGrenade } from '../../screen/resources/CardIcons';
+import { hudNow } from '../clock/hudClock';
 
 function useProneTimer(prone_since) {
     const [elapsed, setElapsed] = useState(0);
     useEffect(() => {
         if (!prone_since) { setElapsed(0); return; }
-        const tick = () => setElapsed(Math.floor((Date.now() - prone_since) / 1000));
+        const tick = () => setElapsed(Math.floor((hudNow() - prone_since) / 1000));
         tick();
         const id = setInterval(tick, 1000);
         return () => clearInterval(id);
