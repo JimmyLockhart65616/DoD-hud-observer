@@ -12,6 +12,7 @@
 #   HUD_API_PORT                     → api.port
 #   HUD_SOCKET_PORT                  → socket.port
 #   HUD_MATCHES_DIR                  → storage.matches_dir
+#   HUD_RECORD_PLAYER_STATE          → storage.record_player_state (true/false)
 #   HUD_FRONTEND_ORIGIN              → frontend.origin
 #   HUD_HLTV_SYNC_ENABLED            → hltv_sync.enabled (true/false)
 #   HUD_HLTV_SYNC_HEARTBEAT_SECONDS  → hltv_sync.heartbeat_seconds (0 disables)
@@ -36,6 +37,10 @@ socket:
 
 storage:
   matches_dir: ./matches
+  # Also write the 4 Hz player_state / weapon_active stream to
+  # <match>/player_state.jsonl, so replays get live cards, wave pills and the
+  # scoring tick. ~15 MB per match; check /metrics disk_writes before enabling.
+  record_player_state: false
 
 frontend:
   origin: "http://localhost:3000"

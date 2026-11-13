@@ -32,6 +32,8 @@ import { createIngestRouter, makeFireToSockets, getServerSnapshot } from '../han
 import { buildHqOverview } from '../handler/hqBoard';
 import { MatchRecorder } from '../handler/matchRecorder';
 import { MetricsCollector } from '../handler/metrics';
+import { createPlayerStateHandler, replayScope } from '../handler/replayRoutes';
+import config from '../config';
 import {
     mintPlayerId,
     resolvePlayerId,
@@ -244,9 +246,9 @@ describe('publication surfaces — no SteamID may cross the wire', () => {
         app.get('/api/matches/:matchId/events', (req, res) => {
             const events = recorder.getEvents(req.params.matchId);
             if (!events) { res.status(404).json({ error: 'not found' }); return; }
-            const scope = recorder.getMetadata(req.params.matchId)?.sourceServer ?? req.params.matchId;
-            res.json({ events: pseudonymize(events, scope) });
+            res.json({ events: pseudonymize(events, replayScope(recorder, req.params.matchId)) });
         });
+        app.get('/api/matches/:matchId/player_state', createPlayerStateHandler(recorder));
     });
 
     afterEach(() => {
@@ -327,6 +329,37 @@ describe('publication surfaces — no SteamID may cross the wire', () => {
         // ...but events.jsonl on disk is the operator's record and is untouched.
         // That is the whole design: map on the way out, not at record time.
         const onDisk = fs.readFileSync(path.join(tmpDir, 'm-replay', 'events.jsonl'), 'utf8');
+        expect(onDisk).toMatch(/STEAM_0:0:555/);
+    });
+
+    // The fifth boundary. player_state.jsonl keeps real ids on disk like
+    // events.jsonl, and the replay joins its rows to the events by user_id, so
+    // the two routes must mint the SAME token for the same player.
+    it('/api/matches/:id/player_state pseudonymizes on read, with the same tokens as /events', async () => {
+        const host = 'KTP - Surface PlayerState';
+        const was = config.storage.record_player_state;
+        config.storage.record_player_state = true;
+        try {
+            await post({ event: 'ktp_match_start', match_id: 'm-ps', map: 'dod_anzio', half: 1 }, host);
+            await post({ event: 'player_connect', match_id: 'm-ps', user_id: 'STEAM_0:0:555', name: 'Ghost', team: 'allies' }, host);
+            await post({ event: 'player_state', match_id: 'm-ps', players: [
+                { user_id: 'STEAM_0:0:555', weapon: 'garand', nades: 2, health: 88, prone_state: 'standing', x: 120, y: -340 },
+            ] }, host);
+            await post({ event: 'weapon_active', match_id: 'm-ps', user_id: 'STEAM_0:0:555', weapon: 'colt' }, host);
+            await post({ event: 'ktp_match_end', match_id: 'm-ps' }, host);
+        } finally {
+            config.storage.record_player_state = was;
+        }
+
+        const res = await request(app).get('/api/matches/m-ps/player_state');
+        expect(res.status).toBe(200);
+        expect(JSON.stringify(res.body)).not.toMatch(STEAMID_RE);
+        const events = await request(app).get('/api/matches/m-ps/events');
+        const token = events.body.events.find((e: any) => e.event === 'player_connect').user_id;
+        expect(res.body.events[0].players[0].user_id).toBe(token);
+        expect(res.body.events[1].user_id).toBe(token);
+
+        const onDisk = fs.readFileSync(path.join(tmpDir, 'm-ps', 'player_state.jsonl'), 'utf8');
         expect(onDisk).toMatch(/STEAM_0:0:555/);
     });
 

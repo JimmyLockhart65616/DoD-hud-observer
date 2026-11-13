@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { unstable_batchedUpdates } from 'react-dom';
 import gameEvents from '../gameEvents';
 import { resetHudState } from '../Socket/Socket';
-import { replayTimeline } from './replayClock';
+import { replayTimeline, mergeOnClock } from './replayClock';
 import { createReplayEngine } from './replayEngine';
 import {
     buildClockTimeline, clockAt, findClock, parseClock, formatClock, halfLabel,
@@ -38,6 +38,7 @@ const SKIP_MS = 10000;
  */
 function Replay({ matchId }) {
     const [events, setEvents] = useState(null);
+    const [stateRows, setStateRows] = useState(null);   // player_state.jsonl, when recorded
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [playing, setPlaying] = useState(false);
@@ -48,6 +49,7 @@ function Replay({ matchId }) {
     const [demoError, setDemoError] = useState(null);
 
     const engineRef = useRef(null);
+    const resumeAtRef = useRef(null);
     const dragRef = useRef(null);
     const speedRef = useRef(speed);
     speedRef.current = speed;
@@ -71,29 +73,53 @@ function Replay({ matchId }) {
             });
     }, [matchId]);
 
+    // The player_state stream, when the match was recorded with it: the weapon
+    // in hand, grenades, wave pills, scoring tick. ~15 MB for a full match, so
+    // it never holds up playback; it is merged in whenever it lands. A 404 is
+    // the normal answer for a match recorded without it.
+    useEffect(() => {
+        let cancelled = false;
+        fetch(`${API_URL}/api/matches/${encodeURIComponent(matchId)}/player_state`)
+            .then(r => (r.ok ? r.json() : null))
+            .then(data => { if (!cancelled && data && Array.isArray(data.events)) setStateRows(data.events); })
+            .catch(() => { /* replay works without it */ });
+        return () => { cancelled = true; };
+    }, [matchId]);
+
     const timeline = useMemo(() => (events ? replayTimeline(events) : null), [events]);
     const clockTimeline = useMemo(
         () => (events && timeline ? buildClockTimeline(events, timeline.clock, timeline.mapOf) : []),
         [events, timeline]);
+    // What actually plays: the events, plus player_state rows placed on the
+    // same schedule once they arrive.
+    const playlist = useMemo(() => {
+        if (!events || !timeline) return null;
+        if (!stateRows || stateRows.length === 0) return { events, clock: timeline.clock };
+        return mergeOnClock(events, timeline, stateRows);
+    }, [events, timeline, stateRows]);
 
-    // One engine per event list. It owns the HUD clock until unmount.
+    // One engine per playlist. It owns the HUD clock until unmount. When the
+    // playlist grows (player_state landed) the new engine picks up where the
+    // old one was.
     useEffect(() => {
-        if (!events || !timeline || events.length === 0) return undefined;
+        if (!playlist || playlist.events.length === 0) return undefined;
         resetHudState();
         const engine = createReplayEngine({
-            events,
-            clock: timeline.clock,
+            events: playlist.events,
+            clock: playlist.clock,
             emit: evt => gameEvents.emit(evt.event, JSON.stringify(evt)),
             reset: resetHudState,
             batch: unstable_batchedUpdates,
         });
+        if (resumeAtRef.current != null && resumeAtRef.current > engine.start) engine.seek(resumeAtRef.current);
         engineRef.current = engine;
         setNow(engine.now);
         return () => {
+            resumeAtRef.current = engine.now;
             engine.dispose();
             engineRef.current = null;
         };
-    }, [events, timeline]);
+    }, [playlist]);
 
     // The driver: advance virtual time by measured wall time × speed.
     useEffect(() => {
@@ -175,6 +201,7 @@ function Replay({ matchId }) {
     if (!events || events.length === 0) return <div className="replay-bar">No events to replay.</div>;
 
     const engine = engineRef.current;
+    const totalEvents = playlist ? playlist.events.length : events.length;
     const start = engine ? engine.start : timeline.clock[0];
     const end = engine ? engine.end : timeline.clock[timeline.clock.length - 1];
     const total = Math.max(0, end - start);
@@ -290,7 +317,7 @@ function Replay({ matchId }) {
                 {demoError && <span className="replay-demo-msg">{demoError}</span>}
             </span>
             <span className="replay-count">
-                {engine ? engine.index : 0}/{events.length}
+                {engine ? engine.index : 0}/{totalEvents}
             </span>
         </div>
     );

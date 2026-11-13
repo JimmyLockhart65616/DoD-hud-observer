@@ -15,11 +15,14 @@ import { buildServerList } from './handler/serverList';
 import { createSocketServer } from './socket/socket';
 import { HltvSyncService } from './handler/hltvSync';
 import { HltvDelayBuffer, wireStrandedRescue } from './handler/hltvDelayBuffer';
+import { createPlayerStateHandler, isSafeMatchId, replayScope } from './handler/replayRoutes';
+import { startEventLoopMonitor } from './handler/metrics';
 
 // ─── Core services ───────────────────────────────────────────────────────────
 
 const recorder = new MatchRecorder(config.storage.matches_dir);
 const metrics  = new MetricsCollector();
+const eventLoop = startEventLoopMonitor();
 const hltvSync = new HltvSyncService(config.hltv_sync);
 
 // Active-match reaper — matches that never get a clean ktp_match_end (plugin
@@ -78,6 +81,11 @@ app.get('/health', (_req, res) => {
 app.get('/metrics', (_req, res) => {
     const snapshot = metrics.getSnapshot();
     snapshot.active_matches = recorder.getActiveMatchIds();
+    // Cost of the recorder's synchronous appends, and what the event loop as a
+    // whole is doing. Watch both before and after storage.record_player_state.
+    snapshot.record_player_state = config.storage.record_player_state;
+    snapshot.disk_writes = recorder.timings.snapshot();
+    snapshot.event_loop_delay_ms = eventLoop.snapshot();
     res.json(snapshot);
 });
 
@@ -127,14 +135,22 @@ app.get('/api/hq', (_req, res) => {
 // than at record time. Scope is the recording server, so a replayed id matches
 // the token the live socket emitted for that same player.
 app.get('/api/matches/:matchId/events', (req, res) => {
+    if (!isSafeMatchId(req.params.matchId)) {
+        res.status(400).json({ error: 'bad match id' });
+        return;
+    }
     const events = recorder.getEvents(req.params.matchId);
     if (!events) {
         res.status(404).json({ error: 'match not found or no events recorded' });
         return;
     }
-    const scope = recorder.getMetadata(req.params.matchId)?.sourceServer ?? req.params.matchId;
-    res.json({ events: pseudonymize(events, scope) });
+    res.json({ events: pseudonymize(events, replayScope(recorder, req.params.matchId)) });
 });
+
+// The same match's player_state.jsonl (player cards, wave pills, scoring tick
+// for the replay), when it was recorded. Same scope as the events route, so the
+// two streams carry the same tokens. See handler/replayRoutes.ts.
+app.get('/api/matches/:matchId/player_state', createPlayerStateHandler(recorder));
 
 // ---------------------------------------------------------------------------
 // Historical stats, read-only, from the KTPHLStatsX `hlstatsx` MySQL database.
@@ -395,3 +411,4 @@ console.log(`[config] Auth key: ${config.ingest.auth_key === 'changeme' ? '⚠ D
 console.log(`[config] Caster token secret: ${isWeakSecret(config.caster_auth.session_secret) ? '⚠ WEAK (default, placeholder, or < 32 chars) — every caster token is refused' : '***set***'}`);
 console.log(`[config] Position gating: ${config.caster_auth.gate_positions ? 'ON — positions are caster-only' : 'off — positions are public, as before'}`);
 console.log(`[config] Matches dir: ${path.resolve(config.storage.matches_dir)}`);
+console.log(`[config] Record player_state: ${config.storage.record_player_state ? 'ON — player_state.jsonl beside events.jsonl' : 'off'}`);

@@ -22,12 +22,12 @@ const PLAYER_STALE_MS = 5 * 60 * 1000;
 // connect. Deliberately not the user_id — see the roster arms below.
 const UNKNOWN_PLAYER_NAME = '(unknown)';
 
-// Socket-only events: live overlay state that must NOT be persisted to
-// events.jsonl. player_state is the 4 Hz per-player snapshot (every alive
-// player, every tick); weapon_active fires on every weapon switch. Both carry
-// transient state with near-zero replay value, and writing them would bloat the
-// match log and hammer MatchRecorder's synchronous appendFileSync hot path.
-// They still fan out to sockets + metrics — just skipped on disk.
+// Socket-only events: live overlay state that is NOT written to events.jsonl.
+// player_state is the 4 Hz per-player snapshot (every alive player, every
+// tick); weapon_active fires on every weapon switch. Together they are 3-4x the
+// rest of a match, and events.jsonl is the record the league stats join and
+// every downstream reader parse in full. With storage.record_player_state on
+// they go to their own player_state.jsonl instead, for replays.
 const SOCKET_ONLY_EVENTS = new Set(['player_state', 'weapon_active']);
 
 // Per-player stat fields introduced by the stats-popup feature. Shared by the
@@ -735,6 +735,12 @@ export function createIngestRouter(
             console.warn(`[ingest] Rejected ${event.event} for ${matchId} from ${sourceServer}`);
             res.status(409).json({ error: 'event rejected by match recorder' });
             return;
+        }
+
+        // Best-effort: the recorder drops it unless the match is active and
+        // owned by this server, and a failed write never fails the POST.
+        if (matchId && SOCKET_ONLY_EVENTS.has(event.event) && config.storage.record_player_state) {
+            recorder.recordPlayerState(matchId, event, sourceServer);
         }
 
         if (matchId && !SOCKET_ONLY_EVENTS.has(event.event)) {
