@@ -1,4 +1,4 @@
-import { replayClock } from './replayClock';
+import { replayClock, replayTimeline, mergeOnClock, placeOnClock } from './replayClock';
 
 // `tick` is get_gametime() and resets at the halftime changelevel, so a tick sort
 // interleaves the halves. `plugin_sent_at` is stamped from get_systime(), so it only
@@ -88,5 +88,44 @@ describe('replayClock', () => {
             .toEqual([7000, 7000, 8000]);
         expect(replayClock([{}, { plugin_sent_at: 7000 }, {}, { plugin_sent_at: 8000 }]))
             .toEqual([7000, 7000, 7000, 8000]);
+    });
+});
+
+describe('mergeOnClock (player_state.jsonl beside events.jsonl)', () => {
+    // Shape of a halftime: map 1 ends near tick 1480, map 2 opens at tick 1.
+    const events = [
+        { event: 'half_start', half: 1, tick: 100.0, plugin_sent_at: 100000 },
+        { event: 'kill', tick: 1480.0, plugin_sent_at: 1480000 },
+        { event: 'half_start', half: 2, tick: 1.0, plugin_sent_at: 1600000 },
+        { event: 'kill', tick: 50.0, plugin_sent_at: 1649000 },
+    ];
+    const rows = [
+        { event: 'player_state', tick: 100.25, plugin_sent_at: 100000 },   // map 1, just after the first event
+        { event: 'player_state', tick: 2.5, plugin_sent_at: 1601000 },     // map 2: its tick restarted
+        { event: 'player_state', tick: 1480.0, plugin_sent_at: 1480000 },  // same instant as an event
+        { event: 'player_state', tick: 5.0, plugin_sent_at: 9999000 },     // matches no map: dropped
+    ];
+
+    it('places each row on its own map at tick pace, after events at the same instant', () => {
+        const timeline = replayTimeline(events);
+        const merged = mergeOnClock(events, timeline, rows);
+        expect(merged.events.map(e => `${e.event}@${e.tick}`)).toEqual([
+            'half_start@100', 'player_state@100.25', 'kill@1480', 'player_state@1480',
+            'half_start@1', 'player_state@2.5', 'kill@50',
+        ]);
+        expect(merged.clock[1] - merged.clock[0]).toBe(250);
+        expect(merged.clock[5] - merged.clock[4]).toBe(1500);
+        for (let i = 1; i < merged.clock.length; i++) {
+            expect(merged.clock[i]).toBeGreaterThanOrEqual(merged.clock[i - 1]);
+        }
+        // the half-2 row sits on half 2's map, which the demo-clock halves rely on
+        expect(merged.mapOf[5]).toBe(merged.mapOf[4]);
+        expect(merged.mapOf[5]).not.toBe(merged.mapOf[0]);
+    });
+
+    it('is the plain event list when there are no rows', () => {
+        const timeline = replayTimeline(events);
+        expect(mergeOnClock(events, timeline, []).clock).toEqual(timeline.clock);
+        expect(placeOnClock({ tick: 1 }, timeline.maps)).toBeNull();
     });
 });

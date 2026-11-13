@@ -221,15 +221,19 @@ i.e. the league roster (issue #19; 12/12 ids in a stored match resolved to leagu
 player records). `backend/src/handler/pseudonym.ts` replaces them with an opaque
 `p_<16 hex>` token on the way out.
 
-- **Real ids stay INSIDE**: the per-server state cache, `events.jsonl` on disk,
-  and the league stats join all keep the SteamID. Only the wire is pseudonymized.
+- **Real ids stay INSIDE**: the per-server state cache, `events.jsonl` and
+  `player_state.jsonl` on disk, and the league stats join all keep the SteamID. Only the wire is pseudonymized.
   That is why the recorder is untouched and forensics still work.
-- **There are FOUR outbound boundaries, not three**, and the fourth is the one
-  that gets missed: `makeFireToSockets` (live stream), `buildHqOverview`
-  (`/api/hq`), `/api/matches/:id/events` (replay), and **`join_server`'s snapshot
-  replay in `socket/socket.ts`** — which reads the cache directly rather than
-  going through `makeFireToSockets`, and is the *most-hit* join path we have
-  (every OBS reload, every `/caster` open). Pinned by `pseudonym.test.ts`.
+- **There are FIVE outbound boundaries**, and the one that gets missed is
+  `join_server`: `makeFireToSockets` (live stream), `buildHqOverview`
+  (`/api/hq`), `/api/matches/:id/events` and `/api/matches/:id/player_state`
+  (replay), and **`join_server`'s snapshot replay in `socket/socket.ts`** —
+  which reads the cache directly rather than going through
+  `makeFireToSockets`, and is the *most-hit* join path we have (every OBS
+  reload, every `/caster` open). The two replay routes must share
+  `replayScope()` (`handler/replayRoutes.ts`): the replay joins the two streams
+  by `user_id`, so they have to mint the same token. Pinned by
+  `pseudonym.test.ts`.
 - **The frontend needed no changes at all.** Every one of the ~79 `user_id` uses
   in `Socket.jsx` is a React `key=` or a dictionary lookup; the id is never parsed
   and never displayed. Keep it that way — anything that *interprets* a `user_id`
@@ -321,7 +325,11 @@ event uses a separate asynchronous curl request, so lifecycle and score rows can
 arrive in a different order than the plugin called them. MatchRecorder settles
 that transport reordering without rewriting raw bytes: an early score baseline's
 half-0 auto-start metadata is upgraded only by a same-server `ktp_match_start`
-whose map is exact (or replaces `unknown`). Completed matches have a finite
+whose map is exact (or replaces `unknown`). The auto-start takes `matchType`
+from the envelope's `match_type` but keeps `half: 0`, which is what marks the
+placeholder for that upgrade and for KTPInfrastructure's archive retention
+(before 2026-11, every auto-start wrote `matchType: 0`, COMPETITIVE, and ~770
+archived 12mans and scrims still say so). Completed matches have a finite
 30-second settlement window, bound to the exact original `sourceServer`. Within
 that window only an official `team_score` with `sample_kind: "final"`, or the
 existing `player_stats_summary` with `reason: "match_end"`, may append. Rejected
@@ -419,7 +427,7 @@ team-halves and re-ordered rows on 3 of 4. It was never a cosmetic error.
   is a no-op on every pre-2.5.0 capture.
 - `hits` / `hs_hits` still count a hit that applies 0 damage. A hit is a hit.
 
-### Live State Events (socket-only — never persisted)
+### Live State Events (never in events.jsonl)
 
 ```json
 { "event": "weapon_active", "user_id": "STEAM_0:0:123", "weapon": "garand" }
@@ -429,10 +437,38 @@ team-halves and re-ordered rows on 3 of 4. It was never a cosmetic error.
   "scoring": { "in": 12.75, "every": 30.50, "allies": 4, "axis": 2 },
   "players": [
     { "user_id": "STEAM_0:0:123", "weapon": "garand", "nades": 2,
-      "health": 100, "prone_state": "standing|prone|deployed" }
+      "health": 100, "prone_state": "standing|prone|deployed",
+      "x": 512, "y": -1024 }
   ]
 }
 ```
+
+**Recorded for replays when `storage.record_player_state` is on** (default
+off; `HUD_RECORD_PLAYER_STATE`). `MatchRecorder.recordPlayerState` appends both
+events to `<match>/player_state.jsonl`, never to `events.jsonl`:
+
+- Only into an **active** match owned by the posting server. It never
+  auto-starts a match, never writes after the end, and does not refresh the
+  reaper's `lastEventAt` (an idle server in a dead match still sends 4 Hz state).
+- **`x`/`y` are dropped before writing.** The replay routes are public and
+  coordinates and movement histories stay private (`app.ts`). Nothing a replay
+  shows needs them.
+- A failed write is logged and swallowed; it must never cost the broadcast a POST.
+- ~12-15 MB per match (3-4× `events.jsonl`), served by
+  `GET /api/matches/:id/player_state` gzipped (~290 KB for a synthetic full
+  match). The first build of a match's response is done in 500-row slices with a
+  yield between: in one pass it held the event loop ~210 ms on a 10k-row match,
+  which on prod is every server's broadcast stalling because somebody opened a
+  replay. The last 3 finished matches' bodies are cached.
+- `/metrics` carries `disk_writes` (count, bytes, p50/p99/max per stream) and
+  `event_loop_delay_ms` (last full minute, sampling interval subtracted) so the
+  cost is measured before and after the flag is turned on.
+- **The match directory's file names are a contract** with KTPInfrastructure's
+  `scripts/ktp-hud-archive-retention.sh`: it recognises exactly `events.jsonl`,
+  `metadata.json` and `player_state.jsonl`, and leaves any directory holding
+  anything else alone forever. It prunes `player_state.jsonl` after 30 days by
+  its own mtime, the rest by match type (12man/scrim 30 days, draft 180, ktp
+  kept). **Tell Tony before a fourth file appears in a match directory.**
 
 These drive the live weapon icon and grenade pips on the player cards, the
 reinforcement-wave pill above each team's card strip, and the territorial
@@ -440,8 +476,8 @@ scoring-tick countdown + projected points in the top-bar score pill.
 
 - `weapon_active` is forward-driven (`dod_client_weaponswitch`), so it is immune to the half-1 task wedge. `player_state` is the 4 Hz `task_poll_player_state` batch and is not.
 - `player_state` carries **only alive players** — dead players are omitted rather than sent with zeroes, and the store leaves omitted players untouched. The POST is skipped when there is nothing at all to say, but an empty `players` array still ships if a wave clock or the scoring tick is running: a full team wipe is exactly when those matter.
-- **Buffer budget.** `task_poll_player_state` guards at `BUFFER_SIZE - 576`, the sum of everything appended after the check: one more player row (192) + the `waves` block (96) + the `scoring` block (96) + `post_event`'s envelope prefix (165) + 27 slack. Adding another trailing block means redoing that arithmetic, not guessing — the comment at the guard carries the table.
-- Both are in `SOCKET_ONLY_EVENTS` (`ingest.ts`): fanned out to sockets but **not** written to `events.jsonl`, and there is **no reducer arm and no cache**, so a join snapshot carries no weapon/grenade data — a reloading overlay shows nothing until the next tick. This is also why event-stream invariants cannot cover them: the production fixture contains zero `player_state` records.
+- **Buffer budget.** `task_poll_player_state` guards at `BUFFER_SIZE - 608` (576 before `x`/`y`, plugin 2.8.0), the sum of everything appended after the check: one more player row (224) + the `waves` block (96) + the `scoring` block (96) + `post_event`'s envelope prefix (165) + 27 slack. Adding another trailing block means redoing that arithmetic, not guessing — the comment at the guard carries the table.
+- Both are in `SOCKET_ONLY_EVENTS` (`ingest.ts`): fanned out to sockets but **not** written to `events.jsonl` (only, optionally, to `player_state.jsonl`, above), and there is **no reducer arm and no cache**, so a join snapshot carries no weapon/grenade data — a reloading overlay shows nothing until the next tick. This is also why event-stream invariants cannot cover them: the production fixture contains zero `player_state` records.
 - `nades` comes from `dodx_get_grenade_ammo`, a raw pdata read at a **runtime-detected offset**, and is **three-valued**: a positive count, a real `0` (empty pool), and **negative = "could not resolve"**. The plugin passes a negative through **unclamped**; `Socket.jsx` normalises `< 0` to `null`, and the card renders *no pip at all* for null while a real `0` keeps a dimmed pip. Getting this wrong is not cosmetic — until dodx 2.7.32 every failure path in that native returned `0`, indistinguishable from an empty pool, so a wrong offset yielded plausible, stable, entirely fabricated counts (KTPAMXX#15). The card compounded it with `?? 0`, so *unknown* was drawn on air as *none* — which also hit every player on a freshly-reloaded overlay, since `player_state` is socket-only and carries no join snapshot. **The fleet must reach 2.7.32 before the negative ever appears**; on older modules the unknown arm is unreachable and only the reload case improves. Store contract in `Socket.nades.test.js`; the mocker's full-roster snapshot carries one `-1` so `npm run e2e` keeps exercising the hidden-pip path.
 - `nade_throw` above is documented but **never emitted by the plugin** (a CS-era leftover); `Socket.jsx` increments a `nades_thrown` field no component reads. Do not build on it.
 
@@ -871,6 +907,10 @@ paces by `tick` within a map and places each map by `plugin_sent_at` (PR #32).
   `half_start`**: after the halftime changelevel the plugin keeps stamping
   `half: 1` while `time_sync` reports the new map's warm-up clock, which on
   `1783302239-CHI1` passes through the same 19:47 the first half read.
+- **`player_state.jsonl` joins the playlist when it lands** (it never holds
+  up playback). `mergeOnClock` places each row on its own map at that map's
+  tick pace, after any event at the same instant; the engine is rebuilt at the
+  same position. A match recorded without it simply 404s and plays as before.
 - `ktp_match_start` keeps the clock when the same half's `half_start` (sent
   as a separate POST from inside it) arrived first. Before, `resetMatch`
   nulled it and the clock froze until the next `time_sync`, up to 30 s into

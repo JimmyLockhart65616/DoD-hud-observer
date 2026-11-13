@@ -124,13 +124,14 @@ The box takes the clock the demo *shows*, not the demo's playback time. A demo i
 
 Timers, wave pills and feed entries follow the replay's clock: they stop when it pauses, speed up with it, and land in the right place after a seek.
 
+A match recorded with `player_state` (the backend's `storage.record_player_state`) also replays the live player state: the weapon in hand, grenade counts, the reinforcement pills and the scoring tick. It loads a moment after the replay itself. Older matches, and any recorded with that switch off, show each player's spawn weapon and no grenades, pills or scoring tick. Player positions are never recorded.
+
 ---
 
 ## Future Features
 
 Not yet built — tracked for a later release:
 
-- **Live player state in replays** — `player_state` and `weapon_active` are socket-only and not yet written to disk. A replay's player cards still fill in from the recorded roster, spawn, damage and kill events, but they show each player's spawn weapon rather than the one in hand, and no grenade count; the wave pills and the scoring-tick panel stay empty.
 - **HLTV sync via HLAE** — align the overlay's event timeline with a demo playing in HLTV / Half-Life Advanced Effects, so the HUD matches a rewatched demo frame-for-frame.
 - **Observed-player card** — a bottom-center card showing whichever player the caster is currently spectating. The HUD plugin can't yet tell which player the HLTV client has focused on, so this is shelved until we have a signal to drive it.
 

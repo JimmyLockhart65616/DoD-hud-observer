@@ -61,6 +61,11 @@ export function replayClock(events) {
  * opened, e.g. a row from before the match's first recorded event.
  */
 export function placeOnClock(row, maps) {
+    const placed = placeWithMap(row, maps);
+    return placed ? placed.v : null;
+}
+
+function placeWithMap(row, maps) {
     const wall = row.plugin_sent_at;
     const tick = row.tick;
     if (typeof wall !== 'number' || typeof tick !== 'number') return null;
@@ -68,8 +73,41 @@ export function placeOnClock(row, maps) {
     for (let j = maps.length - 1; j >= 0; j--) {
         const m = maps[j];
         if (Math.abs(m.offset - offset) < NEW_MAP_MS) {
-            return Math.max(m.startAt, m.startAt + (tick - m.firstTick) * 1000);
+            return { v: Math.max(m.startAt, m.startAt + (tick - m.firstTick) * 1000), map: j };
         }
     }
     return null;
+}
+
+/**
+ * Merge a side stream (player_state.jsonl rows) into the events' schedule.
+ * Events keep their order and their instants; each row goes where its map's
+ * tick pace puts it, after any event at the same instant. Rows that match no
+ * map are dropped.
+ *
+ * @returns { events, clock, mapOf } in the same shape replayTimeline gives
+ */
+export function mergeOnClock(events, timeline, rows) {
+    const placed = [];
+    for (const row of rows || []) {
+        const p = placeWithMap(row, timeline.maps);
+        if (p) placed.push({ row, v: p.v, map: p.map });
+    }
+    // Rows are written in arrival order; a stable sort by instant keeps that
+    // order among equals.
+    placed.sort((a, b) => a.v - b.v);
+
+    const out = { events: [], clock: [], mapOf: [] };
+    let j = 0;
+    for (let i = 0; i < events.length; i++) {
+        while (j < placed.length && placed[j].v < timeline.clock[i]) {
+            out.events.push(placed[j].row); out.clock.push(placed[j].v); out.mapOf.push(placed[j].map);
+            j++;
+        }
+        out.events.push(events[i]); out.clock.push(timeline.clock[i]); out.mapOf.push(timeline.mapOf[i]);
+    }
+    for (; j < placed.length; j++) {
+        out.events.push(placed[j].row); out.clock.push(placed[j].v); out.mapOf.push(placed[j].map);
+    }
+    return out;
 }

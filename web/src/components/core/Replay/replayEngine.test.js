@@ -15,7 +15,7 @@ import { SocketStoreComponent, useHudStore, resetHudState } from '../Socket/Sock
 import gameEvents from '../gameEvents';
 import { hudNow, hudAfter, setHudClockSource } from '../clock/hudClock';
 import { createReplayEngine } from './replayEngine';
-import { replayTimeline } from './replayClock';
+import { replayTimeline, mergeOnClock } from './replayClock';
 import { buildClockTimeline, findClock } from './demoClock';
 
 afterEach(() => setHudClockSource(null));
@@ -170,6 +170,39 @@ describe('replay engine against the store', () => {
         act(() => engine.seek(t[0]));
         act(() => engine.seek(t[4]));
         expect(dead()).toBe(false);
+        engine.dispose();
+    });
+
+    it('plays recorded player_state rows, stamped at their own replay instant', () => {
+        const base = [
+            { event: 'player_connect', user_id: 'A', name: 'a', team: 'allies', tick: 1, plugin_sent_at: 10000 },
+            { event: 'player_spawn', user_id: 'A', team: 'allies', class_id: 0, weapon_primary: 'garand', tick: 1, plugin_sent_at: 10000 },
+            { event: 'time_sync', timeleft: 100, tick: 30, plugin_sent_at: 39000 },
+        ];
+        const rows = [
+            { event: 'player_state', tick: 4.25, plugin_sent_at: 13000,
+              players: [{ user_id: 'A', weapon: 'colt', nades: 1, health: 77, prone_state: 'standing' }],
+              waves: { allies: { in: 6.5, pending: 1 } } },
+            { event: 'weapon_active', user_id: 'A', weapon: 'spade', tick: 9.0, plugin_sent_at: 18000 },
+        ];
+        const timeline = replayTimeline(base);
+        const merged = mergeOnClock(base, timeline, rows);
+        resetHudState();
+        const engine = createReplayEngine({
+            events: merged.events, clock: merged.clock,
+            emit: evt => gameEvents.emit(evt.event, JSON.stringify(evt)),
+            reset: resetHudState, batch: unstable_batchedUpdates,
+        });
+        const rowAt = merged.clock[merged.events.indexOf(rows[0])];
+        act(() => engine.seek(rowAt + 1000));
+        const s = useHudStore.getState();
+        const a = s.allies_players.find(p => p.user_id === 'A');
+        expect(a.weapon_active).toBe('colt');
+        expect(a.nades).toBe(1);
+        expect(s.wave_allies).toBe(6.5);
+        expect(s.wave_allies_at).toBe(rowAt);          // not the wall clock at the seek
+        act(() => engine.seek(merged.clock[merged.clock.length - 1]));
+        expect(useHudStore.getState().allies_players.find(p => p.user_id === 'A').weapon_active).toBe('spade');
         engine.dispose();
     });
 });
