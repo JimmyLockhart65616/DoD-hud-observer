@@ -121,3 +121,38 @@ describe('Socket store machine — timeleft anchoring', () => {
         expect(store.getState().timeleft_at).toBeLessThanOrEqual(after);
     });
 });
+
+// The plugin sends half_start from inside ktp_match_start as two POSTs, so they
+// arrive in either order (both are in the prod fixtures). half_start first used
+// to lose its anchor to ktp_match_start's resetMatch, freezing the clock until
+// the next time_sync up to 30s into the half.
+describe('Socket store machine — half_start / ktp_match_start arrival order', () => {
+    it('keeps the clock when this half\'s half_start arrived first', () => {
+        const { store, emit } = setup();
+        emit('half_start', { event: 'half_start', half: 2, timeleft: 1200 });
+        const at = store.getState().timeleft_at;
+        emit('ktp_match_start', { event: 'ktp_match_start', half: 2 });
+        expect(store.getState().timeleft).toBe(1200);
+        expect(store.getState().timeleft_at).toBe(at);
+        expect(store.getState().half).toBe(2);
+    });
+
+    it('still clears the clock when ktp_match_start arrives first', () => {
+        const { store, emit } = setup();
+        emit('time_sync', { event: 'time_sync', timeleft: 15 });
+        emit('ktp_match_start', { event: 'ktp_match_start', half: 2 });
+        expect(store.getState().timeleft).toBeNull();
+        emit('half_start', { event: 'half_start', half: 2, timeleft: 1200 });
+        expect(store.getState().timeleft).toBe(1200);
+    });
+
+    it('does not carry a consumed anchor into a later match', () => {
+        const { store, emit } = setup();
+        emit('half_start', { event: 'half_start', half: 1, timeleft: 1200 });
+        emit('ktp_match_start', { event: 'ktp_match_start', half: 1 });
+        expect(store.getState().timeleft).toBe(1200);
+        // next match, ktp_match_start first this time: the old anchor must go
+        emit('ktp_match_start', { event: 'ktp_match_start', half: 1 });
+        expect(store.getState().timeleft).toBeNull();
+    });
+});

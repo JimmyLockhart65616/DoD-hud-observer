@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { humanizeFlagName } from '../Flags/humanize';
+import { hudNow } from '../clock/hudClock';
 
 // Render-time TTL filtering. The previous implementation used per-item
 // setTimeout to flip a `visible` flag, but browsers throttle setTimeout to
@@ -11,7 +12,7 @@ import { humanizeFlagName } from '../Flags/humanize';
 //   - During quiet periods we drive a 1s ticker so items can age out without
 //     waiting for the next event. setInterval is throttled in inactive tabs
 //     too, but that's fine — when the tab refocuses, the next render filters
-//     by current Date.now() and stale items disappear at once.
+//     by current hudNow() and stale items disappear at once.
 
 const FlagFeedItem = ({ entry }) => {
     if (entry.kind === 'cap_break_kill') {
@@ -67,14 +68,14 @@ const FlagFeedItem = ({ entry }) => {
 };
 
 const FlagFeed = React.memo(({ entries, screentime }) => {
-    const [now, setNow] = useState(() => Date.now());
+    const [now, setNow] = useState(() => hudNow());
     const hasEntries = !!(entries && entries.length > 0);
 
     // Drive a 1s ticker only while there are entries that could expire.
     // Stops the interval when the feed is empty so we're not spinning forever.
     useEffect(() => {
         if (!hasEntries) return undefined;
-        const t = setInterval(() => setNow(Date.now()), 1000);
+        const t = setInterval(() => setNow(hudNow()), 1000);
         return () => clearInterval(t);
     }, [hasEntries]);
 

@@ -1,4 +1,5 @@
 import React from 'react';
+import { hudNow } from '../../clock/hudClock';
 
 const padTime = time => {
     return String(time).length === 1 ? `0${time}` : `${time}`;
@@ -27,7 +28,7 @@ const Timer = ({ timeleft, timeleftAt, frozen }) => {
         // digit within 200ms of the true boundary. setState with an unchanged
         // value is a no-op re-render-wise, so the fast interval stays cheap.
         const update = () => {
-            const remaining = timeleft - (Date.now() - timeleftAt) / 1000;
+            const remaining = timeleft - (hudNow() - timeleftAt) / 1000;
             setDisplay(Math.max(0, Math.floor(remaining)));
         };
 

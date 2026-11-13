@@ -1,4 +1,4 @@
-import { replayClock } from './Replay';
+import { replayClock } from './replayClock';
 
 // `tick` is get_gametime() and resets at the halftime changelevel, so a tick sort
 // interleaves the halves. `plugin_sent_at` is stamped from get_systime(), so it only

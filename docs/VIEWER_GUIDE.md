@@ -112,14 +112,25 @@ At halftime (`half_start`, half 2):
 
 At match end the HUD freezes on the final state until the next match starts or the browser source is refreshed.
 
+### Replay
+
+The **Replay** link on `/watch` plays a stored match back through the same overlay (`?match=<id>&replay=true`), with a control bar along the bottom:
+
+- **Play / pause** (or **Space**), restart, and 0.5×–8× speed.
+- **Seek bar** — drag or click anywhere; **←** / **→** skip 10 seconds. `H1` / `H2` marks show where each half starts.
+- **Demo reads** — to line the replay up with an HLTV demo, type the round clock the demo shows on screen (e.g. `14:32`), pick the half, and press Enter. The replay jumps to the first moment its own clock read that. While you aren't typing, the box shows the replay's current clock.
+
+The box takes the clock the demo *shows*, not the demo's playback time. A demo is one file per half and HLTV starts it when it reconnects to the server at the map load, behind the proxy's delay, so its playback time has no fixed offset from the match. The round clock needs none. After halftime the plugin keeps stamping half 1 while the new map's warm-up clock runs, so halves are bounded by map as well as by `half_start` and that warm-up clock is never mistaken for the first half.
+
+Timers, wave pills and feed entries follow the replay's clock: they stop when it pauses, speed up with it, and land in the right place after a seek.
+
 ---
 
 ## Future Features
 
 Not yet built — tracked for a later release:
 
-- **Demo-synchronised replay** — align a replay to an HLTV demo's playhead. Replay itself is **already built**: `?match=<id>&replay=true` loads a match from its recorded `events.jsonl` and plays it through the same event bus as the live view. What is not built is *synchronisation* — the replay runs on its own clock with no seek, so a caster must start it on a cue. The `timeleft` field on `half_start` and `time_sync` is the natural anchor, since a demo renders the same clock on screen.
-  - Note two limits of a replay today. `player_state` and `weapon_active` are socket-only and never written to disk. A replay's player cards still fill in from the recorded roster, spawn, damage and kill events, but they show each player's spawn weapon rather than the one in hand, and no grenade count; the wave pills and the scoring-tick panel stay empty. And one demo file covers one half while a match's `events.jsonl` covers both, so a per-half filter would have to be passed in.
+- **Live player state in replays** — `player_state` and `weapon_active` are socket-only and not yet written to disk. A replay's player cards still fill in from the recorded roster, spawn, damage and kill events, but they show each player's spawn weapon rather than the one in hand, and no grenade count; the wave pills and the scoring-tick panel stay empty.
 - **HLTV sync via HLAE** — align the overlay's event timeline with a demo playing in HLTV / Half-Life Advanced Effects, so the HUD matches a rewatched demo frame-for-frame.
 - **Observed-player card** — a bottom-center card showing whichever player the caster is currently spectating. The HUD plugin can't yet tell which player the HLTV client has focused on, so this is shelved until we have a signal to drive it.
 
