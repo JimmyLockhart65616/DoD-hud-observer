@@ -120,9 +120,13 @@ The **Replay** link on `/watch` plays a stored match back through the same overl
 - **Seek bar** — drag or click anywhere; **←** / **→** skip 10 seconds. `H1` / `H2` marks show where each half starts.
 - **Demo reads** — to line the replay up with an HLTV demo, type the round clock the demo shows on screen (e.g. `14:32`), pick the half, and press Enter. The replay jumps to the first moment its own clock read that. While you aren't typing, the box shows the replay's current clock.
 
+A match opens for replay once the broadcast has shown its end; until then the Replay link says the match is still in progress.
+
 The box takes the clock the demo *shows*, not the demo's playback time. A demo is one file per half and HLTV starts it when it reconnects to the server at the map load, behind the proxy's delay, so its playback time has no fixed offset from the match. The round clock needs none. After halftime the plugin keeps stamping half 1 while the new map's warm-up clock runs, so halves are bounded by map as well as by `half_start` and that warm-up clock is never mistaken for the first half.
 
 Timers, wave pills and feed entries follow the replay's clock: they stop when it pauses, speed up with it, and land in the right place after a seek.
+
+A match recorded with `player_state` (the backend's `storage.record_player_state`) also replays the live player state: the weapon in hand, grenade counts, the reinforcement pills and the scoring tick. It loads a moment after the replay itself. Older matches, and any recorded with that switch off, show each player's spawn weapon and no grenades, pills or scoring tick. Player positions are never recorded.
 
 ---
 
@@ -130,7 +134,6 @@ Timers, wave pills and feed entries follow the replay's clock: they stop when it
 
 Not yet built — tracked for a later release:
 
-- **Live player state in replays** — `player_state` and `weapon_active` are socket-only and not yet written to disk. A replay's player cards still fill in from the recorded roster, spawn, damage and kill events, but they show each player's spawn weapon rather than the one in hand, and no grenade count; the wave pills and the scoring-tick panel stay empty.
 - **HLTV sync via HLAE** — align the overlay's event timeline with a demo playing in HLTV / Half-Life Advanced Effects, so the HUD matches a rewatched demo frame-for-frame.
 - **Observed-player card** — a bottom-center card showing whichever player the caster is currently spectating. The HUD plugin can't yet tell which player the HLTV client has focused on, so this is shelved until we have a signal to drive it.
 

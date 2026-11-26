@@ -17,6 +17,11 @@ export interface Config {
     };
     storage: {
         matches_dir: string;
+        // Write the 4 Hz player_state / weapon_active stream to each match's
+        // player_state.jsonl for replays. Off by default: it roughly quadruples
+        // the archive and adds ~4 sync appends/s per server to the event loop,
+        // which /metrics `disk_writes` measures before it is turned on.
+        record_player_state: boolean;
     };
     frontend: {
         origin: string;
@@ -103,6 +108,7 @@ function loadConfig(): Config {
         },
         storage: {
             matches_dir: process.env.HUD_MATCHES_DIR ?? file.storage.matches_dir,
+            record_player_state: bool(process.env.HUD_RECORD_PLAYER_STATE, file.storage.record_player_state ?? false),
         },
         frontend: {
             origin: process.env.HUD_FRONTEND_ORIGIN ?? file.frontend.origin,

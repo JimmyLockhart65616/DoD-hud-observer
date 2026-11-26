@@ -15,6 +15,7 @@ import request from 'supertest';
 import { createIngestRouter } from '../handler/ingest';
 import { MatchRecorder } from '../handler/matchRecorder';
 import { MetricsCollector } from '../handler/metrics';
+import { createEventsHandler } from '../handler/replayRoutes';
 import { Server as SocketServer } from 'socket.io';
 import { createServer } from 'http';
 import os from 'os';
@@ -48,14 +49,7 @@ function makeApp(authKey: string, recorder: MatchRecorder, io: SocketServer): Ap
     app.get('/api/matches/stored', (_req, res) => {
         res.json({ matches: recorder.listStoredMatches() });
     });
-    app.get('/api/matches/:matchId/events', (req, res) => {
-        const events = recorder.getEvents(req.params.matchId);
-        if (!events) {
-            res.status(404).json({ error: 'match not found or no events recorded' });
-            return;
-        }
-        res.json({ events });
-    });
+    app.get('/api/matches/:matchId/events', createEventsHandler(recorder));
 
     return app;
 }
@@ -142,11 +136,10 @@ describe('GET /api/matches/* — REST read-back after ingest', () => {
         );
         // Spot-check a mid-log event to ensure full payload (not just event name) round-trips.
         const killRead = res.body.events.find((e: { event: string }) => e.event === 'kill');
-        expect(killRead).toMatchObject({
-            killer_id: 'STEAM_0:0:5',
-            victim_id: 'STEAM_0:0:6',
-            weapon: 'garand',
-        });
+        // ids leave as opaque tokens (pseudonym.test.ts pins that in full)
+        expect(killRead).toMatchObject({ weapon: 'garand' });
+        expect(killRead.killer_id).toMatch(/^p_[0-9a-f]{16}$/);
+        expect(killRead.killer_id).not.toBe(killRead.victim_id);
     });
 
     it('returns 404 for an unknown matchId', async () => {

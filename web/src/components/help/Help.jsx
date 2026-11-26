@@ -200,19 +200,17 @@ class Help extends React.Component {
                                 Timers, wave pills and feed entries follow the replay's clock: they stop when it
                                 pauses and speed up with it.
                             </p>
+                            <p>
+                                A match recorded with <code>player_state</code> also replays the weapon in hand,
+                                grenade counts, the reinforcement pills and the scoring tick; it loads a moment after
+                                the replay itself. Older matches show each player's spawn weapon and no grenades,
+                                pills or scoring tick. Player positions are never recorded.
+                            </p>
                         </Section>
 
                         <Section id="future" title="Future Features">
                             <p>Not yet built — tracked for a later release:</p>
                             <ul>
-                                <li>
-                                    <strong>Live player state in replays</strong> — a replay's player
-                                    cards fill in from the recorded roster, spawn, damage and kill
-                                    events, but show each player's spawn weapon and no grenade count,
-                                    and the wave pills and the scoring-tick panel stay empty, because
-                                    <code> player_state</code> and <code>weapon_active</code> are not
-                                    yet written to disk.
-                                </li>
                                 <li>
                                     <strong>HLTV sync via HLAE</strong> — align the overlay's event
                                     timeline with a demo playing in HLTV / Half-Life Advanced

@@ -21,6 +21,10 @@ socket:
 
 storage:
   matches_dir: /opt/hud-observer/matches
+  # player_state.jsonl beside events.jsonl, for replays (~15 MB per match).
+  # KTPInfrastructure's archive retention prunes it after 30 days. Off until
+  # /metrics disk_writes has a baseline; HUD_RECORD_PLAYER_STATE overrides.
+  record_player_state: false
 
 frontend:
   # Socket.IO CORS origin(s) — MUST include the origin the overlay is served from.

@@ -1,3 +1,6 @@
+import { monitorEventLoopDelay } from 'perf_hooks';
+import type { WriteStream, WriteStreamSnapshot } from './writeTimings';
+
 /**
  * MetricsCollector
  *
@@ -101,6 +104,49 @@ export interface MetricsSnapshot {
     window_seconds: number;
     per_source: Record<string, SourceMetrics>;
     active_matches?: string[];
+    record_player_state?: boolean;
+    disk_writes?: Partial<Record<WriteStream, WriteStreamSnapshot>>;
+    event_loop_delay_ms?: EventLoopDelaySnapshot | null;   // null until the first window closes
+}
+
+export interface EventLoopDelaySnapshot {
+    window_seconds: number;   // the last COMPLETE window these figures cover
+    p50: number;
+    p99: number;
+    max: number;
+    mean: number;
+}
+
+const LOOP_WINDOW_MS = 60_000;
+const LOOP_RESOLUTION_MS = 10;
+
+/**
+ * Event-loop delay over the last complete minute. Every synchronous disk append
+ * the recorder makes runs on this loop, between ingest POSTs and socket
+ * fan-out, so this is the number that says whether recording costs the
+ * broadcast anything. Reported per completed window so the figure does not
+ * depend on how often /metrics is polled.
+ */
+export function startEventLoopMonitor(): { snapshot(): EventLoopDelaySnapshot | null } {
+    const h = monitorEventLoopDelay({ resolution: LOOP_RESOLUTION_MS });
+    h.enable();
+    let last: EventLoopDelaySnapshot | null = null;
+    // The histogram samples on a LOOP_RESOLUTION_MS timer and records the whole
+    // interval, so an idle loop reads ~10 ms, not 0 (measured on Node 25: idle
+    // p50 10.3 ms at resolution 10, 20.5 ms at 20). Report the delay beyond it.
+    const ms = (ns: number) => Math.max(0, Math.round((ns / 1e6 - LOOP_RESOLUTION_MS) * 100) / 100);
+    const timer = setInterval(() => {
+        last = {
+            window_seconds: LOOP_WINDOW_MS / 1000,
+            p50: ms(h.percentile(50)),
+            p99: ms(h.percentile(99)),
+            max: ms(h.max),
+            mean: ms(h.mean),
+        };
+        h.reset();
+    }, LOOP_WINDOW_MS);
+    timer.unref();
+    return { snapshot: () => last };
 }
 
 export interface ServerInfo {

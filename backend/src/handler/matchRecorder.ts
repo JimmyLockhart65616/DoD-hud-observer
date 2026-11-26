@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { WriteTimings } from './writeTimings';
 
 const METADATA_FLUSH_INTERVAL = 100;
 export const LATE_EVENT_SETTLEMENT_MS = 30_000;
@@ -23,8 +24,15 @@ export interface MatchMetadata {
  * Manages per-match event storage. Each match gets a directory under `matchesDir`:
  *
  *   matches/{matchId}/
- *     metadata.json   — match info, updated on start/end
- *     events.jsonl    — one JSON object per line, append-only
+ *     metadata.json      — match info, updated on start/end
+ *     events.jsonl       — one JSON object per line, append-only
+ *     player_state.jsonl — the 4 Hz player_state + weapon_active stream, when
+ *                          storage.record_player_state is on (see recordPlayerState)
+ *
+ * Those three names are a contract with KTPInfrastructure's archive retention
+ * (scripts/ktp-hud-archive-retention.sh), which leaves any match directory
+ * holding a file it does not recognise alone forever. Adding a fourth file
+ * means telling Tony first.
  *
  * Lifecycle:
  *   1. On first event for a matchId → create dir, write metadata, create jsonl
@@ -40,8 +48,12 @@ export class MatchRecorder {
     // In-memory only — tracks wall-clock of last recorded event per active match,
     // used by reapStaleMatches. Not persisted to metadata.json.
     private lastEventAt: Map<string, number> = new Map();
+    private playerStateErrors = 0;
 
-    constructor(matchesDir: string) {
+    readonly timings: WriteTimings;
+
+    constructor(matchesDir: string, timings: WriteTimings = new WriteTimings()) {
+        this.timings = timings;
         this.matchesDir = path.resolve(matchesDir);
         fs.mkdirSync(this.matchesDir, { recursive: true });
         this.rehydrateActiveMatches();
@@ -179,7 +191,14 @@ export class MatchRecorder {
         if (!this.activeMatches.has(matchId)) {
             completed = this.getCompletedMetadata(matchId);
             if (!completed) {
-                if (!this.startMatch(matchId, (event.map as string) ?? 'unknown', 0, 0, sourceServer)) {
+                // Half stays 0: it marks the placeholder that a later
+                // ktp_match_start upgrades, and archive retention keys on it.
+                // The type comes from the envelope, which carries it on every
+                // event of an active match. 0 is COMPETITIVE, so defaulting to
+                // it labelled hundreds of auto-started 12mans and scrims as
+                // competitive.
+                if (!this.startMatch(matchId, (event.map as string) ?? 'unknown',
+                    envelopeMatchType(event.match_type), 0, sourceServer)) {
                     return false;
                 }
             }
@@ -197,7 +216,8 @@ export class MatchRecorder {
         }
 
         const jsonlPath = path.join(this.matchesDir, matchId, 'events.jsonl');
-        fs.appendFileSync(jsonlPath, JSON.stringify(event) + '\n');
+        const line = JSON.stringify(event) + '\n';
+        this.timings.time('events', line.length, () => fs.appendFileSync(jsonlPath, line));
 
         meta.eventCount++;
 
@@ -220,6 +240,58 @@ export class MatchRecorder {
             this.writeMetadata(matchId, meta);
         }
         return true;
+    }
+
+    /**
+     * Append a socket-only row (player_state / weapon_active) to the match's
+     * player_state.jsonl, so a replay can show what events.jsonl cannot: the
+     * weapon in hand, grenades, the wave pills and the scoring tick.
+     *
+     * Only into an ACTIVE match owned by `sourceServer`. It never auto-starts a
+     * match (a stream that only ever sent player_state is not a match) and never
+     * writes after completion. It does not refresh lastEventAt either: a server
+     * idling in a dead match still sends 4 Hz state, and the reaper must still
+     * end it.
+     *
+     * Positions are dropped before writing. Every replay route is public, and
+     * individual coordinates and movement histories stay private (see app.ts);
+     * nothing a replay shows needs them.
+     *
+     * A failed write is logged and swallowed. This is an optional record riding
+     * on the live path, and it must never cost the broadcast a POST.
+     */
+    recordPlayerState(matchId: string, event: Record<string, unknown>, sourceServer: string): boolean {
+        if (!this.activeMatches.has(matchId)) return false;
+        const meta = this.metadata.get(matchId);
+        if (!meta || meta.sourceServer !== sourceServer) return false;
+
+        const line = JSON.stringify(withoutPositions(event)) + '\n';
+        const filePath = path.join(this.matchesDir, matchId, 'player_state.jsonl');
+        try {
+            this.timings.time('player_state', line.length, () => fs.appendFileSync(filePath, line));
+            return true;
+        } catch (err) {
+            this.playerStateErrors++;
+            if (this.playerStateErrors === 1 || this.playerStateErrors % 1000 === 0) {
+                console.error(`[recorder] player_state write failed (${this.playerStateErrors} so far): ${(err as Error).message}`);
+            }
+            return false;
+        }
+    }
+
+    /**
+     * The raw text of a match's player_state.jsonl, or null when it has none
+     * (recorded before the stream was persisted, or with
+     * storage.record_player_state off). Async and unparsed: a full match is
+     * ~12-15 MB and the route parses it in slices so the event loop is never
+     * held for the whole file.
+     */
+    async readPlayerState(matchId: string): Promise<string | null> {
+        try {
+            return await fs.promises.readFile(path.join(this.matchesDir, matchId, 'player_state.jsonl'), 'utf-8');
+        } catch {
+            return null;
+        }
     }
 
     /**
@@ -265,6 +337,23 @@ export class MatchRecorder {
 
     getMetadata(matchId: string): MatchMetadata | undefined {
         return this.metadata.get(matchId);
+    }
+
+    /**
+     * The server a match was recorded from, from memory or its metadata.json.
+     * Unlike getMetadata, this also answers for a stored match this process
+     * has not touched since it started.
+     */
+    getSourceServer(matchId: string): string | undefined {
+        const inMemory = this.metadata.get(matchId);
+        if (inMemory) return inMemory.sourceServer;
+        try {
+            const raw = fs.readFileSync(path.join(this.matchesDir, matchId, 'metadata.json'), 'utf-8');
+            const source = (JSON.parse(raw) as Partial<MatchMetadata>).sourceServer;
+            return typeof source === 'string' ? source : undefined;
+        } catch {
+            return undefined;
+        }
     }
 
     getActiveMatchIds(): string[] {
@@ -389,4 +478,21 @@ export class MatchRecorder {
         const metaPath = path.join(this.matchesDir, matchId, 'metadata.json');
         fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n');
     }
+}
+
+/** The envelope's match_type when it is one the plugin defines (0-5), else 0. */
+function envelopeMatchType(value: unknown): number {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 5 ? value : 0;
+}
+
+function withoutPositions(event: Record<string, unknown>): Record<string, unknown> {
+    if (!Array.isArray(event.players)) return event;
+    return {
+        ...event,
+        players: (event.players as unknown[]).map(p => {
+            if (!p || typeof p !== 'object') return p;
+            const { x: _x, y: _y, ...rest } = p as Record<string, unknown>;
+            return rest;
+        }),
+    };
 }
