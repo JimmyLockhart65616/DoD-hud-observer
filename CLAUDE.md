@@ -841,6 +841,43 @@ every CP in one frame.
 
 ---
 
+## Replay (`/screen?match=<id>&replay=true`)
+
+`web/src/components/core/Replay/` plays a stored `events.jsonl` through the same
+`gameEvents` bus as live. Play order is file (arrival) order; `replayClock.js`
+paces by `tick` within a map and places each map by `plugin_sent_at` (PR #32).
+
+- **Time-based HUD code reads `hudNow()`, never `Date.now()`**
+  (`core/clock/hudClock.js`). Live it IS `Date.now()`. A replay installs its
+  virtual clock, so countdowns, TTLs, prone timers and receipt stamps follow
+  the replay: frozen while paused, scaled by speed, exact after a seek. A new
+  `Date.now()` in the store or an overlay component is a replay bug. The one
+  timer the store schedules goes through `hudAfter` for the same reason.
+  `hq/`, `caster/` and `/watch` never run in replay and keep the wall clock.
+- **`replayEngine.js` moves the clock to each event's own instant before
+  emitting it**, so a seek that re-feeds thousands of events stamps each one
+  where 1x play would have. Seeking back calls `resetHudState()` (store + the
+  carry/boundary module globals) and re-feeds from the first event: the
+  half/carry state machine only runs forward. Bursts go through
+  `unstable_batchedUpdates`: this is React 16, which does not batch outside
+  its own handlers. `replayEngine.test.js` pins that seeking back and forth
+  on a recorded match gives the same store state as playing straight through.
+- **Demo reads M:SS** (`demoClock.js`) maps the round clock shown in an HLTV
+  demo to a replay instant, from the `timeleft` anchors (`half_start` /
+  `round_start` / `time_sync`), with `Timer.jsx`'s floor rule. It takes the
+  on-screen clock, not demo playback time: a demo is one file per half,
+  started by HLTV's reconnect at the map load behind the proxy delay, so its
+  playback time has no fixed offset. **Halves are bounded by map as well as
+  `half_start`**: after the halftime changelevel the plugin keeps stamping
+  `half: 1` while `time_sync` reports the new map's warm-up clock, which on
+  `1783302239-CHI1` passes through the same 19:47 the first half read.
+- `ktp_match_start` keeps the clock when the same half's `half_start` (sent
+  as a separate POST from inside it) arrived first. Before, `resetMatch`
+  nulled it and the clock froze until the next `time_sync`, up to 30 s into
+  the half, live as well as in replay.
+
+---
+
 ## Caster Page (`/caster`)
 
 `/caster?server=<X-Server-Hostname>` — the **persistent** counterpart to the transient

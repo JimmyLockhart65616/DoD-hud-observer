@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import StatsTable from './StatsTable';
+import { hudNow } from '../clock/hudClock';
 
 // Centered stats board — full per-player stat table shown on a full capout,
 // at halftime, at match end, or on rcon amx_hud_statsboard. Driven by the
@@ -29,12 +30,12 @@ function boardTitle(board) {
 }
 
 const StatsBoard = React.memo(({ board, settings }) => {
-    const [now, setNow] = useState(() => Date.now());
+    const [now, setNow] = useState(() => hudNow());
 
     // 1s ticker only while a board is up, so it can age out.
     useEffect(() => {
         if (!board) return undefined;
-        const t = setInterval(() => setNow(Date.now()), 1000);
+        const t = setInterval(() => setNow(hudNow()), 1000);
         return () => clearInterval(t);
     }, [board]);
 

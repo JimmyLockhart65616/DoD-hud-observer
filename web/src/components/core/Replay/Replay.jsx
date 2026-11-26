@@ -1,10 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { unstable_batchedUpdates } from 'react-dom';
 import gameEvents from '../gameEvents';
+import { resetHudState } from '../Socket/Socket';
+import { replayTimeline } from './replayClock';
+import { createReplayEngine } from './replayEngine';
+import {
+    buildClockTimeline, clockAt, findClock, parseClock, formatClock, halfLabel,
+} from './demoClock';
 
 import './Replay.css';
 
 // Origin-relative (see MatchPicker): unset ⇒ same-origin relative `/api/...`.
 const API_URL = process.env.REACT_APP_API_URL || '';
+
+// How often the driver advances virtual time. Wall-clock deltas are measured,
+// so a throttled background tab (OBS) still plays at the right speed, just in
+// coarser steps.
+const FRAME_MS = 50;
+const SKIP_MS = 10000;
 
 /**
  * Replay engine — fetches events.jsonl for a match and plays them through
@@ -16,8 +29,12 @@ const API_URL = process.env.REACT_APP_API_URL || '';
  * drive the schedule alone. `tick` is `get_gametime()` and resets at that
  * changelevel, so ordering a two-half match by it interleaves the halves.
  * `plugin_sent_at` is epoch ms but stamped from `get_systime()`, so it only
- * moves in whole seconds. replayClock() below paces by tick within a map and
- * uses the wall stamp only to find and place each map.
+ * moves in whole seconds. replayClock() paces by tick within a map and uses
+ * the wall stamp only to find and place each map.
+ *
+ * Playback runs on a virtual clock (replayEngine + hudClock), so the HUD's
+ * countdowns and TTLs follow the replay: they stop when it pauses, scale with
+ * its speed, and land correctly after a seek.
  */
 function Replay({ matchId }) {
     const [events, setEvents] = useState(null);
@@ -25,18 +42,15 @@ function Replay({ matchId }) {
     const [error, setError] = useState(null);
     const [playing, setPlaying] = useState(false);
     const [speed, setSpeed] = useState(1);
-    const [progress, setProgress] = useState(0);  // index of next event to play
-    const [elapsed, setElapsed] = useState(0);     // seconds into the replay timeline
+    const [now, setNow] = useState(0);          // engine time, epoch ms
+    const [drag, setDrag] = useState(null);     // slider value while dragging
+    const [demoDraft, setDemoDraft] = useState(null);   // { text, half } while editing
+    const [demoError, setDemoError] = useState(null);
 
-    const timersRef = useRef([]);
-    const startTimeRef = useRef(null);
-    const tickIntervalRef = useRef(null);
+    const engineRef = useRef(null);
+    const dragRef = useRef(null);
     const speedRef = useRef(speed);
     speedRef.current = speed;
-
-    // Computed once per fetched list, not per render: play() schedules from it
-    // and the progress bar reads it four times a second.
-    const clock = useMemo(() => (events ? replayClock(events) : []), [events]);
 
     // Fetch events on mount
     useEffect(() => {
@@ -57,90 +71,147 @@ function Replay({ matchId }) {
             });
     }, [matchId]);
 
-    const clearTimers = useCallback(() => {
-        timersRef.current.forEach(t => clearTimeout(t));
-        timersRef.current = [];
-        if (tickIntervalRef.current) {
-            clearInterval(tickIntervalRef.current);
-            tickIntervalRef.current = null;
-        }
+    const timeline = useMemo(() => (events ? replayTimeline(events) : null), [events]);
+    const clockTimeline = useMemo(
+        () => (events && timeline ? buildClockTimeline(events, timeline.clock, timeline.mapOf) : []),
+        [events, timeline]);
+
+    // One engine per event list. It owns the HUD clock until unmount.
+    useEffect(() => {
+        if (!events || !timeline || events.length === 0) return undefined;
+        resetHudState();
+        const engine = createReplayEngine({
+            events,
+            clock: timeline.clock,
+            emit: evt => gameEvents.emit(evt.event, JSON.stringify(evt)),
+            reset: resetHudState,
+            batch: unstable_batchedUpdates,
+        });
+        engineRef.current = engine;
+        setNow(engine.now);
+        return () => {
+            engine.dispose();
+            engineRef.current = null;
+        };
+    }, [events, timeline]);
+
+    // The driver: advance virtual time by measured wall time × speed.
+    useEffect(() => {
+        if (!playing) return undefined;
+        let last = Date.now();
+        const id = setInterval(() => {
+            const engine = engineRef.current;
+            if (!engine) return;
+            const wall = Date.now();
+            engine.advanceTo(engine.now + (wall - last) * speedRef.current);
+            last = wall;
+            setNow(engine.now);
+            if (engine.done) setPlaying(false);
+        }, FRAME_MS);
+        return () => clearInterval(id);
+    }, [playing]);
+
+    const seek = useCallback((t) => {
+        const engine = engineRef.current;
+        if (!engine) return;
+        engine.seek(t);
+        setNow(engine.now);
     }, []);
 
-    const play = useCallback(() => {
-        if (!events || events.length === 0) return;
-        clearTimers();
-
-        const startFrom = progress;
-        const baseAt = clock[0];
-        const startAt = clock[startFrom] ?? baseAt;
-        startTimeRef.current = Date.now();
-
-        // Schedule each remaining event
-        for (let i = startFrom; i < events.length; i++) {
-            const evt = events[i];
-            const delaySeconds = (clock[i] - startAt) / 1000;
-            const delayMs = (delaySeconds / speedRef.current) * 1000;
-
-            const idx = i;
-            const timer = setTimeout(() => {
-                // Emit into the shared event bus — SocketStoreComponent handles it
-                gameEvents.emit(evt.event, JSON.stringify(evt));
-                setProgress(idx + 1);
-            }, delayMs);
-
-            timersRef.current.push(timer);
-        }
-
-        // Elapsed-time ticker for the progress bar
-        tickIntervalRef.current = setInterval(() => {
-            const elapsedMs = Date.now() - startTimeRef.current;
-            const replayElapsed = (startAt - baseAt) / 1000 + (elapsedMs / 1000) * speedRef.current;
-            setElapsed(replayElapsed);
-        }, 250);
-
-        setPlaying(true);
-    }, [events, clock, progress, clearTimers]);
-
-    const pause = useCallback(() => {
-        clearTimers();
-        setPlaying(false);
-    }, [clearTimers]);
+    const togglePlay = useCallback(() => {
+        const engine = engineRef.current;
+        if (!engine) return;
+        if (!playing && engine.done) seek(engine.start);
+        setPlaying(p => !p);
+    }, [playing, seek]);
 
     const restart = useCallback(() => {
-        clearTimers();
-        setProgress(0);
-        setElapsed(0);
+        const engine = engineRef.current;
+        if (!engine) return;
         setPlaying(false);
-    }, [clearTimers]);
+        seek(engine.start);
+    }, [seek]);
 
-    // Cleanup on unmount
-    useEffect(() => () => clearTimers(), [clearTimers]);
+    // A drag previews and seeks once, on release: a backward seek re-feeds the
+    // match from the start, which is too slow to repeat on every pointer move.
+    // Released on the window, not the slider, so a release off the bar counts.
+    const beginDrag = useCallback(() => {
+        const engine = engineRef.current;
+        if (!engine) return;
+        dragRef.current = engine.now - engine.start;
+        setDrag(dragRef.current);
+        const finish = () => {
+            window.removeEventListener('pointerup', finish);
+            window.removeEventListener('pointercancel', finish);
+            const value = dragRef.current;
+            dragRef.current = null;
+            setDrag(null);
+            if (value != null && engineRef.current) seek(engineRef.current.start + value);
+        };
+        window.addEventListener('pointerup', finish);
+        window.addEventListener('pointercancel', finish);
+    }, [seek]);
 
-    // setTimeout delays are computed from speedRef.current at schedule time,
-    // so a speed change mid-play doesn't retroactively adjust pending timers.
-    // Re-run play() on speed change to reschedule from the current progress.
+    // Space toggles, arrows skip 10s — unless the viewer is typing somewhere or
+    // on a button (space already clicks a focused button). The slider counts as
+    // "not typing": its native arrow step is a quarter-second.
     useEffect(() => {
-        if (playing) play();
-        // play is intentionally excluded — it changes reference every progress
-        // update, which would cause a reschedule on every event.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [speed]);
+        const onKey = (e) => {
+            const tag = (e.target && e.target.tagName) || '';
+            const onSlider = e.target && e.target.classList && e.target.classList.contains('replay-slider');
+            if (!onSlider && (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON')) return;
+            const engine = engineRef.current;
+            if (!engine) return;
+            if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+            else if (e.key === 'ArrowLeft') { e.preventDefault(); seek(engine.now - SKIP_MS); }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); seek(engine.now + SKIP_MS); }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [togglePlay, seek]);
 
     if (loading) return <div className="replay-bar">Loading replay...</div>;
     if (error) return <div className="replay-bar">Replay error: {error}</div>;
     if (!events || events.length === 0) return <div className="replay-bar">No events to replay.</div>;
 
-    const totalDuration = (clock[clock.length - 1] - clock[0]) / 1000;
-    const pct = totalDuration > 0 ? Math.min(100, (elapsed / totalDuration) * 100) : 0;
+    const engine = engineRef.current;
+    const start = engine ? engine.start : timeline.clock[0];
+    const end = engine ? engine.end : timeline.clock[timeline.clock.length - 1];
+    const total = Math.max(0, end - start);
+    const shown = drag ?? (now - start);
+
+    // Demo clock: live reading unless the viewer is typing one.
+    const reading = clockAt(clockTimeline, drag != null ? start + drag : now);
+    const halves = clockTimeline.map(h => h.half).filter((h, i, a) => a.indexOf(h) === i);
+    const demoText = demoDraft ? demoDraft.text : (reading ? formatClock(reading.seconds) : '');
+    const demoHalf = demoDraft ? demoDraft.half : (reading ? reading.half : halves[0]);
+
+    const commitDemo = () => {
+        if (!demoDraft) return;
+        const seconds = parseClock(demoDraft.text);
+        if (seconds == null) { setDemoError('Type the clock as M:SS'); return; }
+        const v = findClock(clockTimeline, demoDraft.half, seconds);
+        if (v == null) {
+            setDemoError(`${halfLabel(demoDraft.half)} never read ${formatClock(seconds)}`);
+            return;
+        }
+        setDemoError(null);
+        setDemoDraft(null);
+        seek(v);
+    };
+
+    const halfMarks = clockTimeline
+        .filter(() => total > 0)
+        .map(h => ({ half: h.half, pct: ((h.start - start) / total) * 100 }));
 
     return (
         <div className="replay-bar">
             <span className="replay-label">REPLAY</span>
-            <button className="replay-btn" onClick={playing ? pause : play}>
-                {playing ? '\u23F8' : '\u25B6'}
+            <button className="replay-btn" onClick={togglePlay} title="Play / pause (space)">
+                {playing ? '⏸' : '▶'}
             </button>
-            <button className="replay-btn" onClick={restart}>
-                {'\u23EE'}
+            <button className="replay-btn" onClick={restart} title="Back to the start">
+                {'⏮'}
             </button>
             <select className="replay-speed" value={speed} onChange={e => setSpeed(Number(e.target.value))}>
                 <option value={0.5}>0.5x</option>
@@ -149,58 +220,80 @@ function Replay({ matchId }) {
                 <option value={4}>4x</option>
                 <option value={8}>8x</option>
             </select>
-            <div className="replay-progress-track">
-                <div className="replay-progress-fill" style={{ width: `${pct}%` }} />
+            <div className="replay-seek">
+                {halfMarks.map(m => (
+                    <span key={`${m.half}-${m.pct}`} className="replay-half-mark" style={{ left: `${m.pct}%` }}>
+                        {halfLabel(m.half)}
+                    </span>
+                ))}
+                <input
+                    className="replay-slider"
+                    type="range"
+                    min={0}
+                    max={total}
+                    step={250}
+                    value={Math.min(total, Math.max(0, shown))}
+                    aria-label="Replay position"
+                    onPointerDown={beginDrag}
+                    onChange={e => {
+                        const value = Number(e.target.value);
+                        if (dragRef.current != null) {
+                            dragRef.current = value;
+                            setDrag(value);
+                        } else {
+                            seek(start + value);
+                        }
+                    }}
+                />
             </div>
             <span className="replay-time">
-                {formatTime(elapsed)} / {formatTime(totalDuration)}
+                {formatTime(shown / 1000)} / {formatTime(total / 1000)}
+            </span>
+            <span
+                className={`replay-demo${demoError ? ' replay-demo-error' : ''}`}
+                title={demoError || 'Type the clock the demo shows, then Enter'}
+                onBlur={e => {
+                    // Moving between the box and the half picker keeps the draft;
+                    // leaving the control goes back to the live reading.
+                    if (e.currentTarget.contains(e.relatedTarget)) return;
+                    setDemoDraft(null);
+                    setDemoError(null);
+                }}
+            >
+                <span className="replay-demo-label">Demo reads</span>
+                <input
+                    className="replay-demo-input"
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="M:SS"
+                    value={demoText}
+                    aria-label="Demo clock"
+                    onFocus={() => { if (!demoDraft) setDemoDraft({ text: demoText, half: demoHalf }); }}
+                    onChange={e => { setDemoError(null); setDemoDraft({ text: e.target.value, half: demoHalf }); }}
+                    onKeyDown={e => {
+                        if (e.key === 'Enter') commitDemo();
+                        else if (e.key === 'Escape') e.target.blur();
+                    }}
+                />
+                <select
+                    className="replay-speed"
+                    value={demoHalf ?? ''}
+                    aria-label="Demo half"
+                    disabled={halves.length === 0}
+                    onChange={e => setDemoDraft({ text: demoText, half: Number(e.target.value) })}
+                >
+                    {halves.map(h => <option key={h} value={h}>{halfLabel(h)}</option>)}
+                </select>
+                <button className="replay-btn replay-demo-go" onMouseDown={e => e.preventDefault()} onClick={commitDemo} disabled={!demoDraft}>
+                    Go
+                </button>
+                {demoError && <span className="replay-demo-msg">{demoError}</span>}
             </span>
             <span className="replay-count">
-                {progress}/{events.length}
+                {engine ? engine.index : 0}/{events.length}
             </span>
         </div>
     );
-}
-
-// `tick` and `plugin_sent_at` are stamped in the same post_event() call, so within
-// one map their difference is constant to within plugin_sent_at's one-second floor
-// (measured: under 1 s of drift across a half on three recorded matches). The
-// halftime changelevel moves it by the length of the map that just ended. So pace
-// by `tick` inside a map, and use the wall stamp only to find where a new map
-// starts and to place it. A late row from an earlier map (the old map's final
-// player_disconnect rows arrive interleaved with the new map's first rows) is
-// held at the current instant, not replayed at its old tick.
-const NEW_MAP_MS = 30000; // same threshold as hltvDelayBuffer's TICK_RESET_THRESHOLD_S
-
-export function replayClock(events) {
-    const out = [];
-    const maps = [];
-    let high = null;
-    for (const e of events) {
-        const wall = e.plugin_sent_at;
-        const tick = e.tick;
-        if (typeof wall === 'number' && typeof tick === 'number') {
-            const offset = wall - tick * 1000;
-            let m = null;
-            for (let j = maps.length - 1; j >= 0; j--) {
-                if (Math.abs(maps[j].offset - offset) < NEW_MAP_MS) { m = maps[j]; break; }
-            }
-            if (!m) {
-                m = { offset, firstTick: tick, maxTick: tick, startAt: Math.max(high ?? wall, wall) };
-                maps.push(m);
-            }
-            if (m === maps[maps.length - 1]) {
-                if (tick > m.maxTick) m.maxTick = tick;
-                const at = m.startAt + (m.maxTick - m.firstTick) * 1000;
-                if (high === null || at > high) high = at;
-            }
-        } else if (typeof wall === 'number' && (high === null || wall > high)) {
-            high = wall;
-        }
-        out.push(high);
-    }
-    const first = out.find(v => v !== null) ?? 0;
-    return out.map(v => (v === null ? first : v));
 }
 
 function formatTime(seconds) {

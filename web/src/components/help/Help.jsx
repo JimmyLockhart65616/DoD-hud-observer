@@ -175,23 +175,43 @@ class Help extends React.Component {
                                 At match end the HUD freezes on the final state until the next
                                 match starts or the browser source is refreshed.
                             </p>
+
+                            <h3>Replay</h3>
+                            <p>
+                                The <strong>Replay</strong> link on <a href="/watch">/watch</a> plays a
+                                stored match back through the same overlay
+                                (<code>{'?match=<id>&replay=true'}</code>), with a control bar along
+                                the bottom:
+                            </p>
+                            <ul>
+                                <li><strong>Play / pause</strong> (or <kbd>Space</kbd>), restart, and 0.5×–8× speed</li>
+                                <li>
+                                    <strong>Seek bar</strong> — drag or click anywhere; <kbd>←</kbd> / <kbd>→</kbd> skip
+                                    10 seconds. <code>H1</code> / <code>H2</code> marks show where each half starts.
+                                </li>
+                                <li>
+                                    <strong>Demo reads</strong> — to line the replay up with an HLTV demo, type the
+                                    round clock the demo shows (e.g. <code>14:32</code>), pick the half, and press
+                                    Enter. The replay jumps to the moment its own clock read that. While you aren't
+                                    typing, the box shows the replay's current clock.
+                                </li>
+                            </ul>
+                            <p>
+                                Timers, wave pills and feed entries follow the replay's clock: they stop when it
+                                pauses and speed up with it.
+                            </p>
                         </Section>
 
                         <Section id="future" title="Future Features">
                             <p>Not yet built — tracked for a later release:</p>
                             <ul>
                                 <li>
-                                    <strong>Demo-synchronised replay</strong> — align a replay to
-                                    an HLTV demo's playhead. Replay itself is already built:
-                                    <code> {'?match=<id>&replay=true'}</code> loads a match from
-                                    its recorded <code>events.jsonl</code> and plays it through the
-                                    same event bus as the live view. It runs on its own clock with
-                                    no seek, so a caster must start it on a cue. Player cards fill
-                                    in from the recorded roster, spawn, damage and kill events, but
-                                    show each player's spawn weapon and no grenade count; the wave
-                                    pills and the scoring-tick panel stay empty, because
-                                    <code> player_state</code> and <code>weapon_active</code> are
-                                    never written to disk.
+                                    <strong>Live player state in replays</strong> — a replay's player
+                                    cards fill in from the recorded roster, spawn, damage and kill
+                                    events, but show each player's spawn weapon and no grenade count,
+                                    and the wave pills and the scoring-tick panel stay empty, because
+                                    <code> player_state</code> and <code>weapon_active</code> are not
+                                    yet written to disk.
                                 </li>
                                 <li>
                                     <strong>HLTV sync via HLAE</strong> — align the overlay's event

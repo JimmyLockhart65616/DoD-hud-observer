@@ -1,15 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import KillItem from './kill-item/KillItem';
+import { hudNow } from '../clock/hudClock';
 
 // Render-time TTL filtering — see FlagFeed.jsx for the rationale. Same browser
 // background-throttling vulnerability for OBS-overlay deployments.
 const Kill = React.memo(({ screentime, kills }) => {
-    const [now, setNow] = useState(() => Date.now());
+    const [now, setNow] = useState(() => hudNow());
     const hasKills = !!(kills && kills.length > 0);
 
     useEffect(() => {
         if (!hasKills) return undefined;
-        const t = setInterval(() => setNow(Date.now()), 1000);
+        const t = setInterval(() => setNow(hudNow()), 1000);
         return () => clearInterval(t);
     }, [hasKills]);
 

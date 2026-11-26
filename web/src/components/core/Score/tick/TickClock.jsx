@@ -1,4 +1,5 @@
 import React from 'react';
+import { hudNow } from '../../clock/hudClock';
 
 // Seconds until the map's next TERRITORIAL scoring tick — DoD's periodic team
 // point award for holding control points.
@@ -34,7 +35,7 @@ const TickClock = ({ seconds, secondsAt, frozen }) => {
         }
 
         const update = () => {
-            const remaining = seconds - (Date.now() - secondsAt) / 1000;
+            const remaining = seconds - (hudNow() - secondsAt) / 1000;
             setDisplay(remaining < -STALE_AFTER_ZERO_SEC ? null : Math.max(0, Math.ceil(remaining)));
         };
 
