@@ -907,6 +907,14 @@ paces by `tick` within a map and places each map by `plugin_sent_at` (PR #32).
   `half_start`**: after the halftime changelevel the plugin keeps stamping
   `half: 1` while `time_sync` reports the new map's warm-up clock, which on
   `1783302239-CHI1` passes through the same 19:47 the first half read.
+- **Both replay routes refuse a match the broadcast hasn't finished
+  showing** (issue #35): 409 while the recorder holds it as active, and after
+  `ktp_match_end` until the HLTV delay buffer has broadcast its last events
+  (`HltvDelayBuffer.holdsMatch`). `/api/matches/live` lists the active ids, so
+  without this the events route was a feed running ahead of the broadcast.
+  The check is `refuseIfNotReplayable()` inside each handler, before any read
+  or cache lookup, never a path match: Express also routes `/Events` and a
+  trailing slash here. Pinned by `replayGuard.test.ts`.
 - **`player_state.jsonl` joins the playlist when it lands** (it never holds
   up playback). `mergeOnClock` places each row on its own map at that map's
   tick pace, after any event at the same instant; the engine is rebuilt at the

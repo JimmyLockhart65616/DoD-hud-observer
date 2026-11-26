@@ -40,6 +40,20 @@ function evt(tick: number, name: string = 'kill'): any {
 
 describe('HltvDelayBuffer', () => {
 
+    // The replay routes refuse a finished match until this clears (issue #35):
+    // its last events are still on their way to the broadcast.
+    it('holdsMatch is true exactly while an event of that match is queued', () => {
+        const stub = new StubSync();
+        const buf = makeBuffer(stub);
+        stub.setBroadcastNow('atl1', 100);
+        buf.enqueue({ server: 'atl1', matchId: 'm1', event: evt(150), enqueuedAt: Date.now() });
+        expect(buf.holdsMatch('m1')).toBe(true);
+        expect(buf.holdsMatch('m2')).toBe(false);
+        stub.setBroadcastNow('atl1', 160);
+        (buf as any).tick();
+        expect(buf.holdsMatch('m1')).toBe(false);
+    });
+
     it('holds events while broadcast clock is below their tick', () => {
         const stub = new StubSync();
         const fired: BufferedEvent[] = [];

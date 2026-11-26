@@ -15,7 +15,7 @@ import { buildServerList } from './handler/serverList';
 import { createSocketServer } from './socket/socket';
 import { HltvSyncService } from './handler/hltvSync';
 import { HltvDelayBuffer, wireStrandedRescue } from './handler/hltvDelayBuffer';
-import { createPlayerStateHandler, isSafeMatchId, replayScope } from './handler/replayRoutes';
+import { createEventsHandler, createPlayerStateHandler } from './handler/replayRoutes';
 import { startEventLoopMonitor } from './handler/metrics';
 
 // ─── Core services ───────────────────────────────────────────────────────────
@@ -134,23 +134,16 @@ app.get('/api/hq', (_req, res) => {
 // stats join reads it — so the mapping happens HERE, on the way out, rather
 // than at record time. Scope is the recording server, so a replayed id matches
 // the token the live socket emitted for that same player.
-app.get('/api/matches/:matchId/events', (req, res) => {
-    if (!isSafeMatchId(req.params.matchId)) {
-        res.status(400).json({ error: 'bad match id' });
-        return;
-    }
-    const events = recorder.getEvents(req.params.matchId);
-    if (!events) {
-        res.status(404).json({ error: 'match not found or no events recorded' });
-        return;
-    }
-    res.json({ events: pseudonymize(events, replayScope(recorder, req.params.matchId)) });
-});
+//
+// A match still recording, or whose last events the HLTV delay buffer hasn't
+// broadcast yet, gets 409 (issue #35): /api/matches/live lists those ids, and
+// this route was a feed running ahead of the broadcast.
+app.get('/api/matches/:matchId/events', createEventsHandler(recorder, delayBuffer));
 
 // The same match's player_state.jsonl (player cards, wave pills, scoring tick
 // for the replay), when it was recorded. Same scope as the events route, so the
 // two streams carry the same tokens. See handler/replayRoutes.ts.
-app.get('/api/matches/:matchId/player_state', createPlayerStateHandler(recorder));
+app.get('/api/matches/:matchId/player_state', createPlayerStateHandler(recorder, delayBuffer));
 
 // ---------------------------------------------------------------------------
 // Historical stats, read-only, from the KTPHLStatsX `hlstatsx` MySQL database.

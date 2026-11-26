@@ -58,7 +58,10 @@ function Replay({ matchId }) {
     useEffect(() => {
         fetch(`${API_URL}/api/matches/${encodeURIComponent(matchId)}/events`)
             .then(r => {
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                // 409: still recording, or its last events haven't been
+                // broadcast yet. The replay must not run ahead of the broadcast.
+                if (r.status === 409) throw new Error('This match is still in progress. Its replay opens once the broadcast has shown the end.');
+                if (!r.ok) throw new Error(`Replay error: HTTP ${r.status}`);
                 return r.json();
             })
             .then(data => {
@@ -68,7 +71,7 @@ function Replay({ matchId }) {
                 setLoading(false);
             })
             .catch(err => {
-                setError(err.message);
+                setError(/^(This match|Replay error)/.test(err.message) ? err.message : `Replay error: ${err.message}`);
                 setLoading(false);
             });
     }, [matchId]);
@@ -197,7 +200,7 @@ function Replay({ matchId }) {
     }, [togglePlay, seek]);
 
     if (loading) return <div className="replay-bar">Loading replay...</div>;
-    if (error) return <div className="replay-bar">Replay error: {error}</div>;
+    if (error) return <div className="replay-bar">{error}</div>;
     if (!events || events.length === 0) return <div className="replay-bar">No events to replay.</div>;
 
     const engine = engineRef.current;

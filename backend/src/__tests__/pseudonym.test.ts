@@ -32,7 +32,7 @@ import { createIngestRouter, makeFireToSockets, getServerSnapshot } from '../han
 import { buildHqOverview } from '../handler/hqBoard';
 import { MatchRecorder } from '../handler/matchRecorder';
 import { MetricsCollector } from '../handler/metrics';
-import { createPlayerStateHandler, replayScope } from '../handler/replayRoutes';
+import { createEventsHandler, createPlayerStateHandler } from '../handler/replayRoutes';
 import config from '../config';
 import {
     mintPlayerId,
@@ -243,11 +243,7 @@ describe('publication surfaces — no SteamID may cross the wire', () => {
         app.get('/api/hq', (_req, res) => {
             res.json(buildHqOverview(recorder, metrics));
         });
-        app.get('/api/matches/:matchId/events', (req, res) => {
-            const events = recorder.getEvents(req.params.matchId);
-            if (!events) { res.status(404).json({ error: 'not found' }); return; }
-            res.json({ events: pseudonymize(events, replayScope(recorder, req.params.matchId)) });
-        });
+        app.get('/api/matches/:matchId/events', createEventsHandler(recorder));
         app.get('/api/matches/:matchId/player_state', createPlayerStateHandler(recorder));
     });
 

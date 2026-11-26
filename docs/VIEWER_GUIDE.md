@@ -120,6 +120,8 @@ The **Replay** link on `/watch` plays a stored match back through the same overl
 - **Seek bar** — drag or click anywhere; **←** / **→** skip 10 seconds. `H1` / `H2` marks show where each half starts.
 - **Demo reads** — to line the replay up with an HLTV demo, type the round clock the demo shows on screen (e.g. `14:32`), pick the half, and press Enter. The replay jumps to the first moment its own clock read that. While you aren't typing, the box shows the replay's current clock.
 
+A match opens for replay once the broadcast has shown its end; until then the Replay link says the match is still in progress.
+
 The box takes the clock the demo *shows*, not the demo's playback time. A demo is one file per half and HLTV starts it when it reconnects to the server at the map load, behind the proxy's delay, so its playback time has no fixed offset from the match. The round clock needs none. After halftime the plugin keeps stamping half 1 while the new map's warm-up clock runs, so halves are bounded by map as well as by `half_start` and that warm-up clock is never mistaken for the first half.
 
 Timers, wave pills and feed entries follow the replay's clock: they stop when it pauses, speed up with it, and land in the right place after a seek.

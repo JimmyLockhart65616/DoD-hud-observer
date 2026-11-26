@@ -119,6 +119,7 @@ describe('MatchRecorder.recordPlayerState', () => {
         recorder.startMatch('m6', 'dod_anzio', 1, 1, HOST);
         for (let i = 0; i < 1203; i++) recorder.recordPlayerState('m6', { ...STATE, tick: i }, HOST);
         fs.appendFileSync(file('m6'), '{"event":"player_st');
+        recorder.endMatch('m6');   // the route refuses a match still recording
         const app = express();
         app.get('/api/matches/:matchId/player_state', createPlayerStateHandler(recorder));
         const res = await request(app).get('/api/matches/m6/player_state');

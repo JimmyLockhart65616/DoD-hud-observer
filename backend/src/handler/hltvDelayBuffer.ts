@@ -141,6 +141,18 @@ export class HltvDelayBuffer {
             + extra;
     }
 
+    /**
+     * True while any event of `matchId` is still waiting to be broadcast. The
+     * replay routes refuse a match until this clears: endMatch drops the id the
+     * moment ktp_match_end ARRIVES, but the broadcast shows the last stretch of
+     * the match a delay later, and a replay must not run ahead of it.
+     */
+    holdsMatch(matchId: string): boolean {
+        for (const q of this.queues.values()) if (q.some(it => it.matchId === matchId)) return true;
+        for (const d of this.draining.values()) if (d.some(it => it.matchId === matchId)) return true;
+        return false;
+    }
+
     queueDepth(server: string): number {
         return (this.queues.get(server)?.length ?? 0) + (this.draining.get(server)?.length ?? 0);
     }

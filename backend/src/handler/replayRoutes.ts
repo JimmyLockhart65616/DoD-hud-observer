@@ -6,6 +6,12 @@ import { pseudonymize } from './pseudonym';
 
 const gzip = promisify(zlib.gzip);
 
+/** What the replay routes need from the HLTV delay buffer (absent in tests and
+ * when no server is HLTV-synced). */
+export interface BroadcastHold {
+    holdsMatch(matchId: string): boolean;
+}
+
 // Match ids are what the plugin stamps (`<epoch>-<SERVER>`, or a mocker/test
 // id). Anything else is refused before it can reach a filesystem path.
 const MATCH_ID_RE = /^[\w.-]+$/;
@@ -21,6 +27,45 @@ export function isSafeMatchId(matchId: string): boolean {
  */
 export function replayScope(recorder: MatchRecorder, matchId: string): string {
     return recorder.getSourceServer(matchId) ?? matchId;
+}
+
+/**
+ * Refuse a match the broadcast hasn't finished showing: one still recording
+ * (`/api/matches/live` lists those ids, so the replay routes were a feed ahead
+ * of the broadcast — issue #35), or one whose last events are still in the
+ * HLTV delay buffer. Called inside each handler, before any read, cache lookup
+ * or build, rather than matched by path: Express also routes `/Events` and a
+ * trailing slash to these handlers.
+ */
+export function refuseIfNotReplayable(
+    recorder: MatchRecorder, matchId: string, res: Response, hold?: BroadcastHold,
+): boolean {
+    if (!recorder.getActiveMatchIds().includes(matchId) && !hold?.holdsMatch(matchId)) return false;
+    res.status(409).json({ error: 'match in progress, replay opens when it ends' });
+    return true;
+}
+
+/**
+ * GET /api/matches/:matchId/events — a finished match's events.jsonl,
+ * pseudonymized. events.jsonl keeps real SteamIDs on disk (the operator's
+ * record; the league stats join reads it), so the mapping happens here, on the
+ * way out.
+ */
+export function createEventsHandler(recorder: MatchRecorder, hold?: BroadcastHold) {
+    return (req: Request, res: Response): void => {
+        const matchId = req.params.matchId;
+        if (!isSafeMatchId(matchId)) {
+            res.status(400).json({ error: 'bad match id' });
+            return;
+        }
+        if (refuseIfNotReplayable(recorder, matchId, res, hold)) return;
+        const events = recorder.getEvents(matchId);
+        if (!events) {
+            res.status(404).json({ error: 'match not found or no events recorded' });
+            return;
+        }
+        res.json({ events: pseudonymize(events, replayScope(recorder, matchId)) });
+    };
 }
 
 // A finished match's player_state is immutable, and the first build of its
@@ -46,7 +91,7 @@ const yieldToLoop = () => new Promise<void>(resolve => setImmediate(resolve));
  * Compact JSON rather than the app's pretty-printed default: indentation alone
  * would add megabytes.
  */
-export function createPlayerStateHandler(recorder: MatchRecorder) {
+export function createPlayerStateHandler(recorder: MatchRecorder, hold?: BroadcastHold) {
     const cache = new Map<string, Buffer>();
     const inFlight = new Map<string, Promise<Buffer | null>>();
 
@@ -76,6 +121,7 @@ export function createPlayerStateHandler(recorder: MatchRecorder) {
             res.status(400).json({ error: 'bad match id' });
             return;
         }
+        if (refuseIfNotReplayable(recorder, matchId, res, hold)) return;
 
         let body = cache.get(matchId) ?? null;
         if (!body) {
@@ -89,12 +135,11 @@ export function createPlayerStateHandler(recorder: MatchRecorder) {
                 res.status(404).json({ error: 'no player_state recorded for this match' });
                 return;
             }
-            // Only a finished match is immutable; a live one keeps growing.
-            if (!recorder.getActiveMatchIds().includes(matchId)) {
-                cache.delete(matchId);
-                cache.set(matchId, body);
-                while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value as string);
-            }
+            // The guard above means the match had ended when this build began,
+            // so the body is complete and immutable.
+            cache.delete(matchId);
+            cache.set(matchId, body);
+            while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value as string);
         } else {
             cache.delete(matchId);      // most recently used goes to the back
             cache.set(matchId, body);
